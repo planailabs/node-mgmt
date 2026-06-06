@@ -24,6 +24,11 @@ if command -v pigz >/dev/null 2>&1; then GZIP_CMD="pigz -p $(nproc)"; else GZIP_
 gz() { tar -C "$1" -cf - "${@:3}" | $GZIP_CMD > "$OUT/$2"; log "+ $2 ($(du -h "$OUT/$2" | cut -f1))"; }
 pack() { gz "$@"; }
 
+# True if a glob matches at least one existing path. Portable substitute for
+# `compgen -G`, which is unavailable in the non-interactive bash `nix develop`
+# provides. Relies on an unmatched glob staying literal (no nullglob).
+glob_exists() { local m; for m in $1; do [ -e "$m" ] && return 0; done; return 1; }
+
 # shared offline assets
 [ -d "$VENDOR_DIR/ow-assets" ] && pack "$VENDOR_DIR/ow-assets" ow-assets.tar.gz .
 
@@ -32,10 +37,14 @@ RUNTIMES="[]"
 for rt in "$DIST_DIR"/runtime/*/; do
   t="$(basename "$rt")"
   [ -d "$rt/venv" ] || [ -d "$rt/python" ] || continue
-  # only pack COMPLETE runtimes — a failed cross-install can leave a partial
-  # python/ dir with no open_webui; never ship that.
-  if ! ls "$rt"/{venv,python}/lib/python*/site-packages/open_webui/main.py \
-        "$rt"/python/Lib/site-packages/open_webui/main.py >/dev/null 2>&1; then
+  # only pack COMPLETE runtimes — a partial install can leave a python/ dir with
+  # no open_webui; never ship that. open_webui lives under one of these layouts:
+  #   nix-native venv : venv/lib/pythonX.Y/site-packages   (nixos)
+  #   unix pbs        : python/lib/pythonX.Y/site-packages (linux/mac)
+  #   windows pbs     : python/Lib/site-packages           (win)
+  if ! glob_exists "$rt/venv/lib/python*/site-packages/open_webui/main.py" \
+     && ! glob_exists "$rt/python/lib/python*/site-packages/open_webui/main.py" \
+     && [ ! -f "$rt/python/Lib/site-packages/open_webui/main.py" ]; then
     warn "skip incomplete runtime $t (open_webui missing)"; continue
   fi
   pack "$rt" "runtime-$t.tar.gz" .
