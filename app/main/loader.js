@@ -51,46 +51,44 @@ function libPresent(names) {
 // ROCm runtime libs are installed — otherwise that build crashes on launch.
 function detectOllama(comp) {
   const list = fs.readdirSync(comp);
-  const has = (n) => list.includes(`${n}.tar.gz`);
+  const file = (key) => (list.includes(`ollama-${key}.tar.gz`) ? `ollama-${key}.tar.gz` : null);
   const checks = [];
-  const add = (flavour, bundled, usable, why) => checks.push({ flavour, bundled, usable, why });
+  const add = (key, usable, why) => checks.push({ flavour: key, bundled: !!file(key), usable, why });
 
-  let chosen = null;
+  let chosenKey = null;
   if (process.platform === 'linux' && process.arch !== 'arm64') {
-    // ROCm (AMD GPU) candidate
-    const rocmBundled = has('ollama-linux-amd64-rocm');
+    const rocmBundled = !!file('linux-amd64-rocm');
     const kfd = fs.existsSync('/dev/kfd');
     const rocmLib = libPresent(['libamdhip64.so', 'libamdhip64.so.6', 'librocm-core.so']);
     const rocmUsable = rocmBundled && kfd && rocmLib;
-    add('linux-amd64-rocm', rocmBundled, rocmUsable,
+    add('linux-amd64-rocm', rocmUsable,
       !rocmBundled ? 'not bundled in this build (CPU build)'
       : !kfd ? 'no AMD GPU (/dev/kfd absent)'
       : !rocmLib ? 'ROCm runtime not installed (libamdhip64 not found)'
       : 'AMD GPU + ROCm runtime detected');
-    if (rocmUsable) chosen = 'ollama-linux-amd64-rocm';
-    // CPU/CUDA amd64 (default; ollama uses CUDA at runtime if libcuda is present)
-    if (!chosen) {
+    if (rocmUsable) chosenKey = 'linux-amd64-rocm';
+    if (!chosenKey) {
       const cuda = libPresent(['libcuda.so', 'libcuda.so.1']);
-      add('linux-amd64', has('ollama-linux-amd64'), has('ollama-linux-amd64'),
-        cuda ? 'NVIDIA driver present — ollama will use CUDA, else CPU' : 'CPU (no NVIDIA/AMD GPU runtime detected)');
-      if (has('ollama-linux-amd64')) chosen = 'ollama-linux-amd64';
+      add('linux-amd64', !!file('linux-amd64'),
+        cuda ? 'NVIDIA driver present — ollama uses CUDA, else CPU' : 'CPU (no usable GPU runtime detected)');
+      if (file('linux-amd64')) chosenKey = 'linux-amd64';
     }
   } else if (process.platform === 'linux') {
-    add('linux-arm64', has('ollama-linux-arm64'), has('ollama-linux-arm64'), 'arm64 CPU');
-    if (has('ollama-linux-arm64')) chosen = 'ollama-linux-arm64';
+    add('linux-arm64', !!file('linux-arm64'), 'arm64 CPU');
+    if (file('linux-arm64')) chosenKey = 'linux-arm64';
   } else if (process.platform === 'darwin') {
-    add('darwin', has('ollama-darwin'), has('ollama-darwin'), 'macOS universal (Metal)');
-    if (has('ollama-darwin')) chosen = 'ollama-darwin';
+    add('darwin', !!file('darwin'), 'macOS universal (Metal)');
+    if (file('darwin')) chosenKey = 'darwin';
   } else if (process.platform === 'win32') {
-    add('windows-amd64', has('ollama-windows-amd64'), has('ollama-windows-amd64'), 'Windows x64');
-    if (has('ollama-windows-amd64')) chosen = 'ollama-windows-amd64';
+    add('windows-amd64', !!file('windows-amd64'), 'Windows x64');
+    if (file('windows-amd64')) chosenKey = 'windows-amd64';
   }
 
-  const selected = checks.find((c) => `ollama-${c.flavour}.tar.gz` === chosen);
+  const sel = checks.find((c) => c.flavour === chosenKey);
   return {
-    archive: chosen,
-    flavour: selected ? selected.flavour : null,
-    reason: selected ? selected.why : 'no ollama flavour available for this machine',
+    archive: chosenKey ? file(chosenKey) : null,
+    flavour: chosenKey,
+    reason: sel ? sel.why : 'no ollama flavour available for this machine',
     checks,
   };
 }
