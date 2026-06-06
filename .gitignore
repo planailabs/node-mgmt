@@ -17,3 +17,4 @@ __pycache__/
 /app/.stage/
 /.run-data/
 /app/.run/
+/.claude/
