@@ -107,6 +107,15 @@ function extractOnce(archive, dest, marker) {
 // Extract the needed components into <cache>/dist and point PLANAI_RESOURCES there.
 // No-op (returns false) when there is no components/ dir (plain dev tree).
 function prepare(log = () => {}) {
+  // dev: if a runtime is already staged in dist/ (scripts/dev.sh / run-nixos.sh),
+  // use it directly — don't extract components (faster, and what the dev tests
+  // expect). Only relevant unpackaged; packaged artifacts always extract.
+  if (!app.isPackaged) {
+    const dev = path.join(__dirname, '..', '..', 'dist');
+    if (fs.existsSync(path.join(dev, 'runtime', 'venv')) || fs.existsSync(path.join(dev, 'runtime', 'python'))) {
+      return false;
+    }
+  }
   const comp = componentsDir();
   if (!comp || !fs.existsSync(path.join(comp, (runtimeArchive(comp) || '')))) return false;
 
