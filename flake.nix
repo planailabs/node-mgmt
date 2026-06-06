@@ -98,20 +98,26 @@
           (lib.removePrefix "ollama-")
           (lib.removeSuffix ".tar.zst") (lib.removeSuffix ".tgz") (lib.removeSuffix ".zip")
         ];
-        repackOllama = a: pkgs.stdenvNoCC.mkDerivation {
+        # VANILLA derivation (builtins.derivation via the bare wrapper) — NO
+        # stdenv, so no setup hooks, no fixup/patchelf/strip/shebang rewriting
+        # can touch the generic ollama binaries. Tools provided via an explicit
+        # PATH; input is the pre-fetched FOD.
+        repackOllama = a: derivation {
+          inherit system;
           name = "ollama-${ollamaKeyOf a.name}.tar.gz";
-          src = fetch a;
-          dontUnpack = true; dontFixup = true; dontStrip = true; dontPatchELF = true;
-          nativeBuildInputs = with pkgs; [ zstd gnutar pigz unzip ];
-          buildPhase = ''
+          builder = "${pkgs.bash}/bin/bash";
+          args = [ "-c" ''
+            export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar zstd pigz unzip ])}"
             mkdir x
-            case "${a.name}" in
+            case "$assetName" in
               *.tar.zst) zstd -dc "$src" | tar -x -C x ;;
               *.tgz)     tar -xzf "$src" -C x ;;
               *.zip)     unzip -q "$src" -d x ;;
             esac
-          '';
-          installPhase = ''tar -C x -cf - . | pigz -p "$NIX_BUILD_CORES" > "$out"'';
+            tar -C x -cf - . | pigz > "$out"
+          '' ];
+          src = fetch a;
+          assetName = a.name;
         };
         ollamaComponents = pkgs.linkFarm "ollama-components"
           (map (a: { name = "ollama-${ollamaKeyOf a.name}.tar.gz"; path = repackOllama a; }) vlock.ollama.assets);
