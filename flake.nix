@@ -49,9 +49,10 @@
           osslsigncode    # Authenticode signing for the windows .exe
           nsis            # windows installer
 
-          # FAT32 USB image test
+          # USB image: FAT32 (mtools, no root) + exFAT (>4GiB files, e.g. the AppImage)
           mtools
           dosfstools
+          exfatprogs
           zip
           unzip
 
