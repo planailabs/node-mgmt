@@ -157,7 +157,8 @@ package_mac() {
     rcodesign sign "$APPDIR"   # ad-hoc signature (no Apple identity)
     warn "MAC_P12 unset — produced an AD-HOC signature (not notarizable)"
   fi
-  rcodesign verify "$APPDIR" 2>&1 | tail -2 || true
+  # verify the main Mach-O (rcodesign verify operates on Mach-O, not bundles)
+  rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -2 || true
 
   local ZIP="$OUT/plan-ai-$VERSION-$TARGET.zip"
   ( cd "$(dirname "$APPDIR")" && zip -qry "$ZIP" "$(basename "$APPDIR")" )
