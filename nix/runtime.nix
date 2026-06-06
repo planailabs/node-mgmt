@@ -27,14 +27,21 @@ derivation {
     ${lib.optionalString (lib.hasSuffix "apple-darwin" triple) ''export MACOSX_DEPLOYMENT_TARGET=14.0''}
     mkdir -p "$out"
     tar -xzf "$pbsArchive" -C "$out" --strip-components=1
-    sp="$(echo "$out"/lib/python*/site-packages)"
+    # site-packages location differs by OS layout: Windows pbs uses Lib/site-packages
+    # (python.exe at root); unix uses lib/python<X.Y>/site-packages. Resolve the real
+    # path so uv --target installs where the interpreter will actually look (a literal
+    # unexpanded glob would create a bogus "python*" dir python never imports from).
+    ${if lib.hasInfix "windows" triple
+      then ''sp="$out/Lib/site-packages"''
+      else ''sp="$(ls -d "$out"/lib/python*/site-packages)"''}
+    mkdir -p "$sp"
     uv pip install \
       --target "$sp" \
       --python-platform "${triple}" \
       --python-version "${pyVersion}" \
       --no-index --find-links "${wheelhouse}" --offline \
       open-webui
-    [ -f "$sp/open_webui/main.py" ] || { echo "open_webui not installed" >&2; exit 1; }
+    [ -f "$sp/open_webui/main.py" ] || { echo "open_webui not installed into $sp" >&2; exit 1; }
     find "$out" -name '__pycache__' -type d -prune -exec rm -rf {} + || true
   '' ];
   pbsArchive = pbsArchive;
