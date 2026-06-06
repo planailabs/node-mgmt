@@ -91,6 +91,9 @@
             export NIX_LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath ldLibs}"
             export USE_SYSTEM_7ZA=true
 
+            # marker the Makefile guards on (see Makefile)
+            export PLANAI_DEVSHELL=1
+
             # Ensure the design system submodule is present.
             if [ -f .gitmodules ] && [ ! -e third_party/plan-ai-design/assets/input.css ]; then
               echo "==> initialising plan-ai-design submodule"
