@@ -146,8 +146,19 @@ make image                           # → dist/plan-ai-usb.img  (FAT32, no root
 sudo dd if=dist/plan-ai-usb.img of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-`make-usb-image.sh` uses `mtools` (no mount), and fails if any single file
-exceeds the FAT32 4 GiB limit (use exFAT or trim the runtime if so).
+Filesystem choice (`--fs auto|fat32|exfat`, default `auto`):
+
+- **exFAT** (auto-picked when a file >4 GiB, e.g. the 5.3G AppImage) — loop mount, needs sudo.
+- **FAT32** — universal; the linux AppImage exceeds FAT32's 4 GiB/file limit, so
+  `--fs fat32` **auto-splits** it into `<name>.AppImage.partNN` (<4 GiB each) plus a
+  `<name>.run.sh` launcher that reassembles + verifies (sha256) + runs it:
+
+  ```sh
+  make image FS=fat32        # or: ./scripts/make-usb-image.sh --fs fat32
+  # on the stick: ./plan-ai-<ver>-linux-x86_64.run.sh   (joins parts -> cache, launches)
+  ```
+
+  Split a standalone AppImage yourself with `./scripts/split-appimage.sh`.
 
 ---
 
@@ -208,7 +219,8 @@ or notarization, add native Windows/macOS runners.
 | `build-openwebui.sh` | npm build + `uv build` wheel + prefetch embedding/nltk assets |
 | `make-runtime.sh [target]` | python-build-standalone + cross-installed Open-WebUI |
 | `bundle.sh [target] [--flavour]` | package the single-file artifact (+ codesign) |
-| `make-usb-image.sh [out] [--size-mb] [--label]` | FAT32 image with all bundles + models |
+| `make-usb-image.sh [out] [--fs auto\|fat32\|exfat]` | USB image with all bundles + models (fat32 auto-splits the AppImage) |
+| `split-appimage.sh [file] [--chunk-mb N]` | split a >4 GiB artifact into FAT32-sized parts + a reassembly launcher |
 | `seed-models.sh [dir]` | pre-pull usb.lock models |
 | `dev.sh` / `run-nixos.sh` | NixOS dev build + launcher |
 | `test-*.sh` | build/health, FAT32, ubuntu-vm, clean-build tests |

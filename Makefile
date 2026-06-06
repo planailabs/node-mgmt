@@ -2,8 +2,8 @@
 # Run inside `nix develop` (Linux build leg). TARGET defaults to the host.
 TARGET ?=
 
-.PHONY: all dev download ollama openwebui wheel runtime app bundle image seed \
-        test test-usb test-vm test-clean clean
+.PHONY: all dev download ollama openwebui wheel runtime app bundle image split \
+        seed test test-usb test-vm test-clean clean
 
 all: download wheel runtime bundle ## full pipeline -> dist/bundle
 
@@ -30,8 +30,11 @@ app: ## install app deps + build tailwind css
 bundle: ## package single-file artifact for TARGET
 	./scripts/bundle.sh $(TARGET)
 
-image: ## ready-to-burn FAT32 USB image (all platform bundles + models)
-	./scripts/make-usb-image.sh
+image: ## ready-to-burn USB image (FS=auto|fat32|exfat; fat32 auto-splits the AppImage)
+	./scripts/make-usb-image.sh $(if $(FS),--fs $(FS))
+
+split: ## split the linux AppImage into <4GiB parts + a reassembly launcher
+	./scripts/split-appimage.sh
 
 seed: ## pre-pull models from usb.lock into ./models
 	./scripts/seed-models.sh
