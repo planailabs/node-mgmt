@@ -10,6 +10,13 @@
   },
   "python": "3.12.13",
   "pbs_release": "20260602",
-  "targets": ["linux-x64", "win-x64", "mac-arm64", "mac-x64"],
-  "models": ["smollm2:1.7b"]
+  "targets": [
+    "linux-x64",
+    "win-x64",
+    "mac-arm64",
+    "nixos-x64"
+  ],
+  "models": [
+    "smollm2:1.7b"
+  ]
 }

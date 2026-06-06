@@ -14,7 +14,10 @@ endif
 endif
 
 # Distributable targets built by `make all` (+ the nixos target).
-TARGETS := linux-x64 win-x64 mac-arm64 mac-x64
+# mac-x64 (Intel) is omitted: modern Python wheels (torch, brotlicffi, …) ship
+# macOS arm64-only, so an x86_64-darwin cross-install is unsatisfiable. Apple
+# Silicon (mac-arm64) is the supported macOS target.
+TARGETS := linux-x64 win-x64 mac-arm64
 ALLTGTS := $(TARGETS) nixos-x64
 
 .PHONY: all dev download ollama openwebui wheel runtime runtimes app components \

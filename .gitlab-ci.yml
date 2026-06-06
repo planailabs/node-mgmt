@@ -61,7 +61,7 @@ build:mac:
   stage: build
   parallel:
     matrix:
-      - TARGET: [mac-arm64, mac-x64]
+      - TARGET: [mac-arm64]   # mac-x64 (Intel) omitted: deps ship macOS arm64-only
   script:
     - nix develop --command ./scripts/download-ollama.sh ollama-darwin.tgz
     - *fetch
