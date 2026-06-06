@@ -90,7 +90,10 @@ log "run AppImage on stock Ubuntu; assert the stack serves (screenshot best-effo
 # and capture a screenshot only opportunistically.
 incus exec "$VM" -- bash -c '
   set -x
-  export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY="${PLANAI_CAPTURE_DELAY:-20000}"
+  # NOTE: do NOT set PLANAI_CAPTURE here — the capture hook calls app.quit() after
+  # its delay, which would kill the app before Open-WebUI (~20s cold start) is
+  # ready. We assert health instead and screenshot is dropped (headless render is
+  # unreliable anyway).
   export TMPDIR=/root/tmp; mkdir -p "$TMPDIR"
   export NO_AT_BRIDGE=1 GTK_A11Y=none ELECTRON_ENABLE_LOGGING=1 LIBGL_ALWAYS_SOFTWARE=1
   modprobe fuse 2>/dev/null || true
