@@ -32,12 +32,20 @@ PLAT = {
 plat_re = re.compile("|".join(PLAT))
 
 def compatible(fname):
-    # pure-python wheels
+    # pure-python, any-platform wheels
     if re.search(r"-(py3|py2\.py3|cp3[0-9]+)-none-any\.whl$", fname):
         return True
-    # abi3 / cp312 platform wheels for this OS/arch
-    if re.search(rf"-({PYTAG}|cp3[0-9]+-abi3|abi3)-", fname) or f"-{PYTAG}-{PYTAG}-" in fname:
-        return bool(plat_re.search(fname))
+    # platform-specific wheels for this OS/arch. Accept cp312 / abi3 ABI tags AND
+    # the generic py3/py2.py3 python tag — some packages ship a pure-python wheel
+    # whose ONLY platform variant bundles a native lib (e.g. soundfile ships
+    # soundfile-*-py2.py3-none-manylinux_*.whl with libsndfile.so inside; the
+    # plain none-any wheel has no lib and crashes off NixOS). uv then prefers the
+    # platform wheel for --python-platform.
+    if plat_re.search(fname) and (
+        re.search(rf"-({PYTAG}|cp3[0-9]+-abi3|abi3|py3|py2\.py3)-", fname)
+        or f"-{PYTAG}-{PYTAG}-" in fname
+    ):
+        return True
     return False
 
 def to_sri(url, recorded_hex):

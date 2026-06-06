@@ -1187,6 +1187,11 @@
       "hash": "sha256-ojxxdWDaLPTHta4RQlFOD9gta72d/JOlBCNEcULyxEU="
     },
     {
+      "name": "soundfile-0.13.1-py2.py3-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/14/e9/6b761de83277f2f02ded7e7ea6f07828ec78e4b229b80e4ca55dd205b9dc/soundfile-0.13.1-py2.py3-none-win_amd64.whl",
+      "hash": "sha256-HnCgWgYmUkpp6fD03S7BdLTpVn9Ni2wR04tcKJvjbuk="
+    },
+    {
       "name": "soupsieve-2.8.4-py3-none-any.whl",
       "url": "https://files.pythonhosted.org/packages/5e/f5/0c41cb68dcae6b7de4fac4188a3a9589e21fb31df21ea3a2e888db95e6c9/soupsieve-2.8.4-py3-none-any.whl",
       "hash": "sha256-5+awdpyPUe1ZrKtumUsAYhCWz7HGQKdQkpWYc4j7r2U="
