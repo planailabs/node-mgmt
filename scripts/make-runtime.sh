@@ -102,8 +102,10 @@ trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
 # copy out of the store into a writable, self-contained tree under python/ (the
 # layout paths.js/build-components expect). -a (not -L) keeps the tree's internal
 # relative symlinks intact; the derivation output references no other store path,
-# so the copy is store-free.
-cp -a --no-preserve=mode,ownership "$STORE" "$PYDIR"
+# so the copy is store-free. PRESERVE mode (the interpreter + .so files must keep
+# their +x bit — only drop ownership, since we copy out of the store as a user)
+# then add owner-write so the tree is mutable.
+cp -a --no-preserve=ownership "$STORE" "$PYDIR"
 chmod -R u+w "$PYDIR"
 
 case "$TARGET" in
