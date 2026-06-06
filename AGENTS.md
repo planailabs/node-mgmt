@@ -52,6 +52,24 @@ nix store + nixpkgs electron.
   and the **dev** runtime (a nixpkgs-python venv — `scripts/dev.sh`, runs on
   NixOS for local iteration). `app/main/paths.js` resolves either via
   `PLANAI_RESOURCES`.
+- **Layer 3 — the runtime is a wheels-FOD, built by nix, run outside the store.**
+  `make-runtime.sh` is **nix-only** (no pbs-download/uv-cross fallback). uv resolves
+  (`runtime/uv.lock`); `scripts/gen-wheels-lock.sh` selects each target's compatible
+  wheels + SRI hashes into `runtime/wheels-<target>.lock.json` (one run does all of
+  linux-x64/win-x64/mac-arm64; mac matcher must include `universal2`). `nix/runtime.nix`
+  fetches every wheel as an FOD (a wheelhouse) and a **vanilla** `derivation` (no
+  stdenv/fixup) does `uv pip install --target --python-platform <triple> --no-index
+  --offline open-webui` into the pbs tree. `python3` is on PATH only for uv's
+  interpreter *discovery*; `--python-platform`/`--python-version` drive wheel
+  selection and no wheel is executed, so all three targets cross-build on NixOS.
+  Output is proven portable (generic interp, `$ORIGIN` rpath, **0 `/nix/store`
+  refs**) and copied OUT of the store into `dist/runtime/<t>/python/`. Per-wheel
+  FODs auto-dedup the ~213 shared pure-python wheels across platforms.
+  Gotchas: Windows site-packages is `Lib/site-packages` (root `python.exe`), unix is
+  `lib/pythonX.Y/site-packages` — an unexpanded glob silently makes a bogus `python*`
+  dir. `compgen` is **unavailable** in nix-develop's non-interactive bash (use a
+  nullglob-free glob helper). `nixos-x64` keeps a nix-native venv (store refs OK — it
+  launches under nixpkgs Electron on a nix host).
 
 ## Build & test (inside `nix develop`)
 
