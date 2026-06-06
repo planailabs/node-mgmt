@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Boot an Ubuntu VM (incus, KVM-accelerated) and run the Linux AppImage inside it
-# under xvfb, to prove the bundle runs on a stock Ubuntu — not just NixOS.
-# Pulls a screenshot back out and asserts it rendered.
+# Run the Linux AppImage inside a stock Ubuntu instance (incus) under xvfb, to
+# prove the bundle runs on Ubuntu — not just NixOS. Asserts the stack SERVES
+# (ollama + Open-WebUI health); screenshot is best-effort (headless render is
+# flaky). Default Ubuntu 26.04 (override UBUNTU_VERSION).
 #
-# Uses incus (preferred: easy to instrument). Default Ubuntu 26.04, fallback 24.04.
+# Uses a privileged CONTAINER with /dev/fuse rather than a KVM VM: VM creation
+# stalls for minutes on busy hosts, while containers launch in seconds and still
+# exercise the real squashfuse mount path.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -22,35 +25,35 @@ cleanup() { incus delete -f "$VM" 2>/dev/null || true; }
 trap cleanup EXIT
 log "test VM: $VM"
 
-launch_vm() {
+# We use a privileged system CONTAINER (not a KVM VM): on this host VM creation
+# intermittently stalls for minutes, while containers launch in seconds. A
+# privileged container with /dev/fuse passed through still exercises the real
+# squashfuse MOUNT path (and the AppImage's own FUSE), so it's a faithful "runs
+# on stock Ubuntu" check — just far more reliable.
+launch_ctr() {
   local img="$1"
-  log "incus launch $img (VM, KVM)"
-  # Components MOUNT in place (no extraction to RAM/tmpfs), so modest RAM is fine.
-  # ${PLANAI_VM_MEM:-6GiB} RAM, ${PLANAI_VM_DISK:-16GiB} root (holds the ~3GB AppImage).
-  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-360}" incus launch "$img" "$VM" --vm --ephemeral \
-    -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" \
-    -d root,size="${PLANAI_VM_DISK:-16GiB}" 2>/dev/null
+  log "incus launch $img (privileged container + /dev/fuse)"
+  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-300}" incus launch "$img" "$VM" --ephemeral \
+    -c security.privileged=true -c security.nesting=true \
+    -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" 2>/dev/null || return 1
+  # hot-plug /dev/fuse so squashfuse_ll + the AppImage can mount
+  incus config device add "$VM" fuse unix-char source=/dev/fuse path=/dev/fuse 2>/dev/null || true
 }
-# Prefer a locally CACHED VM image: the images:linuxcontainers.org remote is
-# often slow/unreachable and `incus launch images:...` hangs contacting it even
-# when the image is already cached. Match by Ubuntu codename.
-cached_vm_image() {
+# Prefer a locally CACHED container image for the codename (the
+# images:linuxcontainers.org remote is sometimes slow); else fetch from remote.
+cached_ctr_image() {
   local codename; case "$UBUNTU" in
     26.04) codename=resolute ;; 24.04) codename=noble ;; 22.04) codename=jammy ;; *) return 1 ;;
   esac
   incus image list --format csv -c f,d,t 2>/dev/null \
-    | awk -F, -v c="$codename" 'tolower($2) ~ c && $3 ~ /VIRTUAL-MACHINE/ {print $1; exit}'
+    | awk -F, -v c="$codename" 'tolower($2) ~ c && $3 ~ /CONTAINER/ {print $1; exit}'
 }
-FP="$(cached_vm_image || true)"
+FP="$(cached_ctr_image || true)"
 if [ -n "${FP:-}" ]; then
-  log "using cached $UBUNTU VM image $FP (bypassing remote)"
-  launch_vm "$FP" || die "launch from cached image $FP failed"
+  log "using cached $UBUNTU container image $FP"
+  launch_ctr "$FP" || die "launch from cached image $FP failed"
 else
-  launch_vm "images:ubuntu/$UBUNTU/cloud" || {
-    warn "ubuntu/$UBUNTU not available, falling back to 24.04"
-    UBUNTU=24.04; FP="$(cached_vm_image || true)"
-    launch_vm "${FP:-images:ubuntu/$UBUNTU/cloud}" || die "could not launch ubuntu VM"
-  }
+  launch_ctr "images:ubuntu/$UBUNTU" || die "could not launch ubuntu $UBUNTU container"
 fi
 
 log "wait for VM agent"
