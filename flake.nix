@@ -45,7 +45,7 @@
 
           # cross-target packaging from NixOS
           rcodesign       # Apple code signing from Linux (mac target)
-          wineWowPackages.stable  # electron-builder win build steps
+          wineWow64Packages.stable  # electron-builder win build steps (rcedit)
           osslsigncode    # Authenticode signing for the windows .exe
           nsis            # windows installer
 
