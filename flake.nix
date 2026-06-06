@@ -18,6 +18,7 @@
         buildTools = with pkgs; [
           # node (Open-WebUI requires <=22.x) + electron app + tailwindcss
           nodejs_22
+          tailwindcss_3
 
           # python (Open-WebUI requires >=3.11,<3.13) + uv resolver/venv
           python312
