@@ -78,6 +78,7 @@ check_runtime() {  # <site-packages> <runtime-dir>
 if [ "$TARGET" = "nixos-x64" ]; then
   RT="$DIST_DIR/runtime/$TARGET"; VENV="$RT/venv"
   rm -rf "$RT"; mkdir -p "$RT"
+  trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
   NIXPY="$(command -v python3)"
   log "[$TARGET] nix-native venv ($NIXPY) + open-webui"
   uv venv --python "$NIXPY" "$VENV"
@@ -99,6 +100,8 @@ TRIPLE="$(target_triple "$TARGET")"
 RT="$DIST_DIR/runtime/$TARGET"
 PYDIR="$RT/python"
 rm -rf "$RT"; mkdir -p "$PYDIR"
+# never leave a partial runtime behind on failure (it must not be packed/shipped)
+trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
 
 # 1. python-build-standalone interpreter for the target (install_only build).
 log "[$TARGET] download python-build-standalone $PYVER ($TRIPLE)"

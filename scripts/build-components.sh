@@ -32,6 +32,12 @@ RUNTIMES="[]"
 for rt in "$DIST_DIR"/runtime/*/; do
   t="$(basename "$rt")"
   [ -d "$rt/venv" ] || [ -d "$rt/python" ] || continue
+  # only pack COMPLETE runtimes — a failed cross-install can leave a partial
+  # python/ dir with no open_webui; never ship that.
+  if ! ls "$rt"/{venv,python}/lib/python*/site-packages/open_webui/main.py \
+        "$rt"/python/Lib/site-packages/open_webui/main.py >/dev/null 2>&1; then
+    warn "skip incomplete runtime $t (open_webui missing)"; continue
+  fi
   pack "$rt" "runtime-$t.tar.gz" .
   RUNTIMES="$(jq -c --arg t "$t" '. + [$t]' <<<"$RUNTIMES")"
 done
