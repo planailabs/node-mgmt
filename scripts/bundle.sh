@@ -31,11 +31,13 @@ STAGE="$APP/.stage/resources"
 OUT="$DIST_DIR/bundle"
 
 # runtime key + the ollama flavours this OS ships (loader picks one by arch/GPU)
+# ollama flavours this OS ships (loader picks one). Default is the single CPU
+# build so artifacts stay under FAT32's 4 GiB limit (no exFAT/splitting needed);
+# override for a GPU image, e.g. OLLAMA_FLAVOURS="linux-amd64 linux-amd64-rocm".
 case "$TARGET" in
-  linux-x64) OKEYS="linux-amd64 linux-arm64 linux-amd64-rocm" ;;
-  nixos-x64) OKEYS="linux-amd64 linux-arm64 linux-amd64-rocm" ;;
-  win-x64)   OKEYS="windows-amd64" ;;
-  mac-arm64|mac-x64) OKEYS="darwin" ;;
+  linux-x64|nixos-x64) OKEYS="${OLLAMA_FLAVOURS:-linux-amd64}" ;;
+  win-x64)   OKEYS="${OLLAMA_FLAVOURS:-windows-amd64}" ;;
+  mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
 RT_ARCHIVE="runtime-$TARGET.tar.gz"

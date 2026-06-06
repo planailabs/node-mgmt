@@ -18,7 +18,7 @@ TARGETS := linux-x64 win-x64 mac-arm64 mac-x64
 ALLTGTS := $(TARGETS) nixos-x64
 
 .PHONY: all dev download ollama openwebui wheel runtime runtimes app components \
-        bundle bundles nixos image split seed test test-usb test-vm test-nixos \
+        bundle bundles nixos image seed test test-usb test-vm test-nixos \
         test-clean test-all clean help
 
 all: download wheel app runtimes components bundles image ## build EVERY target (mac/win/linux/nixos) + image
@@ -58,11 +58,9 @@ app: ## install app deps + build tailwind css
 bundle: ## package single-file artifact for TARGET
 	./scripts/bundle.sh $(TARGET)
 
-image: ## ready-to-burn USB image (default FS=fat32, auto-splits AppImage; FS=exfat for whole)
-	./scripts/make-usb-image.sh $(if $(FS),--fs $(FS))
+image: ## ready-to-burn FAT32 USB image (all artifacts < 4 GiB; reads everywhere)
+	./scripts/make-usb-image.sh
 
-split: ## split the linux AppImage into <4GiB parts + a reassembly launcher
-	./scripts/split-appimage.sh
 
 seed: ## pre-pull models from usb.lock into ./models
 	./scripts/seed-models.sh

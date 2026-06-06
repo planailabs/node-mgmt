@@ -32,6 +32,7 @@
           gnutar
           unzip
           gzip
+          pigz          # parallel gzip for component archives
           git
           gnused
           coreutils
@@ -50,10 +51,9 @@
           osslsigncode    # Authenticode signing for the windows .exe
           nsis            # windows installer
 
-          # USB image: FAT32 (mtools, no root) + exFAT (>4GiB files, e.g. the AppImage)
+          # USB image: FAT32 only (mtools, no root) — artifacts stay < 4 GiB
           mtools
           dosfstools
-          exfatprogs
           zip
           unzip
 

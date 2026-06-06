@@ -95,6 +95,23 @@ async function init() {
   $('f-models').title = info.modelsDir;
   $('f-data').title = info.dataDir;
 
+  // acceleration / ollama flavour decision + why (from the loader)
+  const ac = info.accel;
+  if (ac && ac.flavour) {
+    $('f-accel').textContent = ac.flavour;
+    $('f-accel-why').textContent = `— ${ac.reason}`;
+    if (Array.isArray(ac.checks)) {
+      $('f-accel-checks').innerHTML = ac.checks.map((c) => {
+        const mark = c.usable ? '✓' : '·';
+        const sel = c.flavour === ac.flavour ? ' (selected)' : '';
+        return `<li>${mark} ${c.flavour}: ${c.why}${sel}</li>`;
+      }).join('');
+    }
+  } else {
+    $('f-accel').textContent = 'bundled runtime';
+    $('f-accel-why').textContent = ac ? `— ${ac.reason}` : '';
+  }
+
   const snap = await planai.getStatus();
   snap.forEach((s) => { if (svc[s.id]) svc[s.id].state = s.state; });
   renderServices();

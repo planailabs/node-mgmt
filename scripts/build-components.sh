@@ -18,7 +18,11 @@ OUT="$DIST_DIR/components"; rm -rf "$OUT"; mkdir -p "$OUT"
 OLLAMA_TAG="$(ollama_version)"
 OLLAMA_DIR="$VENDOR_DIR/ollama/$OLLAMA_TAG"
 
-pack() { tar -C "$1" -czf "$OUT/$2" "${@:3}"; log "+ $2 ($(du -h "$OUT/$2" | cut -f1))"; }
+# parallel gzip (pigz) when available; output is plain gzip (the node loader's
+# `tar` reads it). falls back to gzip.
+if command -v pigz >/dev/null 2>&1; then GZIP_CMD="pigz -p $(nproc)"; else GZIP_CMD="gzip"; fi
+gz() { tar -C "$1" -cf - "${@:3}" | $GZIP_CMD > "$OUT/$2"; log "+ $2 ($(du -h "$OUT/$2" | cut -f1))"; }
+pack() { gz "$@"; }
 
 # shared offline assets
 [ -d "$VENDOR_DIR/ow-assets" ] && pack "$VENDOR_DIR/ow-assets" ow-assets.tar.gz .
@@ -42,7 +46,7 @@ norm_ollama() {  # <downloaded-file> <flavour-key>
     *.zip) need unzip; unzip -qo "$src" -d "$tmp" ;;
     *) rm -rf "$tmp"; return 1 ;;
   esac
-  tar -C "$tmp" -czf "$OUT/ollama-$key.tar.gz" .
+  tar -C "$tmp" -cf - . | $GZIP_CMD > "$OUT/ollama-$key.tar.gz"
   rm -rf "$tmp"
   log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1))"
 }

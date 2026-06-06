@@ -65,6 +65,7 @@ function wireIpc() {
     dataDir: paths.dataDir(),
     packaged: app.isPackaged,
     version: app.getVersion(),
+    accel: loader.getAccel(),   // which ollama flavour was chosen + why
   }));
   ipcMain.handle('app:status', () => supervisor.snapshot());
   ipcMain.handle('app:logs', () => supervisor.recentLogs());

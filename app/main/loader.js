@@ -34,18 +34,69 @@ function runtimeArchive(comp) {
   return fs.readdirSync(comp).find((f) => /^runtime-.*\.tar\.gz$/.test(f)) || null;
 }
 
-// the ollama flavour for this machine
-function ollamaArchive(comp) {
-  const list = fs.readdirSync(comp);
-  const has = (n) => list.includes(`${n}.tar.gz`) ? `${n}.tar.gz` : null;
-  if (process.platform === 'linux') {
-    if (fs.existsSync('/dev/kfd') && has('ollama-linux-amd64-rocm')) return has('ollama-linux-amd64-rocm');
-    return process.arch === 'arm64' ? has('ollama-linux-arm64') : has('ollama-linux-amd64');
-  }
-  if (process.platform === 'darwin') return has('ollama-darwin');
-  if (process.platform === 'win32') return has('ollama-windows-amd64');
-  return null;
+// Is a shared library findable on this system (common dirs + ldconfig cache)?
+function libPresent(names) {
+  const dirs = ['/opt/rocm/lib', '/usr/lib', '/usr/lib64', '/usr/lib/x86_64-linux-gnu', '/lib/x86_64-linux-gnu'];
+  for (const n of names) for (const d of dirs) if (fs.existsSync(path.join(d, n))) return true;
+  try {
+    const cache = execFileSync('ldconfig', ['-p'], { encoding: 'utf8' });
+    if (names.some((n) => cache.includes(n))) return true;
+  } catch { /* no ldconfig (e.g. NixOS) — rely on the dir checks */ }
+  return false;
 }
+
+// Choose the ollama flavour by checking the actual hardware/runtime, and record
+// WHY each candidate was or wasn't picked (surfaced in the dashboard overview).
+// rocm is only selected when its archive is bundled AND /dev/kfd exists AND the
+// ROCm runtime libs are installed — otherwise that build crashes on launch.
+function detectOllama(comp) {
+  const list = fs.readdirSync(comp);
+  const has = (n) => list.includes(`${n}.tar.gz`);
+  const checks = [];
+  const add = (flavour, bundled, usable, why) => checks.push({ flavour, bundled, usable, why });
+
+  let chosen = null;
+  if (process.platform === 'linux' && process.arch !== 'arm64') {
+    // ROCm (AMD GPU) candidate
+    const rocmBundled = has('ollama-linux-amd64-rocm');
+    const kfd = fs.existsSync('/dev/kfd');
+    const rocmLib = libPresent(['libamdhip64.so', 'libamdhip64.so.6', 'librocm-core.so']);
+    const rocmUsable = rocmBundled && kfd && rocmLib;
+    add('linux-amd64-rocm', rocmBundled, rocmUsable,
+      !rocmBundled ? 'not bundled in this build (CPU build)'
+      : !kfd ? 'no AMD GPU (/dev/kfd absent)'
+      : !rocmLib ? 'ROCm runtime not installed (libamdhip64 not found)'
+      : 'AMD GPU + ROCm runtime detected');
+    if (rocmUsable) chosen = 'ollama-linux-amd64-rocm';
+    // CPU/CUDA amd64 (default; ollama uses CUDA at runtime if libcuda is present)
+    if (!chosen) {
+      const cuda = libPresent(['libcuda.so', 'libcuda.so.1']);
+      add('linux-amd64', has('ollama-linux-amd64'), has('ollama-linux-amd64'),
+        cuda ? 'NVIDIA driver present — ollama will use CUDA, else CPU' : 'CPU (no NVIDIA/AMD GPU runtime detected)');
+      if (has('ollama-linux-amd64')) chosen = 'ollama-linux-amd64';
+    }
+  } else if (process.platform === 'linux') {
+    add('linux-arm64', has('ollama-linux-arm64'), has('ollama-linux-arm64'), 'arm64 CPU');
+    if (has('ollama-linux-arm64')) chosen = 'ollama-linux-arm64';
+  } else if (process.platform === 'darwin') {
+    add('darwin', has('ollama-darwin'), has('ollama-darwin'), 'macOS universal (Metal)');
+    if (has('ollama-darwin')) chosen = 'ollama-darwin';
+  } else if (process.platform === 'win32') {
+    add('windows-amd64', has('ollama-windows-amd64'), has('ollama-windows-amd64'), 'Windows x64');
+    if (has('ollama-windows-amd64')) chosen = 'ollama-windows-amd64';
+  }
+
+  const selected = checks.find((c) => `ollama-${c.flavour}.tar.gz` === chosen);
+  return {
+    archive: chosen,
+    flavour: selected ? selected.flavour : null,
+    reason: selected ? selected.why : 'no ollama flavour available for this machine',
+    checks,
+  };
+}
+
+let lastAccel = null;
+function getAccel() { return lastAccel; }
 
 function extractOnce(archive, dest, marker) {
   if (fs.existsSync(marker)) return;
@@ -66,9 +117,12 @@ function prepare(log = () => {}) {
   fs.mkdirSync(dist, { recursive: true });
 
   const rt = runtimeArchive(comp);
-  const ol = ollamaArchive(comp);
+  const accel = detectOllama(comp);
+  lastAccel = accel;
+  const ol = accel.archive;
   if (!rt) throw new Error('no runtime component in ' + comp);
   if (!ol) throw new Error('no ollama flavour for ' + process.platform + '/' + process.arch);
+  log(`ollama flavour: ${accel.flavour} — ${accel.reason}`);
 
   log(`extracting runtime ${rt}`);
   extractOnce(path.join(comp, rt), path.join(dist, 'runtime'), path.join(root, `.runtime.${rt}.done`));
@@ -103,4 +157,4 @@ function prepare(log = () => {}) {
   return true;
 }
 
-module.exports = { prepare, componentsDir };
+module.exports = { prepare, componentsDir, getAccel };
