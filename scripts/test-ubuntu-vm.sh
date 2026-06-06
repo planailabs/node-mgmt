@@ -32,12 +32,25 @@ log "test VM: $VM"
 # on stock Ubuntu" check — just far more reliable.
 launch_ctr() {
   local img="$1"
-  log "incus launch $img (privileged container + /dev/fuse)"
-  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-300}" incus launch "$img" "$VM" --ephemeral \
+  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-120}" incus launch "$img" "$VM" --ephemeral \
     -c security.privileged=true -c security.nesting=true \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" 2>/dev/null || return 1
   # hot-plug /dev/fuse so squashfuse_ll + the AppImage can mount
   incus config device add "$VM" fuse unix-char source=/dev/fuse path=/dev/fuse 2>/dev/null || true
+}
+# This host intermittently STALLS instance creation for minutes (heavy IO), but a
+# good launch finishes in ~25s. Use a short per-attempt timeout + retries: kill a
+# stalled launch, clean the partial instance, retry.
+launch_with_retry() {
+  local img="$1" n="${PLANAI_VM_LAUNCH_RETRIES:-5}" i
+  for i in $(seq 1 "$n"); do
+    log "incus launch $img (privileged container + /dev/fuse) — attempt $i/$n"
+    launch_ctr "$img" && return 0
+    warn "launch attempt $i/$n stalled/failed; cleaning up + retrying"
+    incus delete -f "$VM" 2>/dev/null || true
+    sleep 5
+  done
+  return 1
 }
 # Prefer a locally CACHED container image for the codename (the
 # images:linuxcontainers.org remote is sometimes slow); else fetch from remote.
@@ -51,9 +64,9 @@ cached_ctr_image() {
 FP="$(cached_ctr_image || true)"
 if [ -n "${FP:-}" ]; then
   log "using cached $UBUNTU container image $FP"
-  launch_ctr "$FP" || die "launch from cached image $FP failed"
+  launch_with_retry "$FP" || die "launch from cached image $FP failed after retries"
 else
-  launch_ctr "images:ubuntu/$UBUNTU" || die "could not launch ubuntu $UBUNTU container"
+  launch_with_retry "images:ubuntu/$UBUNTU" || die "could not launch ubuntu $UBUNTU container"
 fi
 
 log "wait for VM agent"
