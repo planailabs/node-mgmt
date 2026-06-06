@@ -146,19 +146,24 @@ make image                           # → dist/plan-ai-usb.img  (FAT32, no root
 sudo dd if=dist/plan-ai-usb.img of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Filesystem choice (`--fs auto|fat32|exfat`, default `auto`):
+Filesystem choice (`--fs fat32|exfat|auto`, **default `fat32`**):
 
-- **exFAT** (auto-picked when a file >4 GiB, e.g. the 5.3G AppImage) — loop mount, needs sudo.
-- **FAT32** — universal; the linux AppImage exceeds FAT32's 4 GiB/file limit, so
-  `--fs fat32` **auto-splits** it into `<name>.AppImage.partNN` (<4 GiB each) plus a
-  `<name>.run.sh` launcher that reassembles + verifies (sha256) + runs it:
+- **FAT32** (default) — universal (reads everywhere). The linux AppImage exceeds
+  FAT32's 4 GiB/file limit, so it is **auto-split** into `<name>.AppImage.partNN`
+  (<4 GiB each) plus a `<name>.run.sh` launcher that reassembles + verifies
+  (sha256) + runs it:
 
   ```sh
-  make image FS=fat32        # or: ./scripts/make-usb-image.sh --fs fat32
-  # on the stick: ./plan-ai-<ver>-linux-x86_64.run.sh   (joins parts -> cache, launches)
+  make image                 # FS=fat32 (default); splits the AppImage
+  # on the stick: ./plan-ai-<ver>-linux-x86_64.run.sh   (joins parts -> ~/.cache, launches)
   ```
 
-  Split a standalone AppImage yourself with `./scripts/split-appimage.sh`.
+  Note: reassembly needs ~5.3 GiB free off-USB (`~/.cache/plan-ai`, override with
+  `PLANAI_CACHE`) since FAT32 can't hold the whole file. Split a standalone
+  AppImage yourself with `./scripts/split-appimage.sh`.
+- **exFAT** (`make image FS=exfat`) — stores the AppImage whole; it runs directly
+  (no reassembly, no off-USB scratch), via a loop mount (needs sudo). Less
+  universal than FAT32.
 
 ---
 

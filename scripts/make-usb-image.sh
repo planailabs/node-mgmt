@@ -4,11 +4,13 @@
 #
 # Usage: scripts/make-usb-image.sh [out.img] [--size-mb N] [--label NAME] [--fs auto|fat32|exfat]
 #
-# Filesystem:
-#   fat32 — universal, but max 4 GiB per file (the linux AppImage is larger);
-#           written with mtools, no root required.
-#   exfat — supports >4 GiB files; written via a loop mount (needs sudo).
-#   auto  — exfat if any artifact exceeds 4 GiB, else fat32 (default).
+# Filesystem (--fs, default fat32):
+#   fat32 — universal (reads everywhere); the linux AppImage exceeds the 4 GiB
+#           per-file limit so it is auto-split into .part files + a .run.sh
+#           reassembly launcher. Written with mtools, no root required. DEFAULT.
+#   exfat — supports >4 GiB files (AppImage stored whole, runs directly); written
+#           via a loop mount (needs sudo). Less universal than FAT32.
+#   auto  — exfat if any artifact exceeds 4 GiB, else fat32.
 #
 # Layout (everything at the image root so each platform binary finds the shared
 # models/ + data/ via its own USB-relative path resolution):
@@ -19,7 +21,7 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-OUT="$DIST_DIR/plan-ai-usb.img"; SIZE_MB=""; LABEL="PLANAI"; FS="auto"
+OUT="$DIST_DIR/plan-ai-usb.img"; SIZE_MB=""; LABEL="PLANAI"; FS="fat32"
 while [ $# -gt 0 ]; do
   case "$1" in
     --size-mb) SIZE_MB="$2"; shift 2 ;;
