@@ -74,7 +74,23 @@
           libffi openssl expat bzip2 xz
           stdenv.cc.libc      # libm, libpthread, libdl, libc
         ];
+
+        # --- vendored downloads as fixed-output derivations --------------------
+        # Every upstream archive (ollama flavours, python-build-standalone, the
+        # open-webui source) keyed by the sha256 pinned in vendor.lock.json.
+        # FODs are cached + content-addressed in /nix/store and run NO fixup, so
+        # the generic cross-platform binaries arrive byte-identical. Regenerate
+        # the lock with scripts/gen-vendor-lock.sh when usb.lock bumps.
+        vlock = builtins.fromJSON (builtins.readFile ./vendor.lock.json);
+        fetch = e: pkgs.fetchurl { inherit (e) url sha256; };
+        vendor = pkgs.linkFarm "plan-ai-vendor" (
+          (map (a: { name = "ollama/${vlock.ollama.tag}/${a.name}"; path = fetch a; }) vlock.ollama.assets)
+          ++ (map (p: { name = "pbs/${p.target}.tar.gz"; path = fetch p; }) vlock.pbs.files)
+          ++ [ { name = "open-webui/${vlock.openwebui.tag}/source.tar.gz"; path = fetch vlock.openwebui; } ]
+        );
       in {
+        packages.vendor = vendor;
+
         devShells.default = pkgs.mkShell {
           packages = buildTools;
 

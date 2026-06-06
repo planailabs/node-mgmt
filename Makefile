@@ -20,9 +20,9 @@ endif
 TARGETS := linux-x64 win-x64 mac-arm64
 ALLTGTS := $(TARGETS) nixos-x64
 
-.PHONY: all dev download ollama openwebui wheel runtime runtimes app components \
-        bundle bundles nixos image seed test test-usb test-vm test-nixos \
-        test-clean test-all clean help
+.PHONY: all dev download download-curl vendor-lock ollama openwebui wheel runtime \
+        runtimes app components bundle bundles nixos image seed test test-usb \
+        test-vm test-nixos test-clean test-all clean help
 
 all: download wheel app runtimes components bundles image ## build EVERY target (mac/win/linux/nixos) + image
 
@@ -41,11 +41,16 @@ nixos: ## build just the NixOS target (runtime + components + bundle)
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
 
-download: ollama openwebui ## fetch ollama flavours + open-webui source
+download: ## materialise vendored downloads from Nix FODs (cached) into vendor/
+	./scripts/fetch-vendor.sh
 
+vendor-lock: ## regenerate vendor.lock.json (run when usb.lock bumps)
+	./scripts/gen-vendor-lock.sh
+
+# legacy curl-based fetch (no Nix); FODs (make download) are preferred
+download-curl: ollama openwebui
 ollama:
 	./scripts/download-ollama.sh
-
 openwebui:
 	./scripts/download-openwebui.sh
 

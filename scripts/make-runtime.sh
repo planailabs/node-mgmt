@@ -104,11 +104,18 @@ rm -rf "$RT"; mkdir -p "$PYDIR"
 trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
 
 # 1. python-build-standalone interpreter for the target (install_only build).
-log "[$TARGET] download python-build-standalone $PYVER ($TRIPLE)"
-TARBALL="$RT/python.tar.gz"
-download_verified "$(pbs_url "$TARGET")" "$TARBALL" "-"
-tar -xzf "$TARBALL" -C "$PYDIR" --strip-components=1
-rm -f "$TARBALL"
+# Prefer the Nix-vendored FOD (cached) if present, else download directly.
+VENDORED_PBS="$VENDOR_DIR/pbs/$TARGET.tar.gz"
+if [ -f "$VENDORED_PBS" ]; then
+  log "[$TARGET] python-build-standalone $PYVER (vendored)"
+  tar -xzf "$VENDORED_PBS" -C "$PYDIR" --strip-components=1
+else
+  log "[$TARGET] download python-build-standalone $PYVER ($TRIPLE)"
+  TARBALL="$RT/python.tar.gz"
+  download_verified "$(pbs_url "$TARGET")" "$TARBALL" "-"
+  tar -xzf "$TARBALL" -C "$PYDIR" --strip-components=1
+  rm -f "$TARBALL"
+fi
 
 # 2. site-packages location for the target layout.
 case "$TARGET" in
