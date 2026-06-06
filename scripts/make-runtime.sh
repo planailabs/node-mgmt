@@ -58,6 +58,9 @@ esac
 [ -n "$SP" ] && [ -d "$SP" ] || die "site-packages not found under $PYDIR"
 
 # 3. cross-install Open-WebUI + deps for the target (no interpreter execution).
+# macOS: onnxruntime (pulled by chromadb) only ships macosx_14_0 wheels, so raise
+# the deployment target uv resolves against, else resolution is unsatisfiable.
+case "$TARGET" in mac-*) export MACOSX_DEPLOYMENT_TARGET=14.0 ;; esac
 log "[$TARGET] install open-webui (+deps) for $TRIPLE"
 uv pip install \
   --target "$SP" \

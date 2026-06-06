@@ -89,15 +89,19 @@ package_electron_builder() {
   patch_eb_build_tools() {
     [ -n "${NIX_LD:-}" ] && command -v patchelf >/dev/null 2>&1 || return 0
     local cache="${XDG_CACHE_HOME:-$HOME/.cache}/electron-builder" f
-    for f in $(find "$cache" -type f \( -name mksquashfs -o -name appimagetool -o -name desktop-file-validate \) 2>/dev/null); do
+    # generic prebuilt helpers electron-builder runs at pack time: AppImage tools
+    # + NSIS (makensis) for windows portable/installer targets.
+    for f in $(find "$cache" -type f \( -name mksquashfs -o -name appimagetool \
+        -o -name desktop-file-validate -o -name makensis \) 2>/dev/null); do
       patchelf --set-interpreter "$NIX_LD" "$f" 2>/dev/null || true
       [ -n "${NIX_LD_LIBRARY_PATH:-}" ] && patchelf --set-rpath "$NIX_LD_LIBRARY_PATH" "$f" 2>/dev/null || true
     done
   }
   build_once() { ( cd "$APP" && npx electron-builder $EB_OS --config electron-builder.yml ); }
   log "electron-builder $EB_OS -> $OUT"
+  patch_eb_build_tools          # pre-patch any cached helpers (NixOS)
   if ! build_once; then
-    warn "package failed (NixOS stub-ld?); patching helpers and retrying"
+    warn "package failed; patching freshly-downloaded helpers and retrying"
     patch_eb_build_tools
     build_once
   fi
