@@ -20,8 +20,15 @@ need git
 COMMIT="$(git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG^{}" | awk '{print $1}')"
 [ -n "$COMMIT" ] || COMMIT="$(git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" | awk '{print $1}')"
 [ -n "$COMMIT" ] || die "could not resolve commit for $REPO@$TAG"
-echo "$COMMIT" > "$OUT/COMMIT"
 log "tag $TAG -> commit $COMMIT"
+
+# Idempotent: skip if already extracted from this exact commit.
+if [ -f "$SRC/package.json" ] && [ -f "$SRC/pyproject.toml" ] && \
+   [ -f "$OUT/COMMIT" ] && [ "$(cat "$OUT/COMMIT")" = "$COMMIT" ]; then
+  log "open-webui source already present for $COMMIT — skip"
+  exit 0
+fi
+echo "$COMMIT" > "$OUT/COMMIT"
 
 # The /archive/refs/tags/<tag>.tar.gz path has a predictable top-level dir
 # (<repo>-<version-without-v>) unlike the API tarball_url (hashed dir).

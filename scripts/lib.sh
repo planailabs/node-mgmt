@@ -91,7 +91,13 @@ download_verified() {
     return 0
   fi
   log "fetch   $(basename "$dest")"
-  curl -fL --retry 3 -C - -o "$dest" "$url"
+  # Try a resumed download; if the server doesn't support byte ranges (curl 33,
+  # common when the existing file is already complete), restart from scratch.
+  if ! curl -fL --retry 3 -C - -o "$dest" "$url"; then
+    warn "resume failed, restarting download: $(basename "$dest")"
+    rm -f "$dest"
+    curl -fL --retry 3 -o "$dest" "$url"
+  fi
   if [ "$want" != "-" ]; then
     verify_sha256 "$dest" "$want" || die "checksum verification failed: $dest"
   fi
