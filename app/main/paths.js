@@ -44,27 +44,51 @@ function ollamaBinary() {
   return path.join(dir, name); // report the expected path even if missing
 }
 
-// The python interpreter inside the relocatable venv.
+function runtimeRoot() { return path.join(resourcesRoot(), 'runtime'); }
+
+// The python interpreter — works for a host venv (runtime/venv) or a cross
+// python-build-standalone tree (runtime/python).
 function venvPython() {
-  const venv = path.join(resourcesRoot(), 'runtime', 'venv');
-  return PLATFORM === 'win32'
-    ? path.join(venv, 'Scripts', 'python.exe')
-    : path.join(venv, 'bin', 'python');
+  const rt = runtimeRoot();
+  const cands = [];
+  if (PLATFORM === 'win32') {
+    cands.push(path.join(rt, 'venv', 'Scripts', 'python.exe'));
+    cands.push(path.join(rt, 'python', 'python.exe'));
+  } else {
+    cands.push(path.join(rt, 'venv', 'bin', 'python'));
+    for (const base of ['python', 'venv']) {
+      cands.push(path.join(rt, base, 'bin', 'python3'));
+      try {
+        for (const f of fs.readdirSync(path.join(rt, base, 'bin'))) {
+          if (/^python3(\.\d+)?$/.test(f)) cands.push(path.join(rt, base, 'bin', f));
+        }
+      } catch { /* missing */ }
+    }
+  }
+  for (const c of cands) if (fs.existsSync(c)) return c;
+  return cands[0];
+}
+
+// All site-packages roots across both runtime layouts.
+function sitePackagesRoots() {
+  const rt = runtimeRoot();
+  const roots = [];
+  for (const base of ['venv', 'python']) {
+    roots.push(path.join(rt, base, 'Lib', 'site-packages')); // windows
+    const lib = path.join(rt, base, 'lib');
+    try {
+      for (const d of fs.readdirSync(lib)) roots.push(path.join(lib, d, 'site-packages'));
+    } catch { /* missing */ }
+  }
+  return roots;
 }
 
 // Open-WebUI's installed frontend dir. The wheel force-includes the built SPA at
 // open_webui/frontend, but env.py defaults FRONTEND_BUILD_DIR to BASE_DIR/build
 // (wrong for an installed wheel), so we resolve + pass it explicitly.
 function owFrontendDir() {
-  const venv = path.join(resourcesRoot(), 'runtime', 'venv');
-  const candidates = [path.join(venv, 'Lib', 'site-packages', 'open_webui', 'frontend')];
-  const libdir = path.join(venv, 'lib');
-  try {
-    for (const d of fs.readdirSync(libdir)) {
-      candidates.push(path.join(libdir, d, 'site-packages', 'open_webui', 'frontend'));
-    }
-  } catch { /* no lib/ (e.g. windows) */ }
-  for (const c of candidates) {
+  for (const sp of sitePackagesRoots()) {
+    const c = path.join(sp, 'open_webui', 'frontend');
     if (fs.existsSync(path.join(c, 'index.html'))) return c;
   }
   return '';

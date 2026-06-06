@@ -48,6 +48,25 @@ release_json() {
   gh_curl "https://api.github.com/repos/$1/releases/tags/$2"
 }
 
+# --- target / platform maps -------------------------------------------------
+# python-build-standalone + uv triple for a target.
+target_triple() {
+  case "$1" in
+    linux-x64) echo "x86_64-unknown-linux-gnu" ;;
+    mac-arm64) echo "aarch64-apple-darwin" ;;
+    mac-x64)   echo "x86_64-apple-darwin" ;;
+    win-x64)   echo "x86_64-pc-windows-msvc" ;;
+    *) die "unknown target: $1" ;;
+  esac
+}
+
+# python-build-standalone install_only tarball URL for a target.
+pbs_url() {
+  local target="$1" pyver pbs triple
+  pyver="$(py_version)"; pbs="$(pbs_release)"; triple="$(target_triple "$target")"
+  echo "https://github.com/astral-sh/python-build-standalone/releases/download/${pbs}/cpython-${pyver}+${pbs}-${triple}-install_only.tar.gz"
+}
+
 # --- checksums --------------------------------------------------------------
 # sha256_of <file> -> bare hex digest
 sha256_of() {

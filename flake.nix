@@ -52,6 +52,13 @@
           # FAT32 USB image test
           mtools
           dosfstools
+          zip
+          unzip
+
+          # VM test (ubuntu): incus is used from the host; qemu + cloud-utils
+          # provide a fallback path (cloud-localds + qemu-system-x86_64).
+          qemu
+          cloud-utils
         ];
 
         # Generic, prebuilt dynamically-linked binaries (electron-builder's
