@@ -30,15 +30,37 @@ emit_gz()   { tar -C "$1" -cf - . | $GZIP_CMD > "$OUT/$2.tar.gz"; log "+ $2.tar.
 emit_sqfs() { need mksquashfs; rm -f "$OUT/$2.squashfs"
   mksquashfs "$1" "$OUT/$2.squashfs" -comp zstd -processors "$(nproc)" -all-root -no-xattrs -noappend -quiet
   log "+ $2.squashfs ($(du -h "$OUT/$2.squashfs" | cut -f1)) [squashfs]"; }
-# <srcdir> <name> <fmt...>   fmt in {gz,sqfs}
+# raw HFS+ image macOS mounts via hdiutil (no compression tool needed). Auto-size
+# from the content (du) + headroom via a sparse truncate (no fixed dd count).
+# Needs mkfs.hfsplus (hfsprogs) + loop-mount (sudo); returns non-zero to let the
+# caller fall back to .tar.gz when unavailable (e.g. CI without sudo).
+emit_dmg() {
+  command -v mkfs.hfsplus >/dev/null 2>&1 || { warn "no mkfs.hfsplus — skip $2.dmg"; return 1; }
+  local dir="$1" name="$2" img="$OUT/$2.dmg" mnt sz
+  sz=$(du -sb "$dir" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB HFS+ overhead
+  rm -f "$img"; truncate -s "$sz" "$img"
+  mkfs.hfsplus -v PlanAI "$img" >/dev/null 2>&1 || { warn "mkfs.hfsplus failed: $name"; rm -f "$img"; return 1; }
+  mnt="$(mktemp -d)"
+  if ! sudo mount -o loop,umask=0000 "$img" "$mnt" 2>/dev/null; then
+    warn "loop-mount failed for $name.dmg (sudo?) — tar.gz fallback"; rmdir "$mnt"; rm -f "$img"; return 1; fi
+  sudo cp -a "$dir/." "$mnt/" && sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
+  log "+ $name.dmg ($(du -h "$img" | cut -f1)) [hfsplus]"
+}
+# <srcdir> <name> <fmt...>   fmt in {gz,sqfs,dmg}
 emit() { local dir="$1" name="$2"; shift 2; local f
-  for f in "$@"; do case "$f" in gz) emit_gz "$dir" "$name" ;; sqfs) emit_sqfs "$dir" "$name" ;; esac; done; }
-# which formats a component name ships in (drives the per-OS bundle staging)
+  for f in "$@"; do case "$f" in
+    gz)   emit_gz "$dir" "$name" ;;
+    sqfs) emit_sqfs "$dir" "$name" ;;
+    dmg)  emit_dmg "$dir" "$name" || { [ -f "$OUT/$name.tar.gz" ] || emit_gz "$dir" "$name"; } ;;
+  esac; done; }
+# which formats a component name ships in (drives the per-OS bundle staging).
+# mac ships dmg (mounted via hdiutil) + tar.gz (loader's extraction fallback,
+# since dmg mounting can't be verified off a real mac).
 fmts_for() { case "$1" in
-  *linux-*|*nixos-*) echo sqfs ;;       # mounted/extracted via squashfuse/unsquashfs
+  *linux-*|*nixos-*) echo sqfs ;;        # mounted/extracted via squashfuse/unsquashfs
   *windows-*|*win-*) echo gz ;;
-  *darwin*|*mac-*)   echo gz ;;         # HFS+ dmg in a later pass
-  ow-assets)         echo "sqfs gz" ;;  # shared by every OS
+  *darwin*|*mac-*)   echo "dmg gz" ;;
+  ow-assets)         echo "sqfs gz dmg" ;; # shared by every OS (linux/win/mac)
   *)                 echo gz ;;
 esac; }
 

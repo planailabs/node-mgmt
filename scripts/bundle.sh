@@ -40,22 +40,32 @@ case "$TARGET" in
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
-# component format preference per OS (mirror the loader): linux/nixos ship
-# squashfs (mounted in place, no extraction), windows/mac ship tar.gz.
+# component format(s) per OS (mirror the loader): linux/nixos ship squashfs
+# (mounted in place / extracted via squashfuse/unsquashfs); windows ships tar.gz;
+# mac ships dmg (hdiutil mount) AND tar.gz (the loader's extraction fallback,
+# since dmg mounting isn't verifiable off a real mac) — STAGE_ALL keeps both.
 case "$TARGET" in
-  linux-*|nixos-*) FMT_ORDER="squashfs tar.gz"; MOUNTABLE=1 ;;
-  *)               FMT_ORDER="tar.gz squashfs"; MOUNTABLE=0 ;;
+  linux-*|nixos-*) FMT_ORDER="squashfs"; MOUNTABLE=1; STAGE_ALL=0 ;;
+  win-*)           FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
+  mac-*)           FMT_ORDER="dmg tar.gz"; MOUNTABLE=0; STAGE_ALL=1 ;;
+  *)               FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
 esac
-# copy the best-format file for a component base name into the staged components/
+# copy component file(s) for a base name into the staged components/. With
+# STAGE_ALL, copy every available format in FMT_ORDER (mac: dmg + tar.gz); else
+# the first match only.
 stage_comp() {  # <base>
-  local base="$1" ext
+  local base="$1" ext found=1
   for ext in $FMT_ORDER; do
-    [ -f "$COMP_SRC/$base.$ext" ] && { cp "$COMP_SRC/$base.$ext" "$STAGE/components/"; return 0; }
+    [ -f "$COMP_SRC/$base.$ext" ] || continue
+    cp "$COMP_SRC/$base.$ext" "$STAGE/components/"; found=0
+    [ "$STAGE_ALL" = 1 ] || break
   done
-  return 1
+  return $found
 }
+# true if a component base name exists in COMP_SRC in any of this OS's formats
+comp_exists() { local base="$1" ext; for ext in $FMT_ORDER; do [ -f "$COMP_SRC/$base.$ext" ] && return 0; done; return 1; }
 RT_BASE="runtime-$TARGET"
-stage_comp "$RT_BASE" 2>/dev/null || die "missing runtime component $RT_BASE.{$FMT_ORDER// /,} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
+comp_exists "$RT_BASE" || die "missing runtime component $RT_BASE.{${FMT_ORDER// /,}} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
 
 # Serialize: targets share app/.stage.
 exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"

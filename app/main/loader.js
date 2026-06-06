@@ -206,8 +206,10 @@ function provide(comp, base, dest, root, log, opts = {}) {
     throw new Error('could not mount or extract ' + file + ' (no FUSE and no unsquashfs)');
   }
   if (ext === '.dmg') {
-    if (tryMountDmg(file, dest, log)) { log(`mounted ${base} (dmg)`); return; }
-    throw new Error('could not mount ' + file);
+    if (!opts.forceExtract && tryMountDmg(file, dest, log)) { log(`mounted ${base} (dmg)`); return; }
+    const gz = path.join(comp, base + '.tar.gz'); // extraction fallback shipped alongside
+    if (fs.existsSync(gz)) { log(`extracting ${base} (tar.gz fallback)`); extractTar(gz, dest, path.join(root, `.${base}.done`)); return; }
+    throw new Error('could not mount ' + file + ' (no .tar.gz fallback)');
   }
   // .tar.gz
   log(`extracting ${base} (tar.gz)`);

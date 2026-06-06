@@ -24,6 +24,9 @@ let
     nsis                      # windows installer
     # USB image: FAT32 only (mtools, no root) — artifacts stay < 4 GiB
     mtools dosfstools zip
+    # component images: squashfs (linux, mounted via bundled squashfuse) and
+    # HFS+ .dmg (mac, mounted via hdiutil) built from NixOS
+    squashfsTools hfsprogs
     # VM test (ubuntu): qemu + cloud-utils fallback (incus is used from the host)
     qemu cloud-utils
   ];
