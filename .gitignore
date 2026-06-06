@@ -15,3 +15,5 @@ __pycache__/
 .DS_Store
 *.swp
 /app/.stage/
+/.run-data/
+/app/.run/

@@ -28,14 +28,23 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { win = null; });
 
-  // CI/dev smoke: capture the dashboard then exit (PLANAI_CAPTURE=/path.png).
+  // CI/dev smoke: capture the dashboard (and optionally the embedded WebUI)
+  // then exit. PLANAI_CAPTURE=/dash.png [PLANAI_CAPTURE_WEBUI=/webui.png].
   if (process.env.PLANAI_CAPTURE) {
+    const fs = require('fs');
+    const snap = async (file) => {
+      try { fs.writeFileSync(file, (await win.webContents.capturePage()).toPNG()); }
+      catch (e) { console.error('capture failed', e); }
+    };
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
-        try {
-          const img = await win.webContents.capturePage();
-          require('fs').writeFileSync(process.env.PLANAI_CAPTURE, img.toPNG());
-        } catch (e) { console.error('capture failed', e); }
+        await snap(process.env.PLANAI_CAPTURE);
+        if (process.env.PLANAI_CAPTURE_WEBUI) {
+          try { await win.webContents.executeJavaScript("document.getElementById('tab-webui')?.click()"); }
+          catch {}
+          await new Promise((r) => setTimeout(r, Number(process.env.PLANAI_CAPTURE_WEBUI_DELAY || 7000)));
+          await snap(process.env.PLANAI_CAPTURE_WEBUI);
+        }
         app.quit();
       }, Number(process.env.PLANAI_CAPTURE_DELAY || 2500));
     });

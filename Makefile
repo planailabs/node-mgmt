@@ -2,9 +2,12 @@
 # Run inside `nix develop` (Linux build leg). TARGET defaults to the host.
 TARGET ?=
 
-.PHONY: all download ollama openwebui wheel runtime app bundle seed clean
+.PHONY: all dev download ollama openwebui wheel runtime app bundle seed clean
 
 all: download wheel runtime bundle ## full pipeline -> dist/bundle
+
+dev: ## minimal NixOS build + run (development mode)
+	./scripts/dev.sh
 
 download: ollama openwebui ## fetch ollama flavours + open-webui source
 

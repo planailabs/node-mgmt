@@ -52,6 +52,24 @@ function venvPython() {
     : path.join(venv, 'bin', 'python');
 }
 
+// Open-WebUI's installed frontend dir. The wheel force-includes the built SPA at
+// open_webui/frontend, but env.py defaults FRONTEND_BUILD_DIR to BASE_DIR/build
+// (wrong for an installed wheel), so we resolve + pass it explicitly.
+function owFrontendDir() {
+  const venv = path.join(resourcesRoot(), 'runtime', 'venv');
+  const candidates = [path.join(venv, 'Lib', 'site-packages', 'open_webui', 'frontend')];
+  const libdir = path.join(venv, 'lib');
+  try {
+    for (const d of fs.readdirSync(libdir)) {
+      candidates.push(path.join(libdir, d, 'site-packages', 'open_webui', 'frontend'));
+    }
+  } catch { /* no lib/ (e.g. windows) */ }
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, 'index.html'))) return c;
+  }
+  return '';
+}
+
 const paths = {
   PLATFORM,
   ARCH,
@@ -59,6 +77,7 @@ const paths = {
   portableRoot,
   ollamaBinary,
   venvPython,
+  owFrontendDir,
   modelsDir: () => ensureDir(path.join(portableRoot(), 'models')),
   dataDir: () => ensureDir(path.join(portableRoot(), 'data')),
   owAssets: () => path.join(resourcesRoot(), 'ow-assets'),
