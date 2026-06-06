@@ -21,173 +21,27 @@
     };
   };
 
+  # Thin entrypoint — the real definitions live in nix/:
+  #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
+  #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
+  #   nix/runtime.nix   layer 3 open-webui python runtime via uv2nix
   outputs = { self, nixpkgs, flake-utils, pyproject-nix, uv2nix, pyproject-build-systems }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
         lib = pkgs.lib;
 
-        # Toolchain needed to build Open-WebUI (node + python), assemble the
-        # relocatable runtime (uv), build the Electron app + tailwind, and run
-        # the bundler. This is the LINUX build leg; win/mac legs run the same
-        # scripts on their own OS (CI matrix).
-        buildTools = with pkgs; [
-          # node (Open-WebUI requires <=22.x) + electron app + tailwindcss
-          nodejs_22
-          tailwindcss_3
-
-          # python (Open-WebUI requires >=3.11,<3.13) + uv resolver/venv
-          python312
-          uv
-
-          # archive + fetch + json
-          jq
-          curl
-          cacert
-          zstd          # ollama linux assets are .tar.zst
-          gnutar
-          unzip
-          gzip
-          pigz          # parallel gzip for component archives
-          git
-          gnused
-          coreutils
-          which
-
-          # electron-builder linux packaging (AppImage)
-          fakeroot
-          dpkg
-          fuse
-          p7zip     # system 7za so electron-builder skips its non-NixOS bundled one
-          patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
-
-          # cross-target packaging from NixOS
-          rcodesign       # Apple code signing from Linux (mac target)
-          wineWow64Packages.stable  # electron-builder win build steps (rcedit)
-          osslsigncode    # Authenticode signing for the windows .exe
-          nsis            # windows installer
-
-          # USB image: FAT32 only (mtools, no root) — artifacts stay < 4 GiB
-          mtools
-          dosfstools
-          zip
-          unzip
-
-          # VM test (ubuntu): incus is used from the host; qemu + cloud-utils
-          # provide a fallback path (cloud-localds + qemu-system-x86_64).
-          qemu
-          cloud-utils
-        ];
-
-        # Generic, prebuilt dynamically-linked binaries (electron-builder's
-        # helpers; Open-WebUI's native wheels like onnxruntime/chromadb; the
-        # ollama runners) expect FHS libs. NixOS has none in /usr/lib, so expose
-        # a nix library path used for both NIX_LD (build helpers) and
-        # LD_LIBRARY_PATH (runtime children, via scripts/run-nixos.sh).
-        ldLibs = with pkgs; [
-          stdenv.cc.cc.lib   # libstdc++, libgcc_s, libgomp
-          zlib glib fuse libGL
-          libffi openssl expat bzip2 xz
-          stdenv.cc.libc      # libm, libpthread, libdl, libc
-        ];
-
-        # --- vendored downloads as fixed-output derivations --------------------
-        # Every upstream archive (ollama flavours, python-build-standalone, the
-        # open-webui source) keyed by the sha256 pinned in vendor.lock.json.
-        # FODs are cached + content-addressed in /nix/store and run NO fixup, so
-        # the generic cross-platform binaries arrive byte-identical. Regenerate
-        # the lock with scripts/gen-vendor-lock.sh when usb.lock bumps.
-        vlock = builtins.fromJSON (builtins.readFile ./vendor.lock.json);
-        fetch = e: pkgs.fetchurl { inherit (e) url sha256; };
-        vendor = pkgs.linkFarm "plan-ai-vendor" (
-          (map (a: { name = "ollama/${vlock.ollama.tag}/${a.name}"; path = fetch a; }) vlock.ollama.assets)
-          ++ (map (p: { name = "pbs/${p.target}.tar.gz"; path = fetch p; }) vlock.pbs.files)
-          ++ [ { name = "open-webui/${vlock.openwebui.tag}/source.tar.gz"; path = fetch vlock.openwebui; } ]
-        );
-
-        # --- layer 2: no-fixup component repack (ollama) ----------------------
-        # Normalise each ollama FOD to a uniform .tar.gz for the loader. A clean
-        # custom builder (stdenvNoCC + dontFixup/dontStrip/dontPatchELF) so the
-        # generic ollama binaries pass through byte-identical; cached by Nix.
-        ollamaKeyOf = name: lib.pipe name [
-          (lib.removePrefix "ollama-")
-          (lib.removeSuffix ".tar.zst") (lib.removeSuffix ".tgz") (lib.removeSuffix ".zip")
-        ];
-        # VANILLA derivation (builtins.derivation via the bare wrapper) — NO
-        # stdenv, so no setup hooks, no fixup/patchelf/strip/shebang rewriting
-        # can touch the generic ollama binaries. Tools provided via an explicit
-        # PATH; input is the pre-fetched FOD.
-        repackOllama = a: derivation {
-          inherit system;
-          name = "ollama-${ollamaKeyOf a.name}.tar.gz";
-          builder = "${pkgs.bash}/bin/bash";
-          args = [ "-c" ''
-            export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar zstd pigz unzip ])}"
-            mkdir x
-            case "$assetName" in
-              *.tar.zst) zstd -dc "$src" | tar -x -C x ;;
-              *.tgz)     tar -xzf "$src" -C x ;;
-              *.zip)     unzip -q "$src" -d x ;;
-            esac
-            tar -C x -cf - . | pigz > "$out"
-          '' ];
-          src = fetch a;
-          assetName = a.name;
+        vendorLock = builtins.fromJSON (builtins.readFile ./vendor.lock.json);
+        vendorPkgs = import ./nix/vendor.nix { inherit pkgs lib system vendorLock; };
+        runtimePkgs = import ./nix/runtime.nix {
+          inherit pkgs lib pyproject-nix uv2nix pyproject-build-systems;
+          workspaceRoot = ./runtime;
         };
-        ollamaComponents = pkgs.linkFarm "ollama-components"
-          (map (a: { name = "ollama-${ollamaKeyOf a.name}.tar.gz"; path = repackOllama a; }) vlock.ollama.assets);
-
-        # --- layer 3: open-webui python runtime via uv2nix --------------------
-        # uv2nix turns runtime/uv.lock into wheel FODs; we build a venv with the
-        # nixpkgs python, then RELOCATE it onto the portable python-build-
-        # standalone interpreter (runtimePortable) so the result runs outside the
-        # nix store. Build phase uses a vanilla copy (no fixup) to keep the
-        # manylinux .so wheels untouched.
-        uvWorkspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./runtime; };
-        uvOverlay = uvWorkspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
-        runtimePython = pkgs.python312;
-        pythonSet = (pkgs.callPackage pyproject-nix.build.packages { python = runtimePython; })
-          .overrideScope (lib.composeManyExtensions [
-            pyproject-build-systems.overlays.default
-            uvOverlay
-          ]);
-        runtimeVenv = pythonSet.mkVirtualEnv "plan-ai-runtime" uvWorkspace.deps.default;
       in {
-        packages.vendor = vendor;
-        packages.ollamaComponents = ollamaComponents;
-        packages.runtimeVenv = runtimeVenv;
-
-        devShells.default = pkgs.mkShell {
-          packages = buildTools;
-
-          # electron downloads a prebuilt binary; on NixOS it needs the run
-          # path patched. ELECTRON_OVERRIDE_DIST_PATH lets the app reuse the
-          # nixpkgs electron if present.
-          shellHook = ''
-            export ELECTRON_OVERRIDE_DIST_PATH="${pkgs.electron}/libexec/electron"
-            export ELECTRON_SKIP_BINARY_DOWNLOAD=1
-            export PLAYWRIGHT_BROWSERS_PATH=0
-            export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-
-            # Let electron-builder's prebuilt helpers run via the nix-ld stub.
-            export NIX_LD="$(cat ${pkgs.stdenv.cc}/nix-support/dynamic-linker)"
-            export NIX_LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath ldLibs}"
-            export USE_SYSTEM_7ZA=true
-
-            # marker the Makefile guards on (see Makefile)
-            export PLANAI_DEVSHELL=1
-
-            # Ensure the design system submodule is present.
-            if [ -f .gitmodules ] && [ ! -e third_party/plan-ai-design/assets/input.css ]; then
-              echo "==> initialising plan-ai-design submodule"
-              git submodule update --init --recursive third_party/plan-ai-design || true
-            fi
-
-            if [ -f usb.lock ]; then
-              echo "plan-ai-usb-minimal — pinned versions:"
-              jq -r '"  ollama     \(.ollama.version)\n  open-webui \(.openwebui.version)\n  python     \(.python)"' usb.lock
-            fi
-          '';
+        packages = {
+          inherit (vendorPkgs) vendor ollamaComponents;
+          inherit (runtimePkgs) runtimeVenv;
         };
+        devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });
 }
