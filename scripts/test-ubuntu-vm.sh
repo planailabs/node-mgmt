@@ -22,7 +22,10 @@ incus delete -f "$VM" 2>/dev/null || true
 launch_vm() {
   local img="$1"
   log "incus launch $img (VM, KVM)"
-  incus launch "$img" "$VM" --vm -c limits.cpu=4 -c limits.memory=6GiB 2>/dev/null
+  # 30GiB root; 10GiB RAM so the FUSE-mounted AppImage + electron have headroom.
+  incus launch "$img" "$VM" --vm \
+    -c limits.cpu=4 -c limits.memory=10GiB \
+    -d root,size=30GiB 2>/dev/null
 }
 launch_vm "images:ubuntu/$UBUNTU/cloud" || {
   warn "ubuntu/$UBUNTU not available, falling back to 24.04"
@@ -37,29 +40,44 @@ log "install electron + xvfb runtime deps in VM"
 incus exec "$VM" -- bash -c '
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq xvfb libfuse2t64 libnss3 libgtk-3-0t64 libasound2t64 \
-    libgbm1 libdrm2 ca-certificates >/dev/null 2>&1 || \
-  apt-get install -y -qq xvfb libfuse2 libnss3 libgtk-3-0 libasound2 libgbm1 libdrm2 ca-certificates >/dev/null 2>&1
-  echo "deps installed"
+  # Electron/Chromium runtime libs. Try t64 names (ubuntu >=24.04), fall back to
+  # the pre-t64 names; install best-effort and report what is still missing.
+  pkgs="xvfb ca-certificates fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libxshmfence1 \
+    libpango-1.0-0 libcairo2 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+    libatspi2.0-0t64 libgtk-3-0t64 libasound2t64 libglib2.0-0t64"
+  apt-get install -y -qq $pkgs >/dev/null 2>&1 || true
+  # fall back to non-t64 names for whatever did not resolve
+  apt-get install -y -qq libfuse2 libcups2 libatk1.0-0 libatk-bridge2.0-0 \
+    libatspi2.0-0 libgtk-3-0 libasound2 libglib2.0-0 >/dev/null 2>&1 || true
+  echo "deps install attempted"
 ' 2>&1 | sed 's/^/    /'
 
 log "push AppImage into VM"
 incus file push "$APPIMAGE" "$VM/root/plan-ai.AppImage"
 incus exec "$VM" -- chmod +x /root/plan-ai.AppImage
 
-log "run AppImage headless under xvfb (extract-and-run; capture screenshot)"
+log "run AppImage headless under xvfb (FUSE mount; capture screenshot)"
 incus exec "$VM" -- bash -c '
-  export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY=45000
+  set -x
+  export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY=50000
+  export TMPDIR=/root/tmp; mkdir -p "$TMPDIR"   # disk-backed (avoid tmpfs OOM)
+  modprobe fuse 2>/dev/null || true
   cd /root
-  timeout 160 xvfb-run -a -s "-screen 0 1400x900x24" \
-    ./plan-ai.AppImage --appimage-extract-and-run --no-sandbox >/root/run.log 2>&1 || true
-  echo "--- run.log tail ---"; tail -8 /root/run.log
+  # Run via FUSE (read-on-demand) rather than extracting the whole ~7G to RAM.
+  timeout 180 xvfb-run -a -s "-screen 0 1400x900x24" \
+    ./plan-ai.AppImage --no-sandbox >/root/run.log 2>&1 || true
+  echo "--- run.log tail ---"; tail -20 /root/run.log
+  echo "--- free / oom ---"; free -m; dmesg 2>/dev/null | grep -iE "killed process|out of memory" | tail -3 || true
   ls -l /root/shot.png 2>/dev/null || echo "NO SCREENSHOT"
 ' 2>&1 | sed 's/^/    /'
+
+# always pull the full run log to the host for diagnosis
+incus file pull "$VM/root/run.log" /tmp/ubuntu-run.log 2>/dev/null || true
 
 log "pull screenshot"
 if incus file pull "$VM/root/shot.png" "$SHOT" 2>/dev/null && [ -s "$SHOT" ]; then
   log "ubuntu $UBUNTU screenshot -> $SHOT  ($(stat -c%s "$SHOT") bytes)"
 else
-  die "no screenshot produced in ubuntu VM (see run.log above)"
+  die "no screenshot produced in ubuntu VM (full log: /tmp/ubuntu-run.log)"
 fi
