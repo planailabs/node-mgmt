@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const paths = require('./paths');
 const cfg = require('./config');
+const loader = require('./loader');
 const { Supervisor } = require('./supervisor');
 
 let win = null;
@@ -77,6 +78,9 @@ function wireIpc() {
 }
 
 app.whenReady().then(() => {
+  // first-launch: extract the components this machine needs (sets PLANAI_RESOURCES)
+  try { loader.prepare((m) => console.log('[loader]', m)); }
+  catch (e) { console.error('[loader] failed:', e.message); }
   supervisor = new Supervisor();
   createWindow();
   wireIpc();

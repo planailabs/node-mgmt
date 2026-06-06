@@ -13,10 +13,27 @@ $(error not in the devshell — run 'nix develop' first, or 'nix develop --comma
 endif
 endif
 
-.PHONY: all dev download ollama openwebui wheel runtime app bundle image split \
-        seed test test-usb test-vm test-clean clean help
+# Distributable targets built by `make all` (+ the nixos target).
+TARGETS := linux-x64 win-x64 mac-arm64 mac-x64
+ALLTGTS := $(TARGETS) nixos-x64
 
-all: download wheel runtime app bundle image ## full pipeline -> dist/bundle + USB image
+.PHONY: all dev download ollama openwebui wheel runtime runtimes app components \
+        bundle bundles nixos image split seed test test-usb test-vm test-nixos \
+        test-clean test-all clean help
+
+all: download wheel app runtimes components bundles image ## build EVERY target (mac/win/linux/nixos) + image
+
+runtimes: ## build the python runtime for every target
+	@for t in $(ALLTGTS); do $(MAKE) --no-print-directory runtime TARGET=$$t; done
+
+components: ## pack modular component archives (runtimes + all ollama flavours + assets)
+	./scripts/build-components.sh
+
+bundles: ## package every target from the components
+	@for t in $(ALLTGTS); do $(MAKE) --no-print-directory bundle TARGET=$$t; done
+
+nixos: ## build just the NixOS target (runtime + components + bundle)
+	$(MAKE) runtime TARGET=nixos-x64 && $(MAKE) components && $(MAKE) bundle TARGET=nixos-x64
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
@@ -59,8 +76,17 @@ test-usb: ## FAT32 loop-image launch test (models/data on FAT32)
 test-vm: ## run the AppImage in an Ubuntu 26.04 incus VM
 	./scripts/test-ubuntu-vm.sh
 
+test-nixos: ## launch the built nixos bundle under xvfb + screenshot
+	./scripts/test-nixos.sh
+
 test-clean: ## wipe build outputs and rebuild from scratch (TARGET=linux-x64)
 	./scripts/test-clean-build.sh $(TARGET)
+
+test-all: ## run every test (build/health, nixos bundle, FAT32 image, ubuntu VM)
+	./scripts/test-build.sh
+	./scripts/test-nixos.sh
+	./scripts/test-usb-image.sh
+	./scripts/test-ubuntu-vm.sh
 
 clean:
 	rm -rf dist app/node_modules app/renderer/tailwind.css app/.stage app/.stage.lock

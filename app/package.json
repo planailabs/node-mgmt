@@ -11,6 +11,9 @@
     "start": "npm run css && electron .",
     "dist": "electron-builder --config electron-builder.yml"
   },
+  "dependencies": {
+    "tar": "7.4.3"
+  },
   "devDependencies": {
     "@electron/packager": "18.3.6",
     "electron": "41.7.1",

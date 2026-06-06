@@ -8,10 +8,13 @@ const { app } = require('electron');
 const PLATFORM = process.platform; // 'linux' | 'win32' | 'darwin'
 const ARCH = process.arch; // 'x64' | 'arm64'
 
-// Where bundled, read-only resources live (ollama binary, python runtime, assets).
+// Where the extracted resources live (ollama binary, python runtime, assets).
+// The loader (main/loader.js) sets PLANAI_RESOURCES to the per-machine cache it
+// extracted the right components into; fall back to the packaged resources dir
+// (legacy/no-components) or the dev dist/ tree.
 function resourcesRoot() {
+  if (process.env.PLANAI_RESOURCES) return process.env.PLANAI_RESOURCES;
   if (app.isPackaged) return process.resourcesPath;
-  // dev: the build scripts populate dist/
   return path.join(__dirname, '..', '..', 'dist');
 }
 
