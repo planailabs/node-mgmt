@@ -10,8 +10,10 @@ dependencies = ["open-webui==0.9.6"]
 [tool.uv]
 # only binary wheels (no source builds — keeps it portable + cross-resolvable)
 no-build = true
-# prefer the CPU torch (+cpu local version wins) from the pytorch index — same
-# recipe make-runtime.sh uses on the CLI; avoids ~4GB of NVIDIA CUDA wheels.
+# CPU torch (no ~4GB NVIDIA CUDA), via the pytorch index + best-match (the recipe
+# make-runtime.sh uses). A few of torch's deps then come from the pytorch index
+# without hashes; scripts/gen-wheels-lock.sh prefetches those so every wheel FOD
+# has a sha256 for Nix pure eval.
 index-strategy = "unsafe-best-match"
 
 [[tool.uv.index]]
