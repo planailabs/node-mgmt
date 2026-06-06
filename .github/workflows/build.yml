@@ -1,0 +1,74 @@
+name: build
+
+# Builds the single-file artifact for each OS. The python runtime + native
+# Open-WebUI deps must be built on the matching OS, so this is a 3-leg matrix.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: windows-latest
+            target: win-x64
+          - os: macos-14      # Apple Silicon
+            target: mac-arm64
+          - os: macos-13      # Intel
+            target: mac-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # plan-ai-design design tokens
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Read pinned python version
+        id: lock
+        run: echo "py=$(jq -r .python usb.lock)" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.lock.outputs.py }}
+
+      # zstd for ollama linux assets (others ship in the runner images)
+      - name: Install zstd (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download upstreams
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/download-ollama.sh
+          ./scripts/download-openwebui.sh
+
+      - name: Build Open-WebUI wheel + offline assets
+        run: ./scripts/build-openwebui.sh
+
+      - name: Make relocatable runtime
+        run: ./scripts/make-runtime.sh ${{ matrix.target }}
+
+      - name: Install app deps
+        run: cd app && npm ci
+
+      - name: Bundle
+        run: ./scripts/bundle.sh ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan-ai-${{ matrix.target }}
+          path: dist/bundle/plan-ai-*.*
+          if-no-files-found: error
