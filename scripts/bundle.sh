@@ -79,6 +79,13 @@ esac
 [ -d "$RUNTIME/python" ] && cp -a "$RUNTIME/python" "$STAGE/runtime/python"
 [ -d "$ASSETS" ] && cp -a "$ASSETS" "$STAGE/ow-assets"
 
+# Ensure the pinned app deps are installed — otherwise `npx` would fetch a
+# different (latest) electron-builder, which rejects our electron version.
+if [ ! -x "$APP/node_modules/.bin/electron-builder" ]; then
+  log "installing app deps (npm ci)"
+  ( cd "$APP" && npm ci )
+fi
+
 log "building tailwind css"
 ( cd "$APP" && npm run css )
 mkdir -p "$OUT"
@@ -101,7 +108,7 @@ package_electron_builder() {
       [ -n "${NIX_LD_LIBRARY_PATH:-}" ] && patchelf --set-rpath "$NIX_LD_LIBRARY_PATH" "$f" 2>/dev/null || true
     done
   }
-  build_once() { ( cd "$APP" && npx electron-builder $EB_OS --config electron-builder.yml ); }
+  build_once() { ( cd "$APP" && npx --no-install electron-builder $EB_OS --config electron-builder.yml ); }
   log "electron-builder $EB_OS -> $OUT"
   patch_eb_build_tools          # pre-patch any cached helpers (NixOS)
   if ! build_once; then
@@ -138,7 +145,7 @@ package_mac() {
   rm -rf "$APPROOT"; mkdir -p "$APPROOT"
 
   log "@electron/packager mac/$ARCH"
-  ( cd "$APP" && npx @electron/packager . "plan.ai" \
+  ( cd "$APP" && npx --no-install @electron/packager . "plan.ai" \
       --platform=darwin --arch="$ARCH" \
       --out="$APPROOT" --overwrite \
       --app-bundle-id=ai.plan.usb \

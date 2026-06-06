@@ -2,6 +2,10 @@ appId: ai.plan.usb
 productName: plan.ai
 copyright: plan.ai
 
+# Pin so electron-builder never has to resolve a range from node_modules (newer
+# electron-builder refuses a ranged electron version). Matches nixpkgs electron.
+electronVersion: 41.7.1
+
 directories:
   output: ../dist/bundle
   buildResources: build

@@ -69,9 +69,18 @@ uv pip install \
   --only-binary :all: \
   "$WHEEL" 2>&1 | tail -4 || warn "[$TARGET] some packages lacked $TRIPLE wheels (see above)"
 
-# sanity: open_webui landed
+# completeness guard: a partial cross-resolve (e.g. uv silently dropping native
+# wheels) yields a tiny, broken runtime. Require the core packages + a sane size
+# so we fail loudly here instead of shipping a runtime that crashes at launch.
 [ -f "$SP/open_webui/main.py" ] || die "[$TARGET] open_webui not installed into $SP"
 [ -f "$SP/open_webui/frontend/index.html" ] || warn "[$TARGET] frontend missing in wheel?"
+MISSING=""
+for pkg in chromadb onnxruntime fastapi uvicorn sqlalchemy; do
+  [ -e "$SP/$pkg" ] || ls -d "$SP/${pkg}"* >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+done
+[ -z "$MISSING" ] || die "[$TARGET] runtime incomplete — missing:$MISSING (uv dropped wheels? clear ~/.cache/uv and retry)"
+RT_BYTES=$(du -sb "$RT" | cut -f1)
+[ "$RT_BYTES" -ge 800000000 ] || die "[$TARGET] runtime suspiciously small ($((RT_BYTES/1024/1024))MB < 800MB) — native deps likely missing; clear ~/.cache/uv and retry"
 
 # trim caches
 find "$RT" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true

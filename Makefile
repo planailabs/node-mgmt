@@ -16,7 +16,7 @@ endif
 .PHONY: all dev download ollama openwebui wheel runtime app bundle image split \
         seed test test-usb test-vm test-clean clean help
 
-all: download wheel runtime bundle image ## full pipeline -> dist/bundle + USB image
+all: download wheel runtime app bundle image ## full pipeline -> dist/bundle + USB image
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
