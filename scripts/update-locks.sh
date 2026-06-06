@@ -4,9 +4,10 @@
 # updated lock files. Run inside `nix develop`.
 #
 # Regenerates:
-#   vendor.lock.json      download FOD hashes (gen-vendor-lock.sh)
-#   runtime/uv.lock       python deps for uv2nix (uv lock)
-#   app/package-lock.json electron app deps (npm)
+#   vendor.lock.json              download FOD hashes (gen-vendor-lock.sh)
+#   runtime/uv.lock               python deps (uv lock, CPU torch)
+#   runtime/wheels-<target>.lock  per-target wheel FODs (gen-wheels-lock.sh)
+#   app/package-lock.json         electron app deps (npm)
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -18,8 +19,11 @@ step "vendor.lock.json (ollama + python-build-standalone + open-webui FODs)"
 step "runtime/uv.lock (open-webui python deps, CPU torch)"
 ( cd "$REPO_ROOT/runtime" && uv lock --upgrade )
 
+step "runtime/wheels-<target>.lock.json (per-target wheel FODs, all platforms)"
+"$REPO_ROOT/scripts/gen-wheels-lock.sh"
+
 step "app/package-lock.json (electron app)"
 ( cd "$REPO_ROOT/app" && npm install --package-lock-only --no-audit --no-fund )
 
-log "locks updated — review & commit: vendor.lock.json runtime/uv.lock app/package-lock.json"
+log "locks updated — review & commit: vendor.lock.json runtime/uv.lock runtime/wheels-*.lock.json app/package-lock.json"
 log "pinned versions:"; jq -r '"  ollama \(.ollama.version)  open-webui \(.openwebui.version)  python \(.python)  pbs \(.pbs_release)"' "$USB_LOCK"

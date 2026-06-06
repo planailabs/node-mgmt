@@ -96,20 +96,21 @@ log "[$TARGET] building portable runtime via nix (.#$ATTR)"
 STORE="$(cd "$REPO_ROOT" && nix build ".#$ATTR" --no-link --print-out-paths)" \
   || die "[$TARGET] nix runtime build failed"
 
-RT="$DIST_DIR/runtime/$TARGET"
-rm -rf "$RT"; mkdir -p "$(dirname "$RT")"
+RT="$DIST_DIR/runtime/$TARGET"; PYDIR="$RT/python"
+rm -rf "$RT"; mkdir -p "$RT"
 trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
-# copy out of the store into a writable, self-contained tree. -a (not -L) keeps
-# the tree's internal relative symlinks intact; the derivation output references
-# no other store path, so the copy is store-free.
-cp -a --no-preserve=mode,ownership "$STORE" "$RT"
-chmod -R u+w "$RT"
+# copy out of the store into a writable, self-contained tree under python/ (the
+# layout paths.js/build-components expect). -a (not -L) keeps the tree's internal
+# relative symlinks intact; the derivation output references no other store path,
+# so the copy is store-free.
+cp -a --no-preserve=mode,ownership "$STORE" "$PYDIR"
+chmod -R u+w "$PYDIR"
 
 case "$TARGET" in
-  win-*) SP="$RT/Lib/site-packages" ;;
-  *)     SP="$(ls -d "$RT"/lib/python*/site-packages 2>/dev/null | head -1)" ;;
+  win-*) SP="$PYDIR/Lib/site-packages" ;;
+  *)     SP="$(ls -d "$PYDIR"/lib/python*/site-packages 2>/dev/null | head -1)" ;;
 esac
-[ -n "$SP" ] && [ -d "$SP" ] || die "[$TARGET] site-packages not found under $RT"
+[ -n "$SP" ] && [ -d "$SP" ] || die "[$TARGET] site-packages not found under $PYDIR"
 check_runtime "$SP" "$RT"
 
 cat > "$RT/runtime.json" <<JSON
