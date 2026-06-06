@@ -54,10 +54,24 @@ for f in "${FILES[@]}"; do sz=$(stat -c%s "$f"); [ "$sz" -gt "$BIGGEST" ] && BIG
 if [ "$FS" = auto ]; then
   if [ "$BIGGEST" -gt "$FOURGIB" ]; then FS=exfat; else FS=fat32; fi
 fi
-if [ "$FS" = fat32 ] && [ "$BIGGEST" -gt "$FOURGIB" ]; then
-  die "a file exceeds FAT32's 4 GiB limit ($((BIGGEST/1024/1024))MB). Use --fs exfat."
-fi
 log "filesystem: $FS  (largest file $((BIGGEST/1024/1024))MB)"
+
+# FAT32 + a >4 GiB file: split it into parts + a reassembly launcher so it fits.
+SPLITDIR=""
+declare -a EXTRA=()        # extra files (parts + launcher) to place at root
+declare -a SKIP=()         # original files replaced by their parts
+if [ "$FS" = fat32 ] && [ "$BIGGEST" -gt "$FOURGIB" ]; then
+  SPLITDIR="$(mktemp -d)"
+  for f in "${FILES[@]}"; do
+    if [ "$(stat -c%s "$f")" -gt "$FOURGIB" ]; then
+      log "splitting oversized $(basename "$f") for FAT32"
+      "$REPO_ROOT/scripts/split-appimage.sh" "$f" --out "$SPLITDIR" >&2
+      SKIP+=("$f")
+      while IFS= read -r p; do EXTRA+=("$p"); done < <(find "$SPLITDIR" -type f)
+    fi
+  done
+fi
+in_skip() { local x; for x in "${SKIP[@]:-}"; do [ "$x" = "$1" ] && return 0; done; return 1; }
 
 # --- size the image ---------------------------------------------------------
 total=0
@@ -73,7 +87,9 @@ cat > "$README" <<EOF
 plan.ai — portable offline AI (Ollama + Open-WebUI), v$VERSION
 
 Run on:
-  Linux    : ./plan-ai-$VERSION-linux-x64.AppImage   (chmod +x first)
+  Linux    : ./plan-ai-$VERSION-linux-x86_64.AppImage  (chmod +x first)
+             — on FAT32 the AppImage is split; run ./plan-ai-$VERSION-linux-x86_64.run.sh
+               instead (it reassembles the .part* files into a cache and launches)
   Windows  : extract plan-ai-$VERSION-win-x64.zip, run plan.ai.exe
   macOS    : unzip plan-ai-$VERSION-mac-*.zip, then open plan.ai.app
 
@@ -87,7 +103,8 @@ if [ "$FS" = fat32 ]; then
   mkfs.vfat -F 32 -n "$LABEL" "$OUT" >/dev/null
   MC=(mcopy -i "$OUT" -s -Q)
   "${MC[@]}" "$README" ::/README.txt
-  for f in "${FILES[@]}"; do "${MC[@]}" "$f" ::/ ; done
+  for f in "${FILES[@]}"; do in_skip "$f" && continue; "${MC[@]}" "$f" ::/ ; done
+  for f in "${EXTRA[@]:-}"; do [ -n "$f" ] && "${MC[@]}" "$f" ::/ ; done
   if [ "$HAVE_MODELS" = yes ]; then mmd -i "$OUT" ::/models 2>/dev/null || true; "${MC[@]}" "$MODELS"/* ::/models/ ; fi
   mmd -i "$OUT" ::/data 2>/dev/null || true
   log "contents:"; mdir -i "$OUT" :: 2>/dev/null | sed 's/^/    /' || true
@@ -107,5 +124,8 @@ else
   log "contents:"; ls -lh "$MNT" | sed 's/^/    /'
 fi
 rm -f "$README"
+[ -n "$SPLITDIR" ] && rm -rf "$SPLITDIR"
 
+[ "${#SKIP[@]:-0}" -gt 0 ] 2>/dev/null && \
+  log "note: oversized artifact(s) split for FAT32 — run the *.run.sh launcher on linux"
 log "done ($FS) — burn with:  sudo dd if=$OUT of=/dev/sdX bs=4M status=progress conv=fsync"
