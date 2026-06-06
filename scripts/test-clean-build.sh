@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Clean all generated build outputs and rebuild from scratch, then verify.
+# Verify the project builds from a CLEAN checkout. Uses a throwaway git worktree
+# so the main tree's artifacts are untouched, and reuses the vendor/ download
+# cache (symlinked) so gigabytes aren't re-fetched. Builds the wheel, runtime and
+# bundle for TARGET from scratch and asserts the artifact exists.
 #
 # Usage: scripts/test-clean-build.sh [target] [--full]
 #   target : linux-x64 (default) | win-x64 | mac-arm64 | mac-x64
-#   --full : also wipe the vendor/ download cache (re-downloads ollama + source)
-#
-# Without --full the download cache is kept (the wheel, runtime and bundle are
-# still rebuilt), so a "clean build" is verified without re-fetching gigabytes.
+#   --full : do NOT reuse vendor/ — re-download everything in the clean tree
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -19,19 +19,26 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-log "clean build outputs"
-rm -rf "$DIST_DIR" "$REPO_ROOT/app/node_modules" "$REPO_ROOT/app/renderer/tailwind.css" "$REPO_ROOT/app/.stage"
-[ "$FULL" = yes ] && { log "wipe vendor cache (--full)"; rm -rf "$VENDOR_DIR"; }
+need git
+WT="$(mktemp -d)/clean"
+cleanup() { git -C "$REPO_ROOT" worktree remove --force "$WT" 2>/dev/null || true; rm -rf "$(dirname "$WT")"; }
+trap cleanup EXIT
 
-run() { log "+ $*"; nix develop --command bash -c "$*"; }
+log "create clean worktree at $WT"
+git -C "$REPO_ROOT" worktree add --detach "$WT" HEAD >/dev/null
+git -C "$WT" submodule update --init --recursive third_party/plan-ai-design >/dev/null 2>&1 || true
 
-# ollama flavour for the target
+if [ "$FULL" = no ] && [ -d "$VENDOR_DIR" ]; then
+  log "reuse vendor cache (symlink)"; ln -sfn "$VENDOR_DIR" "$WT/vendor"
+fi
+
 case "$TARGET" in
   linux-x64) FLAV=ollama-linux-amd64.tar.zst ;;
   win-x64)   FLAV=ollama-windows-amd64.zip ;;
   mac-*)     FLAV=ollama-darwin.tgz ;;
 esac
 
+run() { log "+ $*"; ( cd "$WT" && nix develop "$REPO_ROOT" --command bash -c "$*" ); }
 run "./scripts/download-ollama.sh $FLAV"
 run "./scripts/download-openwebui.sh"
 run "./scripts/build-openwebui.sh"
@@ -39,15 +46,13 @@ run "./scripts/make-runtime.sh $TARGET"
 run "cd app && npm ci"
 run "./scripts/bundle.sh $TARGET"
 
-# verify the artifact exists
 case "$TARGET" in
-  linux-x64) ART="$DIST_DIR/bundle/plan-ai-"*"-linux-"*".AppImage" ;;
-  win-x64)   ART="$DIST_DIR/bundle/plan-ai-"*"-win-"*".exe" ;;
-  mac-*)     ART="$DIST_DIR/bundle/plan-ai-"*"-mac-"*".zip" ;;
+  linux-x64) ART=("$WT"/dist/bundle/plan-ai-*-linux-*.AppImage) ;;
+  win-x64)   ART=("$WT"/dist/bundle/plan-ai-*-win-*.zip) ;;
+  mac-*)     ART=("$WT"/dist/bundle/plan-ai-*-mac-*.zip) ;;
 esac
-# shellcheck disable=SC2086
-if ls $ART >/dev/null 2>&1; then
-  log "CLEAN BUILD OK -> $(ls -lh $ART | awk '{print $5, $NF}')"
+if [ -e "${ART[0]}" ]; then
+  log "CLEAN BUILD OK -> $(ls -lh "${ART[0]}" | awk '{print $5, $NF}')"
 else
   die "clean build produced no artifact for $TARGET"
 fi
