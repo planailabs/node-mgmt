@@ -1,0 +1,43 @@
+appId: ai.plan.usb
+productName: plan.ai
+copyright: plan.ai
+
+directories:
+  output: ../dist/bundle
+  buildResources: build
+
+# Only the app code is packed into the asar; the heavy payload (ollama binary,
+# python runtime, offline assets) is staged by bundle.sh into .stage/resources
+# and copied in verbatim via extraResources.
+files:
+  - main/**/*
+  - renderer/**/*
+  - package.json
+
+extraResources:
+  - from: .stage/resources
+    to: .
+
+# Single-file artifacts per OS.
+linux:
+  target:
+    - AppImage
+  category: Utility
+  artifactName: plan-ai-${version}-linux-${arch}.${ext}
+
+win:
+  target:
+    - portable
+    - nsis
+  artifactName: plan-ai-${version}-win-${arch}.${ext}
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  artifactName: plan-ai-${version}-mac-${arch}.${ext}
+
+# These are downloaded/built ahead of time; never fetch at pack time.
+npmRebuild: false
+buildDependenciesFromSource: false

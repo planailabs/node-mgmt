@@ -14,3 +14,4 @@ __pycache__/
 # editor / os
 .DS_Store
 *.swp
+/app/.stage/
