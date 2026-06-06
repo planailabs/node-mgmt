@@ -92,10 +92,11 @@ incus exec "$VM" -- bash -c '
   export NO_AT_BRIDGE=1 GTK_A11Y=none ELECTRON_ENABLE_LOGGING=1 LIBGL_ALWAYS_SOFTWARE=1
   modprobe fuse 2>/dev/null || true
   cd /root
-  # --no-zygote avoids the headless renderer-IPC stall; --disable-gpu forces
-  # software compositing (no GPU/DRI in the VM); dbus-run-session gives a bus.
+  # --disable-gpu forces software compositing (no GPU/DRI in the VM);
+  # dbus-run-session gives a session bus. The renderer may still not paint under
+  # headless xvfb, but the MAIN process spawns/supervises ollama + uvicorn anyway.
   xvfb-run -a -s "-screen 0 1400x900x24" \
-    dbus-run-session -- ./plan-ai.AppImage --no-sandbox --disable-gpu --disable-dev-shm-usage --no-zygote \
+    dbus-run-session -- ./plan-ai.AppImage --no-sandbox --disable-gpu --disable-dev-shm-usage \
     >/root/run.log 2>&1 &
   APP=$!
   ok=""
@@ -108,8 +109,8 @@ incus exec "$VM" -- bash -c '
   echo "SERVICES_OK=${ok:-0}" | tee -a /root/run.log   # marker pulled to the host
   curl -s -m 3 http://127.0.0.1:11434/api/version 2>/dev/null | head -c 200; echo
   sleep 2   # give the capture hook a chance if the window did paint
-  kill "$APP" 2>/dev/null; sleep 1; pkill -f plan-ai 2>/dev/null || true
   echo "--- run.log tail ---"; tail -30 /root/run.log
+  kill "$APP" 2>/dev/null; sleep 1; pkill -f plan-ai.AppImage 2>/dev/null || true
   ls -l /root/shot.png 2>/dev/null || echo "no screenshot (best-effort)"
 ' 2>&1 | sed 's/^/    /'
 
