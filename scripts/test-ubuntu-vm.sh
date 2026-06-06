@@ -29,7 +29,7 @@ launch_vm() {
   # 30GiB root holds the ~3GB AppImage; ${PLANAI_VM_MEM:-6GiB} RAM by default.
   incus launch "$img" "$VM" --vm --ephemeral \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" \
-    -d root,size=30GiB 2>/dev/null
+    -d root,size="${PLANAI_VM_DISK:-16GiB}" 2>/dev/null
 }
 launch_vm "images:ubuntu/$UBUNTU/cloud" || {
   warn "ubuntu/$UBUNTU not available, falling back to 24.04"
