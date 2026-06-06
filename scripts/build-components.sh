@@ -42,7 +42,9 @@ for rt in "$DIST_DIR"/runtime/*/; do
   RUNTIMES="$(jq -c --arg t "$t" '. + [$t]' <<<"$RUNTIMES")"
 done
 
-# ollama: normalize each supported flavour (zst/tgz/zip) to a uniform .tar.gz
+# ollama: normalized to uniform .tar.gz. Prefer the Nix no-fixup repack
+# (cached, binaries byte-identical, OUTPUT is a portable archive copied out of
+# the store); fall back to repacking locally with pigz.
 OLLAMAS="[]"
 norm_ollama() {  # <downloaded-file> <flavour-key>
   local src="$1" key="$2" tmp; tmp="$(mktemp -d)"
@@ -54,9 +56,21 @@ norm_ollama() {  # <downloaded-file> <flavour-key>
   esac
   tar -C "$tmp" -cf - . | $GZIP_CMD > "$OUT/ollama-$key.tar.gz"
   rm -rf "$tmp"
-  log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1))"
+  log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1)) [pigz]"
 }
+
+NIXOLL=""
+if command -v nix >/dev/null 2>&1 && [ -f "$REPO_ROOT/vendor.lock.json" ]; then
+  log "nix build .#ollamaComponents (cached no-fixup repack)"
+  NIXOLL="$(nix build "$REPO_ROOT#ollamaComponents" --no-link --print-out-paths 2>/dev/null || true)"
+fi
 for key in linux-amd64 linux-arm64 linux-amd64-rocm darwin windows-amd64; do
+  if [ -n "$NIXOLL" ] && [ -f "$NIXOLL/ollama-$key.tar.gz" ]; then
+    cp -L "$NIXOLL/ollama-$key.tar.gz" "$OUT/ollama-$key.tar.gz"   # copy OUT of the store -> portable
+    OLLAMAS="$(jq -c --arg k "$key" '. + [$k]' <<<"$OLLAMAS")"
+    log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1)) [nix]"
+    continue
+  fi
   for ext in tar.zst tgz zip; do
     f="$OLLAMA_DIR/ollama-$key.$ext"
     [ -f "$f" ] || continue

@@ -10,6 +10,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        lib = pkgs.lib;
 
         # Toolchain needed to build Open-WebUI (node + python), assemble the
         # relocatable runtime (uv), build the Electron app + tailwind, and run
@@ -88,8 +89,35 @@
           ++ (map (p: { name = "pbs/${p.target}.tar.gz"; path = fetch p; }) vlock.pbs.files)
           ++ [ { name = "open-webui/${vlock.openwebui.tag}/source.tar.gz"; path = fetch vlock.openwebui; } ]
         );
+
+        # --- layer 2: no-fixup component repack (ollama) ----------------------
+        # Normalise each ollama FOD to a uniform .tar.gz for the loader. A clean
+        # custom builder (stdenvNoCC + dontFixup/dontStrip/dontPatchELF) so the
+        # generic ollama binaries pass through byte-identical; cached by Nix.
+        ollamaKeyOf = name: lib.pipe name [
+          (lib.removePrefix "ollama-")
+          (lib.removeSuffix ".tar.zst") (lib.removeSuffix ".tgz") (lib.removeSuffix ".zip")
+        ];
+        repackOllama = a: pkgs.stdenvNoCC.mkDerivation {
+          name = "ollama-${ollamaKeyOf a.name}.tar.gz";
+          src = fetch a;
+          dontUnpack = true; dontFixup = true; dontStrip = true; dontPatchELF = true;
+          nativeBuildInputs = with pkgs; [ zstd gnutar pigz unzip ];
+          buildPhase = ''
+            mkdir x
+            case "${a.name}" in
+              *.tar.zst) zstd -dc "$src" | tar -x -C x ;;
+              *.tgz)     tar -xzf "$src" -C x ;;
+              *.zip)     unzip -q "$src" -d x ;;
+            esac
+          '';
+          installPhase = ''tar -C x -cf - . | pigz -p "$NIX_BUILD_CORES" > "$out"'';
+        };
+        ollamaComponents = pkgs.linkFarm "ollama-components"
+          (map (a: { name = "ollama-${ollamaKeyOf a.name}.tar.gz"; path = repackOllama a; }) vlock.ollama.assets);
       in {
         packages.vendor = vendor;
+        packages.ollamaComponents = ollamaComponents;
 
         devShells.default = pkgs.mkShell {
           packages = buildTools;
