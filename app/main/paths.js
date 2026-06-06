@@ -17,7 +17,9 @@ function resourcesRoot() {
 
 // Writable USB-side root that holds models/ and data/ next to the binary.
 // AppImage exposes APPIMAGE (the .AppImage path); fall back to the exe dir.
+// PLANAI_PORTABLE_ROOT overrides everything (used by the FAT32 USB image test).
 function portableRoot() {
+  if (process.env.PLANAI_PORTABLE_ROOT) return process.env.PLANAI_PORTABLE_ROOT;
   if (!app.isPackaged) return path.join(__dirname, '..', '.run');
   if (process.env.APPIMAGE) return path.dirname(process.env.APPIMAGE);
   if (PLATFORM === 'darwin') {

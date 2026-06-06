@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Assemble a relocatable Python runtime for one target with Open-WebUI installed.
+# Assemble a relocatable Python runtime for a target with Open-WebUI installed.
 #
 # Usage: scripts/make-runtime.sh [target]
 #   target: linux-x64 | mac-arm64 | mac-x64 | win-x64  (default: host)
 #
-# HOST target  -> uv-managed standalone CPython + a relocatable venv (native deps
-#                 resolved by running the interpreter).
-# CROSS target -> download python-build-standalone for the target and install the
-#                 wheel + deps into its site-packages with `uv pip install
-#                 --python-platform <triple> --only-binary` (no interpreter run).
-#                 This lets NixOS produce mac/windows runtimes. Packages without a
-#                 matching binary wheel are skipped (reported), since they can't be
-#                 cross-compiled here.
+# Approach (works for ALL targets, and crucially builds on NixOS): download
+# python-build-standalone for the target and install the wheel + deps into its
+# site-packages with `uv pip install --python-platform <triple> --only-binary`.
+# This never runs the target interpreter (NixOS can't run generic ELF / foreign
+# binaries), and produces a relocatable tree that runs natively on the target
+# machine via `python -m uvicorn open_webui.main:app`.
+#
+# Packages without a matching binary wheel for the target are skipped (reported)
+# — they can't be cross-compiled here. For the NixOS dev run use scripts/dev.sh
+# (a nix-native venv) instead.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-need uv
+need uv; need tar
 
 host_target() {
   local os arch
@@ -31,50 +33,42 @@ host_target() {
 }
 
 TARGET="${1:-$(host_target)}"
-HOST="$(host_target)"
 PYVER="$(py_version)"
 TAG="$(ow_version)"
+TRIPLE="$(target_triple "$TARGET")"
 WHEEL="$(ls -t "$DIST_DIR/wheel"/open_webui-*.whl 2>/dev/null | head -1 || true)"
 [ -n "$WHEEL" ] || die "no open-webui wheel — run scripts/build-openwebui.sh first"
 
 RT="$DIST_DIR/runtime/$TARGET"
-rm -rf "$RT"; mkdir -p "$RT"
+PYDIR="$RT/python"
+rm -rf "$RT"; mkdir -p "$PYDIR"
 
-if [ "$TARGET" = "$HOST" ]; then
-  # ---- native: standalone CPython + relocatable venv ----------------------
-  PYDIR="$RT/python"; VENV="$RT/venv"
-  log "[$TARGET] fetch standalone CPython $PYVER (native)"
-  uv python install "$PYVER" --install-dir "$PYDIR"
-  PYBIN="$(ls "$PYDIR"/cpython-*/bin/python3 2>/dev/null | head -1 || true)"
-  [ -z "$PYBIN" ] && PYBIN="$(ls "$PYDIR"/cpython-*/python.exe 2>/dev/null | head -1 || true)"
-  [ -n "$PYBIN" ] && [ -x "$PYBIN" ] || die "could not locate managed python under $PYDIR"
-  log "[$TARGET] create relocatable venv + install open-webui"
-  uv venv --relocatable --python "$PYBIN" "$VENV"
-  VIRTUAL_ENV="$VENV" uv pip install --python "$VENV" "$WHEEL"
-  LAYOUT="venv"
-else
-  # ---- cross: python-build-standalone + --python-platform install ---------
-  TRIPLE="$(target_triple "$TARGET")"
-  PYDIR="$RT/python"
-  log "[$TARGET] download python-build-standalone ($TRIPLE)"
-  TARBALL="$RT/python.tar.gz"
-  download_verified "$(pbs_url "$TARGET")" "$TARBALL" "-"
-  mkdir -p "$PYDIR"; tar -xzf "$TARBALL" -C "$PYDIR" --strip-components=1; rm -f "$TARBALL"
-  # site-packages location differs by OS
-  case "$TARGET" in
-    win-*) SP="$PYDIR/Lib/site-packages" ;;
-    *)     SP="$(ls -d "$PYDIR"/lib/python*/site-packages 2>/dev/null | head -1)" ;;
-  esac
-  [ -n "$SP" ] || die "site-packages not found under $PYDIR"
-  log "[$TARGET] cross-install open-webui (+deps) for $TRIPLE into site-packages"
-  uv pip install \
-    --target "$SP" \
-    --python-platform "$TRIPLE" \
-    --python-version "$PYVER" \
-    --only-binary :all: \
-    "$WHEEL" 2>&1 | tail -3 || warn "[$TARGET] some packages lacked $TRIPLE wheels (see above)"
-  LAYOUT="python"
-fi
+# 1. python-build-standalone interpreter for the target (install_only build).
+log "[$TARGET] download python-build-standalone $PYVER ($TRIPLE)"
+TARBALL="$RT/python.tar.gz"
+download_verified "$(pbs_url "$TARGET")" "$TARBALL" "-"
+tar -xzf "$TARBALL" -C "$PYDIR" --strip-components=1
+rm -f "$TARBALL"
+
+# 2. site-packages location for the target layout.
+case "$TARGET" in
+  win-*) SP="$PYDIR/Lib/site-packages" ;;
+  *)     SP="$(ls -d "$PYDIR"/lib/python*/site-packages 2>/dev/null | head -1)" ;;
+esac
+[ -n "$SP" ] && [ -d "$SP" ] || die "site-packages not found under $PYDIR"
+
+# 3. cross-install Open-WebUI + deps for the target (no interpreter execution).
+log "[$TARGET] install open-webui (+deps) for $TRIPLE"
+uv pip install \
+  --target "$SP" \
+  --python-platform "$TRIPLE" \
+  --python-version "$PYVER" \
+  --only-binary :all: \
+  "$WHEEL" 2>&1 | tail -4 || warn "[$TARGET] some packages lacked $TRIPLE wheels (see above)"
+
+# sanity: open_webui landed
+[ -f "$SP/open_webui/main.py" ] || die "[$TARGET] open_webui not installed into $SP"
+[ -f "$SP/open_webui/frontend/index.html" ] || warn "[$TARGET] frontend missing in wheel?"
 
 # trim caches
 find "$RT" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
@@ -82,12 +76,12 @@ find "$RT" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || t
 cat > "$RT/runtime.json" <<JSON
 {
   "target": "$TARGET",
+  "triple": "$TRIPLE",
   "python": "$PYVER",
   "openwebui": "$TAG",
   "wheel": "$(basename "$WHEEL")",
-  "layout": "$LAYOUT",
-  "cross": $([ "$TARGET" = "$HOST" ] && echo false || echo true)
+  "layout": "python"
 }
 JSON
 
-log "runtime ready -> $RT (layout: $LAYOUT)"
+log "[$TARGET] runtime ready -> $RT ($(du -sh "$RT" | cut -f1))"
