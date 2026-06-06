@@ -1,0 +1,16 @@
+# download cache + build output
+/vendor/
+/dist/
+
+# node
+node_modules/
+app/renderer/tailwind.css
+
+# python / runtime
+__pycache__/
+*.pyc
+/runtime/
+
+# editor / os
+.DS_Store
+*.swp
