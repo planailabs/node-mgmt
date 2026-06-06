@@ -126,6 +126,7 @@ fi
 rm -f "$README"
 [ -n "$SPLITDIR" ] && rm -rf "$SPLITDIR"
 
-[ "${#SKIP[@]:-0}" -gt 0 ] 2>/dev/null && \
+if [ "${#SKIP[@]}" -gt 0 ]; then
   log "note: oversized artifact(s) split for FAT32 — run the *.run.sh launcher on linux"
+fi
 log "done ($FS) — burn with:  sudo dd if=$OUT of=/dev/sdX bs=4M status=progress conv=fsync"
