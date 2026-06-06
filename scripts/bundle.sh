@@ -38,6 +38,10 @@ done
 TARGET="${TARGET:-$(host_target)}"
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 
+# Serialize: all targets share app/.stage, so concurrent bundles would race.
+exec 9>"$REPO_ROOT/app/.stage.lock"
+flock 9 || die "could not acquire bundle lock"
+
 OLLAMA_TAG="$(ollama_version)"
 OLLAMA_DIR="$VENDOR_DIR/ollama/$OLLAMA_TAG"
 RUNTIME="$DIST_DIR/runtime/$TARGET"
