@@ -49,9 +49,20 @@
             lockFile = ./runtime/wheels-mac-arm64.lock.json;
           };
         };
+        # Static squashfs tools (musl, no interpreter → run on ANY linux incl.
+        # NixOS and stock Ubuntu) bundled into the linux/nixos artifacts so the
+        # loader can mount components in place (squashfuse_ll) and extract as a
+        # fallback (unsquashfs). Copied out of the store into the bundle.
+        linuxMountTools = pkgs.runCommand "plan-ai-linux-mount-tools" { } ''
+          mkdir -p "$out/bin"
+          cp ${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll "$out/bin/squashfuse_ll"
+          cp ${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs  "$out/bin/unsquashfs"
+          chmod +x "$out/bin/"*
+        '';
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
+          inherit linuxMountTools;
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });

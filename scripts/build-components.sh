@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Build modular component archives consumed by the in-app loader (main/loader.js)
 # on every platform. Each OS artifact ships the components/ for its OS; the app
-# extracts only what the machine needs (its runtime + the ollama flavour matching
-# the CPU arch) on first launch.
+# provides only what the machine needs (its runtime + the ollama flavour matching
+# the CPU arch) on first launch — by MOUNTING in place where possible, else
+# extracting.
 #
-# Outputs dist/components/  (all .tar.gz so the node loader streams them with the
-# pure-JS `tar` package — no zstd/native dep at runtime):
-#   ow-assets.tar.gz             offline embedding model + nltk (shared)
-#   runtime-<target>.tar.gz      python runtime, one per built target
-#   ollama-<flavour>.tar.gz      ollama, normalized from each downloaded flavour
-#   manifest.json                info (loader auto-detects, this is for humans/CI)
+# Per-OS component format (the loader prefers mounting over extraction):
+#   linux / nixos : <name>.squashfs  -> mounted via bundled static squashfuse
+#                                        (fallback: extracted via static unsquashfs)
+#   windows       : <name>.tar.gz    -> extracted (pure-JS tar in the loader)
+#   macOS         : <name>.tar.gz    -> extracted (HFS+ .dmg/hdiutil: a later pass)
+# ow-assets is shared by every OS, so it is emitted in BOTH squashfs and tar.gz.
+#
+# Outputs dist/components/{<name>.squashfs|.tar.gz, manifest.json}.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -21,16 +24,31 @@ OLLAMA_DIR="$VENDOR_DIR/ollama/$OLLAMA_TAG"
 # parallel gzip (pigz) when available; output is plain gzip (the node loader's
 # `tar` reads it). falls back to gzip.
 if command -v pigz >/dev/null 2>&1; then GZIP_CMD="pigz -p $(nproc)"; else GZIP_CMD="gzip"; fi
-gz() { tar -C "$1" -cf - "${@:3}" | $GZIP_CMD > "$OUT/$2"; log "+ $2 ($(du -h "$OUT/$2" | cut -f1))"; }
-pack() { gz "$@"; }
+
+# emit a directory as one or more component formats next to manifest.json.
+emit_gz()   { tar -C "$1" -cf - . | $GZIP_CMD > "$OUT/$2.tar.gz"; log "+ $2.tar.gz ($(du -h "$OUT/$2.tar.gz" | cut -f1))"; }
+emit_sqfs() { need mksquashfs; rm -f "$OUT/$2.squashfs"
+  mksquashfs "$1" "$OUT/$2.squashfs" -comp zstd -processors "$(nproc)" -all-root -no-xattrs -noappend -quiet
+  log "+ $2.squashfs ($(du -h "$OUT/$2.squashfs" | cut -f1)) [squashfs]"; }
+# <srcdir> <name> <fmt...>   fmt in {gz,sqfs}
+emit() { local dir="$1" name="$2"; shift 2; local f
+  for f in "$@"; do case "$f" in gz) emit_gz "$dir" "$name" ;; sqfs) emit_sqfs "$dir" "$name" ;; esac; done; }
+# which formats a component name ships in (drives the per-OS bundle staging)
+fmts_for() { case "$1" in
+  *linux-*|*nixos-*) echo sqfs ;;       # mounted/extracted via squashfuse/unsquashfs
+  *windows-*|*win-*) echo gz ;;
+  *darwin*|*mac-*)   echo gz ;;         # HFS+ dmg in a later pass
+  ow-assets)         echo "sqfs gz" ;;  # shared by every OS
+  *)                 echo gz ;;
+esac; }
 
 # True if a glob matches at least one existing path. Portable substitute for
 # `compgen -G`, which is unavailable in the non-interactive bash `nix develop`
 # provides. Relies on an unmatched glob staying literal (no nullglob).
 glob_exists() { local m; for m in $1; do [ -e "$m" ] && return 0; done; return 1; }
 
-# shared offline assets
-[ -d "$VENDOR_DIR/ow-assets" ] && pack "$VENDOR_DIR/ow-assets" ow-assets.tar.gz .
+# shared offline assets (both formats — every OS bundle uses ow-assets)
+[ -d "$VENDOR_DIR/ow-assets" ] && emit "$VENDOR_DIR/ow-assets" ow-assets $(fmts_for ow-assets)
 
 # runtimes (one archive per built target)
 RUNTIMES="[]"
@@ -47,25 +65,22 @@ for rt in "$DIST_DIR"/runtime/*/; do
      && [ ! -f "$rt/python/Lib/site-packages/open_webui/main.py" ]; then
     warn "skip incomplete runtime $t (open_webui missing)"; continue
   fi
-  pack "$rt" "runtime-$t.tar.gz" .
+  emit "$rt" "runtime-$t" $(fmts_for "runtime-$t")
   RUNTIMES="$(jq -c --arg t "$t" '. + [$t]' <<<"$RUNTIMES")"
 done
 
-# ollama: normalized to uniform .tar.gz. Prefer the Nix no-fixup repack
-# (cached, binaries byte-identical, OUTPUT is a portable archive copied out of
-# the store); fall back to repacking locally with pigz.
+# ollama: extracted to a dir, then emitted in the per-OS format. Prefer the Nix
+# no-fixup repack (cached, binaries byte-identical, copied OUT of the store);
+# fall back to the locally downloaded flavour archive.
 OLLAMAS="[]"
-norm_ollama() {  # <downloaded-file> <flavour-key>
-  local src="$1" key="$2" tmp; tmp="$(mktemp -d)"
+extract_to() {  # <archive> <destdir>
+  local src="$1" d="$2"; mkdir -p "$d"
   case "$src" in
-    *.tar.zst) need zstd; zstd -dc "$src" | tar -x -C "$tmp" ;;
-    *.tgz|*.tar.gz) tar -xzf "$src" -C "$tmp" ;;
-    *.zip) need unzip; unzip -qo "$src" -d "$tmp" ;;
-    *) rm -rf "$tmp"; return 1 ;;
+    *.tar.zst) need zstd; zstd -dc "$src" | tar -x -C "$d" ;;
+    *.tar.gz|*.tgz) tar -xzf "$src" -C "$d" ;;
+    *.zip) need unzip; unzip -qo "$src" -d "$d" ;;
+    *) return 1 ;;
   esac
-  tar -C "$tmp" -cf - . | $GZIP_CMD > "$OUT/ollama-$key.tar.gz"
-  rm -rf "$tmp"
-  log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1)) [pigz]"
 }
 
 NIXOLL=""
@@ -74,23 +89,26 @@ if command -v nix >/dev/null 2>&1 && [ -f "$REPO_ROOT/vendor.lock.json" ]; then
   NIXOLL="$(nix build "$REPO_ROOT#ollamaComponents" --no-link --print-out-paths 2>/dev/null || true)"
 fi
 for key in linux-amd64 linux-arm64 linux-amd64-rocm darwin windows-amd64; do
+  tmp="$(mktemp -d)"; got=""
   if [ -n "$NIXOLL" ] && [ -f "$NIXOLL/ollama-$key.tar.gz" ]; then
-    cp -L "$NIXOLL/ollama-$key.tar.gz" "$OUT/ollama-$key.tar.gz"   # copy OUT of the store -> portable
-    OLLAMAS="$(jq -c --arg k "$key" '. + [$k]' <<<"$OLLAMAS")"
-    log "+ ollama-$key.tar.gz ($(du -h "$OUT/ollama-$key.tar.gz" | cut -f1)) [nix]"
-    continue
+    extract_to "$NIXOLL/ollama-$key.tar.gz" "$tmp" && got=nix
   fi
-  for ext in tar.zst tgz zip; do
-    f="$OLLAMA_DIR/ollama-$key.$ext"
-    [ -f "$f" ] || continue
-    norm_ollama "$f" "$key" && OLLAMAS="$(jq -c --arg k "$key" '. + [$k]' <<<"$OLLAMAS")"
-    break
-  done
+  if [ -z "$got" ]; then
+    for ext in tar.zst tgz zip; do
+      f="$OLLAMA_DIR/ollama-$key.$ext"; [ -f "$f" ] || continue
+      extract_to "$f" "$tmp" && got=local; break
+    done
+  fi
+  if [ -n "$got" ]; then
+    emit "$tmp" "ollama-$key" $(fmts_for "ollama-$key")
+    OLLAMAS="$(jq -c --arg k "$key" '. + [$k]' <<<"$OLLAMAS")"
+  fi
+  rm -rf "$tmp"
 done
 
 jq -n --arg otag "$OLLAMA_TAG" --argjson runtimes "$RUNTIMES" --argjson ollama "$OLLAMAS" \
-  '{ollama_tag:$otag, ow_assets:"ow-assets.tar.gz", runtimes:$runtimes, ollama:$ollama,
-    note:"loader picks runtime-<this bundles OS>.tar.gz + ollama by CPU arch (rocm if /dev/kfd)"}' \
+  '{ollama_tag:$otag, ow_assets:"ow-assets", runtimes:$runtimes, ollama:$ollama,
+    note:"loader picks runtime-<this bundles OS> + ollama by CPU arch (rocm if /dev/kfd); mounts .squashfs (else extracts), extracts .tar.gz"}' \
   > "$OUT/manifest.json"
 
 log "components -> $OUT ($(du -sh "$OUT" | cut -f1))"

@@ -90,6 +90,12 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-function shutdown() { if (supervisor) supervisor.stopAll(); }
+let didShutdown = false;
+function shutdown() {
+  if (didShutdown) return; didShutdown = true;
+  if (supervisor) supervisor.stopAll();
+  // release any squashfuse/hdiutil mounts AFTER the children that read them stop
+  try { loader.unmountAll(); } catch (e) { console.error('[loader] unmount:', e.message); }
+}
 app.on('before-quit', shutdown);
 app.on('window-all-closed', () => { shutdown(); if (process.platform !== 'darwin') app.quit(); });

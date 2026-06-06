@@ -40,23 +40,49 @@ case "$TARGET" in
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
-RT_ARCHIVE="runtime-$TARGET.tar.gz"
-
-[ -f "$COMP_SRC/$RT_ARCHIVE" ] || die "missing $COMP_SRC/$RT_ARCHIVE — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
+# component format preference per OS (mirror the loader): linux/nixos ship
+# squashfs (mounted in place, no extraction), windows/mac ship tar.gz.
+case "$TARGET" in
+  linux-*|nixos-*) FMT_ORDER="squashfs tar.gz"; MOUNTABLE=1 ;;
+  *)               FMT_ORDER="tar.gz squashfs"; MOUNTABLE=0 ;;
+esac
+# copy the best-format file for a component base name into the staged components/
+stage_comp() {  # <base>
+  local base="$1" ext
+  for ext in $FMT_ORDER; do
+    [ -f "$COMP_SRC/$base.$ext" ] && { cp "$COMP_SRC/$base.$ext" "$STAGE/components/"; return 0; }
+  done
+  return 1
+}
+RT_BASE="runtime-$TARGET"
+stage_comp "$RT_BASE" 2>/dev/null || die "missing runtime component $RT_BASE.{$FMT_ORDER// /,} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
 
 # Serialize: targets share app/.stage.
 exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
 
 # --- stage the per-OS component subset --------------------------------------
-log "staging components for $TARGET (ollama: $OKEYS)"
+log "staging components for $TARGET (fmt: ${FMT_ORDER%% *}, ollama: $OKEYS)"
 rm -rf "$APP/.stage"; mkdir -p "$STAGE/components"
-cp "$COMP_SRC/$RT_ARCHIVE" "$STAGE/components/"
-[ -f "$COMP_SRC/ow-assets.tar.gz" ] && cp "$COMP_SRC/ow-assets.tar.gz" "$STAGE/components/"
-[ -f "$COMP_SRC/manifest.json" ]    && cp "$COMP_SRC/manifest.json"    "$STAGE/components/"
+stage_comp "$RT_BASE"
+stage_comp "ow-assets" || warn "no ow-assets component"
+[ -f "$COMP_SRC/manifest.json" ] && cp "$COMP_SRC/manifest.json" "$STAGE/components/"
 for k in $OKEYS; do
-  [ -f "$COMP_SRC/ollama-$k.tar.gz" ] && cp "$COMP_SRC/ollama-$k.tar.gz" "$STAGE/components/"
+  stage_comp "ollama-$k" || warn "no ollama-$k component"
 done
-log "staged: $(cd "$STAGE/components" && du -ch ./*.tar.gz | tail -1 | cut -f1) of components"
+
+# linux/nixos: ship the static squashfs tools so the loader can mount in place
+# (squashfuse_ll) and extract as a fallback (unsquashfs). macOS uses hdiutil
+# (system) and windows extracts tar.gz — neither needs bundled tools.
+if [ "$MOUNTABLE" = 1 ]; then
+  TOOLS="$(cd "$REPO_ROOT" && nix build .#linuxMountTools --no-link --print-out-paths 2>/dev/null || true)"
+  if [ -n "$TOOLS" ] && [ -d "$TOOLS/bin" ]; then
+    mkdir -p "$STAGE/tools/bin"; cp -L "$TOOLS/bin/"* "$STAGE/tools/bin/"; chmod -R u+w "$STAGE/tools"
+    log "staged mount tools: $(ls "$STAGE/tools/bin" | tr '\n' ' ')"
+  else
+    warn "linuxMountTools unavailable — loader will extract (no in-place mount)"
+  fi
+fi
+log "staged: $(cd "$STAGE/components" && du -ch ./* | tail -1 | cut -f1) of components"
 
 # pinned app deps (runtime dep: tar; build deps: electron-builder/packager)
 [ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci )
@@ -123,6 +149,9 @@ package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node l
   cp -a "$APP/main" "$APP/renderer" "$APP/package.json" "$DIR/app/"
   cp -a "$APP/node_modules" "$DIR/app/node_modules"
   cp -a "$STAGE/components"/. "$DIR/components/"
+  # static unsquashfs so the loader can extract the .squashfs components (NixOS
+  # force-extracts; no FUSE/fusermount needed).
+  [ -d "$STAGE/tools" ] && cp -a "$STAGE/tools" "$DIR/tools"
   mkdir -p "$DIR/models" "$DIR/data"
   cat > "$DIR/plan-ai" <<EOF
 #!/bin/sh
@@ -131,6 +160,7 @@ package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node l
 # the nix loader (PLANAI_NIX_LD). Requires a nix store (paths baked below).
 here=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
 export PLANAI_COMPONENTS="\$here/components"
+export PLANAI_MOUNT_TOOLS="\$here/tools/bin"   # static unsquashfs for the loader
 export PLANAI_PORTABLE_ROOT="\${PLANAI_PORTABLE_ROOT:-\$here}"
 export PLANAI_CHILD_LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH}"
 export PLANAI_NIX_LD="${NIX_LD}"
