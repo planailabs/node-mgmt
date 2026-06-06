@@ -46,7 +46,7 @@ incus exec "$VM" -- bash -c '
   apt-get update -qq
   # Electron/Chromium runtime libs. Try t64 names (ubuntu >=24.04), fall back to
   # the pre-t64 names; install best-effort and report what is still missing.
-  pkgs="xvfb dbus dbus-x11 ca-certificates fuse3 fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
+  pkgs="xvfb dbus dbus-x11 at-spi2-core ca-certificates fuse3 fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libxshmfence1 \
     libpango-1.0-0 libcairo2 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 \
     libatspi2.0-0t64 libgtk-3-0t64 libasound2t64 libglib2.0-0t64"
@@ -66,6 +66,10 @@ incus exec "$VM" -- bash -c '
   set -x
   export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY=50000
   export TMPDIR=/root/tmp; mkdir -p "$TMPDIR"   # disk-backed (avoid tmpfs OOM)
+  # headless: disable the GTK/at-spi accessibility bridge. Otherwise chromium
+  # activates org.a11y.Bus, its connection drops, and electron aborts (FATAL
+  # dbus/bus.cc "D-Bus connection was disconnected").
+  export NO_AT_BRIDGE=1 GTK_A11Y=none
   modprobe fuse 2>/dev/null || true
   cd /root
   # Components MOUNT in place (squashfuse) — no big extraction. electron/chromium
