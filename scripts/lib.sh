@@ -31,6 +31,7 @@ ollama_version() { lock '.ollama.version'; }
 ow_repo()        { lock '.openwebui.repo'; }
 ow_version()     { lock '.openwebui.version'; }
 py_version()     { lock '.python'; }
+pbs_release()    { lock '.pbs_release'; }
 
 # --- github api -------------------------------------------------------------
 # Honour GITHUB_TOKEN to avoid the 60 req/h anonymous rate limit.

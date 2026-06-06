@@ -42,6 +42,16 @@
           fuse
           p7zip     # system 7za so electron-builder skips its non-NixOS bundled one
           patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
+
+          # cross-target packaging from NixOS
+          rcodesign       # Apple code signing from Linux (mac target)
+          wineWowPackages.stable  # electron-builder win build steps
+          osslsigncode    # Authenticode signing for the windows .exe
+          nsis            # windows installer
+
+          # FAT32 USB image test
+          mtools
+          dosfstools
         ];
 
         # Generic, prebuilt dynamically-linked binaries (electron-builder's

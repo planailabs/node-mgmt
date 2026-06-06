@@ -18,3 +18,4 @@ __pycache__/
 /.run-data/
 /app/.run/
 /.claude/
+/models/

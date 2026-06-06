@@ -8,7 +8,8 @@
     "repo": "open-webui/open-webui",
     "version": "v0.9.6"
   },
-  "python": "3.12.8",
+  "python": "3.12.13",
+  "pbs_release": "20260602",
   "targets": ["linux-x64", "win-x64", "mac-arm64", "mac-x64"],
-  "models": []
+  "models": ["smollm2:1.7b"]
 }
