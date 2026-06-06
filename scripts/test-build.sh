@@ -55,6 +55,7 @@ curl -sf "http://127.0.0.1:11500/api/version" >/dev/null 2>&1 && ok "ollama /api
 
 FE="$(ls -d "$DIST_DIR"/runtime/*/lib/python*/site-packages/open_webui/frontend 2>/dev/null | head -1 || true)"
 export DATA_DIR="$REPO_ROOT/.run-data" HF_HOME="$VENDOR_DIR/ow-assets/hf" SENTENCE_TRANSFORMERS_HOME="$VENDOR_DIR/ow-assets/hf" NLTK_DATA="$VENDOR_DIR/ow-assets/nltk"
+mkdir -p "$DATA_DIR"   # open-webui opens its sqlite db here
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 WEBUI_AUTH=False WEBUI_SECRET_KEY=test OAUTH_SESSION_TOKEN_ENCRYPTION_KEY=test
 [ -n "$FE" ] && export FRONTEND_BUILD_DIR="$FE"
 "$PY" -m uvicorn open_webui.main:app --host 127.0.0.1 --port 8085 >/tmp/test-webui.log 2>&1 & UPID=$!
