@@ -27,7 +27,7 @@ launch_vm() {
   log "incus launch $img (VM, KVM)"
   # Components MOUNT in place (no extraction to RAM/tmpfs), so modest RAM is fine.
   # ${PLANAI_VM_MEM:-6GiB} RAM, ${PLANAI_VM_DISK:-16GiB} root (holds the ~3GB AppImage).
-  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-180}" incus launch "$img" "$VM" --vm --ephemeral \
+  timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-360}" incus launch "$img" "$VM" --vm --ephemeral \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" \
     -d root,size="${PLANAI_VM_DISK:-16GiB}" 2>/dev/null
 }
