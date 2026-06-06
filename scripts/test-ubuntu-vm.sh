@@ -42,7 +42,7 @@ incus exec "$VM" -- bash -c '
   apt-get update -qq
   # Electron/Chromium runtime libs. Try t64 names (ubuntu >=24.04), fall back to
   # the pre-t64 names; install best-effort and report what is still missing.
-  pkgs="xvfb ca-certificates fuse3 fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
+  pkgs="xvfb dbus dbus-x11 ca-certificates fuse3 fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libxshmfence1 \
     libpango-1.0-0 libcairo2 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 \
     libatspi2.0-0t64 libgtk-3-0t64 libasound2t64 libglib2.0-0t64"
@@ -64,11 +64,11 @@ incus exec "$VM" -- bash -c '
   export TMPDIR=/root/tmp; mkdir -p "$TMPDIR"   # disk-backed (avoid tmpfs OOM)
   modprobe fuse 2>/dev/null || true
   cd /root
-  # Run via FUSE (read-on-demand) rather than extracting the whole ~7G to RAM.
-  # Budget must cover first-launch component extraction (~2min) + render + the
-  # PLANAI_CAPTURE_DELAY before the screenshot, with headroom.
-  timeout 420 xvfb-run -a -s "-screen 0 1400x900x24" \
-    ./plan-ai.AppImage --no-sandbox >/root/run.log 2>&1 || true
+  # Components MOUNT in place (squashfuse) — no big extraction. electron/chromium
+  # needs a session D-Bus or it errors and fails to shut down cleanly, so wrap in
+  # dbus-run-session (provides DBUS_SESSION_BUS_ADDRESS) under xvfb.
+  timeout 300 xvfb-run -a -s "-screen 0 1400x900x24" \
+    dbus-run-session -- ./plan-ai.AppImage --no-sandbox >/root/run.log 2>&1 || true
   echo "--- run.log tail ---"; tail -20 /root/run.log
   echo "--- free / oom ---"; free -m; dmesg 2>/dev/null | grep -iE "killed process|out of memory" | tail -3 || true
   ls -l /root/shot.png 2>/dev/null || echo "NO SCREENSHOT"
