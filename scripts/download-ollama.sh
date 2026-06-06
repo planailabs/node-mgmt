@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# Download ALL ollama release flavours for the version pinned in usb.lock.
+# Download ollama release flavours for the version pinned in usb.lock.
 # Verifies each asset against the sha256 digest the GitHub API reports, and
 # writes a manifest.json the bundler consumes to pick the per-OS binary.
+#
+# By default downloads ALL flavours. Pass one or more name substrings to limit
+# the set (e.g. `download-ollama.sh linux-amd64` for a minimal single-target
+# build), or set ONLY_ASSETS to a space-separated list.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+FILTERS=("$@")
+[ ${#FILTERS[@]} -eq 0 ] && [ -n "${ONLY_ASSETS:-}" ] && read -ra FILTERS <<<"$ONLY_ASSETS"
+matches_filter() {
+  [ ${#FILTERS[@]} -eq 0 ] && return 0
+  local n="$1" f
+  for f in "${FILTERS[@]}"; do [[ "$n" == *"$f"* ]] && return 0; done
+  return 1
+}
 
 REPO="$(ollama_repo)"
 TAG="$(ollama_version)"
@@ -33,6 +46,7 @@ echo '{}' > "$tmp_manifest"
 count=0
 for row in "${ROWS[@]}"; do
   IFS=$'\t' read -r name url sha size <<<"$row"
+  matches_filter "$name" || continue
   download_verified "$url" "$OUT/$name" "${sha:--}"
   # If the API gave no digest, compute one so the manifest is always complete.
   [ -z "$sha" ] && sha="$(sha256_of "$OUT/$name")"

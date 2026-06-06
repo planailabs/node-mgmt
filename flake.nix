@@ -44,11 +44,17 @@
           patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
         ];
 
-        # electron-builder ships prebuilt, generic dynamically-linked helper
-        # binaries (7za, appimagetool, mksquashfs) that NixOS can't run directly.
-        # The nix-ld stub is installed system-wide; point NIX_LD at a real loader
-        # + libs so those helpers run.
-        ldLibs = with pkgs; [ stdenv.cc.cc.lib zlib glib fuse libGL ];
+        # Generic, prebuilt dynamically-linked binaries (electron-builder's
+        # helpers; Open-WebUI's native wheels like onnxruntime/chromadb; the
+        # ollama runners) expect FHS libs. NixOS has none in /usr/lib, so expose
+        # a nix library path used for both NIX_LD (build helpers) and
+        # LD_LIBRARY_PATH (runtime children, via scripts/run-nixos.sh).
+        ldLibs = with pkgs; [
+          stdenv.cc.cc.lib   # libstdc++, libgcc_s, libgomp
+          zlib glib fuse libGL
+          libffi openssl expat bzip2 xz
+          stdenv.cc.libc      # libm, libpthread, libdl, libc
+        ];
       in {
         devShells.default = pkgs.mkShell {
           packages = buildTools;
