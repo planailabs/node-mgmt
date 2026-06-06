@@ -34,7 +34,7 @@ phase "runtime"
 # Stage the dev runtime if absent (idempotent; builds wheel/venv on first run).
 if [ ! -e "$DIST_DIR/runtime/venv/bin/python" ] && [ ! -e "$DIST_DIR/runtime/venv" ]; then
   log "staging dev runtime (scripts/dev.sh setup only)…"
-  PLANAI_NO_LAUNCH=1 "$REPO_ROOT/scripts/dev.sh" --version >/dev/null 2>&1 || true
+  PLANAI_SETUP_ONLY=1 "$REPO_ROOT/scripts/dev.sh" >/dev/null 2>&1 || true
 fi
 PY="$DIST_DIR/runtime/venv/bin/python"
 [ -x "$PY" ] || PY="$(ls "$DIST_DIR"/runtime/devvenv/bin/python 2>/dev/null | head -1 || true)"

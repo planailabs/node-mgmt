@@ -42,7 +42,8 @@ sudo chmod -R 0777 "$MNT" 2>/dev/null || true
 
 # ensure dev stack staged (resources in dist/) without launching
 if [ ! -e "$DIST_DIR/runtime/venv" ] && [ ! -e "$DIST_DIR/runtime/devvenv/bin/python" ]; then
-  die "dev runtime not staged — run scripts/dev.sh once first"
+  log "staging dev runtime (scripts/dev.sh setup only)…"
+  PLANAI_SETUP_ONLY=1 "$REPO_ROOT/scripts/dev.sh" >/dev/null 2>&1 || die "dev runtime staging failed"
 fi
 
 log "launch NixOS launcher with PLANAI_PORTABLE_ROOT=$MNT (models/data on FAT32)"

@@ -48,6 +48,13 @@ else
   warn "NIX_LD_LIBRARY_PATH unset — run inside 'nix develop'"
 fi
 
+# setup-only: stage dist/ (runtime + ollama + assets) but don't launch electron.
+# Used by the dev-mode tests to prepare the runtime without opening a window.
+if [ -n "${PLANAI_SETUP_ONLY:-}" ]; then
+  log "setup-only: staged dist/ (no launch)"
+  exit 0
+fi
+
 log "launching dashboard via nixpkgs electron"
 cd "$APP"
 exec ./node_modules/.bin/electron . --no-sandbox "$@"
