@@ -58,6 +58,24 @@ Run the dashboard in development without packaging:
 cd app && npm start
 ```
 
+## NixOS dev mode (`make dev`)
+
+The generic AppImage targets ordinary Linux and won't run on NixOS (the bare
+nix-ld stub can't start FHS binaries). For developing/testing **on NixOS**, use
+the nix-native dev mode — it runs the full stack (Ollama + Open-WebUI + the
+dashboard) using nixpkgs Electron, a venv built from the nixpkgs Python, and the
+real pinned ollama (patchelf'd to the nix loader):
+
+```sh
+nix develop
+make dev            # minimal build (linux-amd64 only) + launch; idempotent
+```
+
+This fetches just the `linux-amd64` ollama flavour, builds Open-WebUI once, makes
+a nix-native venv, stages everything into `dist/`, and launches the dashboard.
+Re-runs skip completed steps for a fast loop. Verified: both services reach
+"ready" and the embedded Open-WebUI renders, fully offline.
+
 ## Per-OS artifacts
 
 `make bundle` packages for the **host** OS only — the python runtime and
