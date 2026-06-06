@@ -20,3 +20,4 @@ __pycache__/
 /app/.run/
 /.claude/
 /models/
+/result
