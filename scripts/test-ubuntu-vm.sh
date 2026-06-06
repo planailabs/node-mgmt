@@ -64,6 +64,7 @@ incus exec "$VM" -- bash -c '
   # Electron/Chromium runtime libs. Try t64 names (ubuntu >=24.04), fall back to
   # the pre-t64 names; install best-effort and report what is still missing.
   pkgs="xvfb dbus dbus-x11 at-spi2-core ca-certificates fuse3 fuse libfuse2t64 libnss3 libnspr4 libdrm2 libgbm1 \
+    libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 libxshmfence1 \
     libpango-1.0-0 libcairo2 libcups2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 \
     libatspi2.0-0t64 libgtk-3-0t64 libasound2t64 libglib2.0-0t64"
@@ -81,20 +82,20 @@ incus exec "$VM" -- chmod +x /root/plan-ai.AppImage
 log "run AppImage headless under xvfb (FUSE mount; capture screenshot)"
 incus exec "$VM" -- bash -c '
   set -x
-  export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY=50000
+  export PLANAI_CAPTURE=/root/shot.png PLANAI_CAPTURE_DELAY="${PLANAI_CAPTURE_DELAY:-30000}"
   export TMPDIR=/root/tmp; mkdir -p "$TMPDIR"   # disk-backed (avoid tmpfs OOM)
-  # headless: disable the GTK/at-spi accessibility bridge. Otherwise chromium
-  # activates org.a11y.Bus, its connection drops, and electron aborts (FATAL
-  # dbus/bus.cc "D-Bus connection was disconnected").
   export NO_AT_BRIDGE=1 GTK_A11Y=none
+  export ELECTRON_ENABLE_LOGGING=1 LIBGL_ALWAYS_SOFTWARE=1   # verbose + software GL
   modprobe fuse 2>/dev/null || true
   cd /root
   # Components MOUNT in place (squashfuse) — no big extraction. electron/chromium
-  # needs a session D-Bus or it errors and fails to shut down cleanly, so wrap in
-  # dbus-run-session (provides DBUS_SESSION_BUS_ADDRESS) under xvfb.
+  # needs a session D-Bus (dbus-run-session). Headless VM has no GPU/DRI, so
+  # --disable-gpu forces software compositing (otherwise the GPU process hangs and
+  # the window never paints, so capturePage never fires).
   timeout 300 xvfb-run -a -s "-screen 0 1400x900x24" \
-    dbus-run-session -- ./plan-ai.AppImage --no-sandbox >/root/run.log 2>&1 || true
-  echo "--- run.log tail ---"; tail -20 /root/run.log
+    dbus-run-session -- ./plan-ai.AppImage --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    >/root/run.log 2>&1 || true
+  echo "--- run.log tail ---"; tail -40 /root/run.log
   echo "--- free / oom ---"; free -m; dmesg 2>/dev/null | grep -iE "killed process|out of memory" | tail -3 || true
   ls -l /root/shot.png 2>/dev/null || echo "NO SCREENSHOT"
 ' 2>&1 | sed 's/^/    /'
