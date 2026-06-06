@@ -1,0 +1,19 @@
+{
+  "name": "plan-ai-usb",
+  "productName": "plan.ai",
+  "version": "0.1.0",
+  "description": "Portable offline Ollama + Open-WebUI dashboard",
+  "license": "MIT",
+  "main": "main/index.js",
+  "scripts": {
+    "css": "tailwindcss -i ../third_party/plan-ai-design/assets/input.css -o renderer/tailwind.css --minify",
+    "css:watch": "tailwindcss -i ../third_party/plan-ai-design/assets/input.css -o renderer/tailwind.css --watch",
+    "start": "npm run css && electron .",
+    "dist": "electron-builder --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "electron": "^41.0.0",
+    "electron-builder": "^25.1.8",
+    "tailwindcss": "^3.4.17"
+  }
+}
