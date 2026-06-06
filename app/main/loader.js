@@ -154,13 +154,29 @@ function extractSquashfs(img, dest, tools, marker, log) {
   return true;
 }
 
+// libfuse calls a setuid `fusermount` helper to mount unprivileged. Like the
+// AppImage runtime, find one anywhere (incl. NixOS's /run/wrappers/bin) and hand
+// it to libfuse via FUSERMOUNT_PROG so squashfuse_ll mounts on more systems.
+function findFusermount() {
+  if (process.env.FUSERMOUNT_PROG) return process.env.FUSERMOUNT_PROG;
+  const dirs = (process.env.PATH || '').split(':')
+    .concat(['/run/wrappers/bin', '/usr/bin', '/bin', '/usr/local/bin']);
+  for (const name of ['fusermount3', 'fusermount']) {
+    for (const d of dirs) { const p = path.join(d, name); if (d && fs.existsSync(p)) return p; }
+  }
+  return null;
+}
+
 function tryMountSquashfs(img, dest, tools, log) {
   fs.mkdirSync(dest, { recursive: true });
   if (isMountpoint(dest)) { mounts.push({ dest, type: 'fuse' }); return true; }
   if (!tools.squashfuse) return false;
+  const env = { ...process.env };
+  const fm = findFusermount();
+  if (fm) env.FUSERMOUNT_PROG = fm;
   try {
     // squashfuse_ll <image> <mountpoint>; needs /dev/fuse + a fusermount helper.
-    execFileSync(tools.squashfuse, [img, dest], { stdio: 'pipe' });
+    execFileSync(tools.squashfuse, [img, dest], { stdio: 'pipe', env });
     if (isMountpoint(dest)) { mounts.push({ dest, type: 'fuse' }); return true; }
   } catch (e) { log('squashfuse mount failed (' + e.message.split('\n')[0] + ') — will extract'); }
   return false;
@@ -202,8 +218,10 @@ function unmountAll() {
   for (const m of mounts.splice(0)) {
     try {
       if (m.type === 'fuse') {
-        try { execFileSync('fusermount', ['-u', m.dest], { stdio: 'pipe' }); }
-        catch { execFileSync('fusermount3', ['-u', m.dest], { stdio: 'pipe' }); }
+        const fm = findFusermount();
+        if (fm) execFileSync(fm, ['-u', m.dest], { stdio: 'pipe' });
+        else try { execFileSync('fusermount', ['-u', m.dest], { stdio: 'pipe' }); }
+             catch { execFileSync('fusermount3', ['-u', m.dest], { stdio: 'pipe' }); }
       } else if (m.type === 'dmg') {
         execFileSync('hdiutil', ['detach', m.dest], { stdio: 'pipe' });
       }
