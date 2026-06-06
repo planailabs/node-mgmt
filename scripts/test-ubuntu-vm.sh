@@ -26,15 +26,32 @@ launch_vm() {
   local img="$1"
   log "incus launch $img (VM, KVM)"
   # Components MOUNT in place (no extraction to RAM/tmpfs), so modest RAM is fine.
-  # 30GiB root holds the ~3GB AppImage; ${PLANAI_VM_MEM:-6GiB} RAM by default.
-  incus launch "$img" "$VM" --vm --ephemeral \
+  # ${PLANAI_VM_MEM:-6GiB} RAM, ${PLANAI_VM_DISK:-16GiB} root (holds the ~3GB AppImage).
+  timeout "${PLANAI_VM_LAUNCH_TIMEOUT:-180}" incus launch "$img" "$VM" --vm --ephemeral \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" \
     -d root,size="${PLANAI_VM_DISK:-16GiB}" 2>/dev/null
 }
-launch_vm "images:ubuntu/$UBUNTU/cloud" || {
-  warn "ubuntu/$UBUNTU not available, falling back to 24.04"
-  UBUNTU=24.04; launch_vm "images:ubuntu/$UBUNTU/cloud" || die "could not launch ubuntu VM"
+# Prefer a locally CACHED VM image: the images:linuxcontainers.org remote is
+# often slow/unreachable and `incus launch images:...` hangs contacting it even
+# when the image is already cached. Match by Ubuntu codename.
+cached_vm_image() {
+  local codename; case "$UBUNTU" in
+    26.04) codename=resolute ;; 24.04) codename=noble ;; 22.04) codename=jammy ;; *) return 1 ;;
+  esac
+  incus image list --format csv -c f,d,t 2>/dev/null \
+    | awk -F, -v c="$codename" 'tolower($2) ~ c && $3 ~ /VIRTUAL-MACHINE/ {print $1; exit}'
 }
+FP="$(cached_vm_image || true)"
+if [ -n "${FP:-}" ]; then
+  log "using cached $UBUNTU VM image $FP (bypassing remote)"
+  launch_vm "$FP" || die "launch from cached image $FP failed"
+else
+  launch_vm "images:ubuntu/$UBUNTU/cloud" || {
+    warn "ubuntu/$UBUNTU not available, falling back to 24.04"
+    UBUNTU=24.04; FP="$(cached_vm_image || true)"
+    launch_vm "${FP:-images:ubuntu/$UBUNTU/cloud}" || die "could not launch ubuntu VM"
+  }
+fi
 
 log "wait for VM agent"
 for _ in $(seq 1 60); do incus exec "$VM" -- true 2>/dev/null && break; sleep 2; done
