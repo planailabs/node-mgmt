@@ -4,9 +4,24 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, pyproject-nix, uv2nix, pyproject-build-systems }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -121,9 +136,26 @@
         };
         ollamaComponents = pkgs.linkFarm "ollama-components"
           (map (a: { name = "ollama-${ollamaKeyOf a.name}.tar.gz"; path = repackOllama a; }) vlock.ollama.assets);
+
+        # --- layer 3: open-webui python runtime via uv2nix --------------------
+        # uv2nix turns runtime/uv.lock into wheel FODs; we build a venv with the
+        # nixpkgs python, then RELOCATE it onto the portable python-build-
+        # standalone interpreter (runtimePortable) so the result runs outside the
+        # nix store. Build phase uses a vanilla copy (no fixup) to keep the
+        # manylinux .so wheels untouched.
+        uvWorkspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./runtime; };
+        uvOverlay = uvWorkspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
+        runtimePython = pkgs.python312;
+        pythonSet = (pkgs.callPackage pyproject-nix.build.packages { python = runtimePython; })
+          .overrideScope (lib.composeManyExtensions [
+            pyproject-build-systems.overlays.default
+            uvOverlay
+          ]);
+        runtimeVenv = pythonSet.mkVirtualEnv "plan-ai-runtime" uvWorkspace.deps.default;
       in {
         packages.vendor = vendor;
         packages.ollamaComponents = ollamaComponents;
+        packages.runtimeVenv = runtimeVenv;
 
         devShells.default = pkgs.mkShell {
           packages = buildTools;
