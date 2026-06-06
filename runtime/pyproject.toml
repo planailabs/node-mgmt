@@ -1,0 +1,20 @@
+# Workspace describing the Open-WebUI python runtime, consumed by uv2nix
+# (flake) to produce wheel FODs that a vanilla derivation installs into the
+# relocatable python-build-standalone tree. CPU-only torch (no NVIDIA CUDA).
+[project]
+name = "plan-ai-runtime"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = ["open-webui==0.9.6"]
+
+[tool.uv]
+# only binary wheels (no source builds — keeps it portable + cross-resolvable)
+no-build = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
