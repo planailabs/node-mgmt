@@ -8,23 +8,26 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 UBUNTU="${UBUNTU_VERSION:-26.04}"
-VM="planai-test"
+# unique per run so concurrent test runs don't collide on the instance name
+VM="${PLANAI_VM_NAME:-planai-test-$$-${RANDOM}}"
 APPIMAGE="$(ls -t "$DIST_DIR"/bundle/plan-ai-*-linux-*.AppImage 2>/dev/null | head -1 || true)"
 SHOT="${1:-/tmp/ubuntu-dash.png}"
 
 [ -n "$APPIMAGE" ] || die "no AppImage — run scripts/bundle.sh linux-x64 first"
 command -v incus >/dev/null 2>&1 || die "incus not available"
 
+# --ephemeral so the instance self-destructs if the run is killed before cleanup;
+# the trap also force-deletes this run's own VM (never a sibling concurrent run).
 cleanup() { incus delete -f "$VM" 2>/dev/null || true; }
 trap cleanup EXIT
-incus delete -f "$VM" 2>/dev/null || true
+log "test VM: $VM"
 
 launch_vm() {
   local img="$1"
   log "incus launch $img (VM, KVM)"
   # Components MOUNT in place (no extraction to RAM/tmpfs), so modest RAM is fine.
   # 30GiB root holds the ~3GB AppImage; ${PLANAI_VM_MEM:-6GiB} RAM by default.
-  incus launch "$img" "$VM" --vm \
+  incus launch "$img" "$VM" --vm --ephemeral \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" \
     -d root,size=30GiB 2>/dev/null
 }
