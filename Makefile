@@ -101,7 +101,8 @@ test-all: ## run every test (build/health, nixos bundle, FAT32 image, ubuntu VM)
 	./scripts/test-ubuntu-vm.sh
 
 clean:
-	rm -rf dist app/node_modules app/renderer/tailwind.css app/.stage app/.stage.lock
+	rm -rf dist app/node_modules app/.stage app/.stage.lock \
+	       launcher/target launcher/spa-src/target
 
 help: ## list targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
