@@ -17,6 +17,7 @@
     </div>
     <div class="topbar-controls">
       <button id="tab-dashboard" class="btn btn-sm btn-secondary">Dashboard</button>
+      <button id="tab-models" class="btn btn-sm btn-ghost" disabled>Models</button>
       <button id="tab-webui" class="btn btn-sm btn-ghost" disabled>Open WebUI</button>
       <button id="theme" class="nav-icon-btn" title="Toggle theme">◐</button>
     </div>
@@ -64,6 +65,58 @@
         <button id="clear-logs" class="btn btn-xs btn-ghost">clear</button>
       </div>
       <pre id="logs" class="log-output"></pre>
+    </section>
+  </main>
+
+  <!-- MODELS VIEW (llmfit: GPU-aware compatible models + download) -->
+  <main id="view-models" class="h-page flex-1 overflow-auto p-6 space-y-6 hidden">
+    <div>
+      <div class="kicker">models</div>
+      <h1 class="h-hero">Models for your hardware</h1>
+    </div>
+
+    <!-- detected hardware -->
+    <section class="card card-pad">
+      <div class="label">Detected hardware <span class="help-xs td-muted">(llmfit)</span></div>
+      <div id="m-hw" class="font-mono text-sm text-fg-strong mt-1">—</div>
+    </section>
+
+    <!-- controls -->
+    <section class="flex items-end gap-3 flex-wrap">
+      <label class="text-sm">
+        <div class="label">Use case</div>
+        <select id="m-usecase" class="font-mono text-sm">
+          <option value="general">general</option>
+          <option value="coding">coding</option>
+          <option value="reasoning">reasoning</option>
+          <option value="chat">chat</option>
+          <option value="multimodal">multimodal</option>
+          <option value="embedding">embedding</option>
+        </select>
+      </label>
+      <label class="text-sm">
+        <div class="label">Min fit</div>
+        <select id="m-minfit" class="font-mono text-sm">
+          <option value="">any</option>
+          <option value="marginal">marginal+</option>
+          <option value="good" selected>good+</option>
+          <option value="perfect">perfect</option>
+        </select>
+      </label>
+      <button id="m-refresh" class="btn btn-sm btn-secondary">Refresh</button>
+      <span id="m-status" class="help-xs td-muted"></span>
+    </section>
+
+    <!-- compatible models -->
+    <section class="card">
+      <div class="card-pad pb-2 kicker">compatible models</div>
+      <div id="m-list" class="divide-y divide-line"></div>
+    </section>
+
+    <!-- installed -->
+    <section class="card">
+      <div class="card-pad pb-2 kicker">installed (ollama)</div>
+      <div id="m-installed" class="card-pad pt-0 font-mono text-sm td-muted">—</div>
     </section>
   </main>
 

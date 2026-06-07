@@ -41,7 +41,8 @@ function createWindow() {
       setTimeout(async () => {
         await snap(process.env.PLANAI_CAPTURE);
         if (process.env.PLANAI_CAPTURE_WEBUI) {
-          try { await win.webContents.executeJavaScript("document.getElementById('tab-webui')?.click()"); }
+          const tab = process.env.PLANAI_CAPTURE_TAB || 'tab-webui';
+          try { await win.webContents.executeJavaScript(`document.getElementById('${tab}')?.click()`); }
           catch {}
           await new Promise((r) => setTimeout(r, Number(process.env.PLANAI_CAPTURE_WEBUI_DELAY || 7000)));
           await snap(process.env.PLANAI_CAPTURE_WEBUI);
@@ -76,6 +77,30 @@ function wireIpc() {
     if (s) s.restart();
     return true;
   });
+
+  // --- llmfit model browser (proxied to `llmfit serve`, started by the launcher).
+  // Proxying in main avoids renderer CORS/CSP and keeps the port server-side.
+  const lfBase = () => process.env.PLANAI_LLMFIT_URL;
+  const lfGet = async (p) => {
+    const b = lfBase(); if (!b) throw new Error('model browser unavailable (llmfit not running)');
+    const r = await fetch(b + p); if (!r.ok) throw new Error(`llmfit HTTP ${r.status}`);
+    return r.json();
+  };
+  const lfPost = async (p, body) => {
+    const b = lfBase(); if (!b) throw new Error('model browser unavailable (llmfit not running)');
+    const r = await fetch(b + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`llmfit HTTP ${r.status}: ${await r.text().catch(() => '')}`);
+    return r.json();
+  };
+  ipcMain.handle('llmfit:available', () => !!lfBase());
+  ipcMain.handle('llmfit:models', (_e, q = {}) => {
+    const params = new URLSearchParams({ limit: String(q.limit || 12), use_case: q.useCase || 'general' });
+    if (q.minFit) params.set('min_fit', q.minFit);
+    return lfGet(`/api/v1/models/top?${params}`);
+  });
+  ipcMain.handle('llmfit:installed', () => lfGet('/api/v1/installed'));
+  ipcMain.handle('llmfit:download', (_e, model) => lfPost('/api/v1/download', { model, runtime: 'ollama' }));
+  ipcMain.handle('llmfit:downloadStatus', (_e, id) => lfGet(`/api/v1/download/${encodeURIComponent(id)}/status`));
 }
 
 app.whenReady().then(() => {

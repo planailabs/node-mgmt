@@ -69,13 +69,20 @@ function appendLog({ id, line }) {
 }
 
 // ---- view switching -------------------------------------------------------
+function setTabActive(id, active) {
+  const b = $(id);
+  if (b.disabled) return;
+  b.classList.toggle('btn-secondary', active);
+  b.classList.toggle('btn-ghost', !active);
+}
 function showView(which) {
-  const dash = which === 'dashboard';
-  $('view-dashboard').classList.toggle('hidden', !dash);
-  $('view-webui').classList.toggle('hidden', dash);
-  $('tab-dashboard').classList.toggle('btn-secondary', dash);
-  $('tab-dashboard').classList.toggle('btn-ghost', !dash);
-  if (!dash) loadWebui();
+  ['dashboard', 'models', 'webui'].forEach((v) =>
+    $('view-' + v).classList.toggle('hidden', v !== which));
+  setTabActive('tab-dashboard', which === 'dashboard');
+  setTabActive('tab-models', which === 'models');
+  setTabActive('tab-webui', which === 'webui');
+  if (which === 'webui') loadWebui();
+  if (which === 'models') loadModels();
 }
 
 function loadWebui() {
@@ -83,6 +90,105 @@ function loadWebui() {
   const wv = $('webui');
   wv.src = info.webuiUrl;
   webuiLoaded = true;
+}
+
+// ---- models (llmfit) ------------------------------------------------------
+let modelsLoaded = false;
+
+function renderHardware(sys) {
+  if (!sys) return;
+  const gpu = sys.gpu_name
+    ? `${sys.gpu_name} · ${sys.gpu_vram_gb ?? '?'} GB VRAM · ${sys.backend}`
+    : `CPU only · ${sys.backend}`;
+  const ram = typeof sys.total_ram_gb === 'number' ? sys.total_ram_gb.toFixed(1) : sys.total_ram_gb;
+  $('m-hw').textContent = `${gpu}  —  ${ram} GB RAM  —  ${sys.cpu_name}`;
+}
+
+function fitPill(level) {
+  return { perfect: 'pill-ok', good: 'pill-ok', marginal: 'pill-warn', tight: 'pill-warn' }[level] || 'pill-muted';
+}
+
+async function loadModels(force) {
+  if (modelsLoaded && !force) return;
+  modelsLoaded = true;
+  const status = $('m-status');
+  status.textContent = 'loading…';
+  try {
+    const data = await planai.llmfit.models({
+      useCase: $('m-usecase').value,
+      minFit: $('m-minfit').value,
+      limit: 12,
+    });
+    renderHardware(data.system);
+    renderModels(data.models || []);
+    status.textContent = `${data.returned_models}/${data.total_models} shown`;
+  } catch (e) {
+    status.textContent = e.message;
+    $('m-list').innerHTML = `<div class="card-pad td-muted text-sm">${e.message}</div>`;
+  }
+  loadInstalled();
+}
+
+function renderModels(models) {
+  const host = $('m-list');
+  host.innerHTML = '';
+  if (!models.length) {
+    host.innerHTML = '<div class="card-pad td-muted text-sm">no compatible models for this filter</div>';
+    return;
+  }
+  for (const m of models) {
+    const row = document.createElement('div');
+    row.className = 'card-pad flex items-center justify-between gap-3';
+    const params = m.parameter_count || (m.params_b ? `${m.params_b}B` : '');
+    const tps = m.estimated_tps ? `~${Math.round(m.estimated_tps)} tok/s` : '';
+    const meta = [params, m.best_quant, m.run_mode_label, tps].filter(Boolean).join(' · ');
+    const key = encodeURIComponent(m.name);
+    row.innerHTML = `
+      <div class="min-w-0">
+        <div class="font-mono text-fg-strong truncate">${m.name}</div>
+        <div class="help-xs td-muted">${meta}</div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="pill ${fitPill(m.fit_level)}">${m.fit_label || m.fit_level || ''}</span>
+        <button class="btn btn-xs btn-accent" data-dl="${key}">Download</button>
+        <span class="help-xs td-muted" data-prog="${key}"></span>
+      </div>`;
+    host.appendChild(row);
+  }
+  host.querySelectorAll('[data-dl]').forEach((b) =>
+    b.addEventListener('click', () => downloadModel(decodeURIComponent(b.dataset.dl), b)));
+}
+
+async function downloadModel(name, btn) {
+  const prog = document.querySelector(`[data-prog="${encodeURIComponent(name)}"]`);
+  btn.disabled = true;
+  if (prog) prog.textContent = 'starting…';
+  try {
+    const { id } = await planai.llmfit.download(name);
+    const poll = async () => {
+      try {
+        const s = await planai.llmfit.downloadStatus(id);
+        const pct = s.progress_pct ? `${Math.round(s.progress_pct)}%` : '';
+        if (prog) prog.textContent = `${s.status} ${pct} ${s.message || ''}`.replace(/\s+/g, ' ').trim();
+        if (s.status === 'pulling' || s.status === 'starting') {
+          setTimeout(poll, 1200);
+        } else {
+          btn.disabled = s.status === 'complete' || s.status === 'completed' || s.status === 'success';
+          loadInstalled();
+        }
+      } catch (e) { if (prog) prog.textContent = e.message; btn.disabled = false; }
+    };
+    poll();
+  } catch (e) { if (prog) prog.textContent = e.message; btn.disabled = false; }
+}
+
+async function loadInstalled() {
+  try {
+    const d = await planai.llmfit.installed();
+    const list = Array.isArray(d) ? d : (d.installed || d.models || []);
+    const names = list.map((x) => (typeof x === 'string' ? x : x.name || x.model)).filter(Boolean);
+    $('m-installed').textContent = names.length ? names.join('   ·   ') : 'none yet';
+  } catch (e) { $('m-installed').textContent = e.message; }
 }
 
 // ---- wiring ---------------------------------------------------------------
@@ -112,6 +218,12 @@ async function init() {
     $('f-accel-why').textContent = ac ? `— ${ac.reason}` : '';
   }
 
+  // Models tab — enabled only when the launcher started llmfit serve.
+  if (ac && ac.llmfitUrl) {
+    $('tab-models').disabled = false;
+    renderHardware(ac.gpu);
+  }
+
   const snap = await planai.getStatus();
   snap.forEach((s) => { if (svc[s.id]) svc[s.id].state = s.state; });
   renderServices();
@@ -128,7 +240,11 @@ async function init() {
   $('start').addEventListener('click', () => planai.start());
   $('stop').addEventListener('click', () => planai.stop());
   $('tab-dashboard').addEventListener('click', () => showView('dashboard'));
+  $('tab-models').addEventListener('click', () => showView('models'));
   $('tab-webui').addEventListener('click', () => showView('webui'));
+  $('m-refresh').addEventListener('click', () => loadModels(true));
+  $('m-usecase').addEventListener('change', () => loadModels(true));
+  $('m-minfit').addEventListener('change', () => loadModels(true));
   $('open-webui-cta').addEventListener('click', () => showView('webui'));
   $('clear-logs').addEventListener('click', () => { $('logs').textContent = ''; });
   $('theme').addEventListener('click', () =>
