@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# Launch the built NixOS bundle (dist/bundle/plan-ai-nixos-x64/plan-ai) under
-# xvfb with a fresh extraction cache, and assert the dashboard renders. Exercises
-# the full path: nixpkgs electron -> in-app component loader (extract runtime +
-# ollama, patchelf ollama) -> supervise ollama + open-webui.
+# Launch the LINUX bundle on this (NixOS) host under xvfb with a fresh extraction
+# cache, and assert the dashboard renders. There's no separate NixOS bundle: the
+# linux-x64 artifact ships the FHS helper closure, and the static-musl launcher
+# detects NixOS, extracts the components, and FHS-reexecs so the generic
+# electron/ollama run. Exercises the full path: rust launcher -> control plane
+# (ollama + open-webui) -> localhost SPA -> thin electron.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-DIR="$DIST_DIR/bundle/plan-ai-nixos-x64"
-[ -x "$DIR/plan-ai" ] || die "nixos bundle missing — run: make nixos"
+OUT="$DIST_DIR/bundle"
+LAUNCHER="$OUT/plan-ai.linux.exe"
+[ -x "$LAUNCHER" ] || die "linux bundle missing — run: make bundle TARGET=linux-x64"
+[ -f "$OUT/components/manifest.json" ] || die "components/ missing beside the launcher — run: make components bundle TARGET=linux-x64"
 SHOT="${1:-/tmp/nixos-dash.png}"; rm -f "$SHOT"
 
 export PLANAI_CAPTURE="$SHOT" PLANAI_CAPTURE_DELAY="${PLANAI_CAPTURE_DELAY:-50000}"
 export PLANAI_CACHE; PLANAI_CACHE="$(mktemp -d)/cache"   # fresh extraction this run
 
-log "launching nixos bundle (PLANAI_CACHE=$PLANAI_CACHE)"
-xvfb-run -a -s "-screen 0 1400x900x24" "$DIR/plan-ai" >/tmp/nixos-run.log 2>&1 || true
+log "launching linux bundle on NixOS (PLANAI_CACHE=$PLANAI_CACHE)"
+xvfb-run -a -s "-screen 0 1400x900x24" "$LAUNCHER" >/tmp/nixos-run.log 2>&1 || true
 
 if [ -s "$SHOT" ]; then
-  log "nixos bundle screenshot -> $SHOT ($(stat -c%s "$SHOT") bytes)"
+  log "screenshot -> $SHOT ($(stat -c%s "$SHOT") bytes)"
   log "extracted into cache:"; ls "$PLANAI_CACHE/root/dist" 2>/dev/null | sed 's/^/    /'
 else
   warn "no screenshot — run log:"; tail -20 /tmp/nixos-run.log
-  die "nixos bundle did not render"
+  die "linux bundle did not render on NixOS"
 fi
 rm -rf "$(dirname "$PLANAI_CACHE")"

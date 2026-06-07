@@ -46,9 +46,9 @@ if [ ! -x "$DEVVENV/bin/python" ]; then
   VIRTUAL_ENV="$DEVVENV" uv pip install --python "$DEVVENV" "$WHEEL"
 fi
 
-# 4. app deps + tailwind css
+# 4. thin Electron shell deps (dev uses the nixpkgs electron; the SPA is built +
+# embedded into the rust launcher by run-nixos.sh's `nix build .#launcher-*`).
 [ -d "$REPO_ROOT/app/node_modules" ] || ( cd "$REPO_ROOT/app" && npm ci )
-( cd "$REPO_ROOT/app" && npm run css >/dev/null )
 
 # 5. stage resources into dist/ (paths.js dev layout)
 step "stage resources into dist/"

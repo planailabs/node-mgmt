@@ -23,12 +23,12 @@ phase "lint"
 for s in "$REPO_ROOT"/scripts/*.sh; do
   bash -n "$s" && ok "syntax $(basename "$s")" || bad "syntax $(basename "$s")"
 done
-for j in "$APP"/main/*.js "$APP"/renderer/app.js; do
+for j in "$APP"/main/*.js; do
   node -c "$j" 2>/dev/null && ok "node -c $(basename "$j")" || bad "node -c $(basename "$j")"
 done
 jq -e . "$REPO_ROOT/usb.lock" >/dev/null 2>&1 && ok "usb.lock valid json" || bad "usb.lock json"
-( cd "$APP" && npm run css >/dev/null 2>&1 ) && [ -s "$APP/renderer/tailwind.css" ] \
-  && ok "tailwind css builds" || bad "tailwind css"
+# SPA dashboard: assert the embedded build is present (built via `make spa`).
+[ -s "$REPO_ROOT/launcher/spa/index.html" ] && ok "SPA embedded (launcher/spa)" || bad "SPA missing — run 'make spa'"
 
 phase "runtime"
 # Stage the dev runtime if absent (idempotent; builds wheel/venv on first run).

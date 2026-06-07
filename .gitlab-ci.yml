@@ -26,7 +26,8 @@ lint:
   stage: lint
   script:
     - nix develop --command bash -c 'for s in scripts/*.sh; do bash -n "$s"; done'
-    - nix develop --command bash -c 'cd app && npm ci && for f in main/*.js renderer/app.js; do node -c "$f"; done && npm run css'
+    - nix develop --command bash -c 'cd app && npm ci && for f in main/*.js; do node -c "$f"; done'
+    - nix develop --command bash -c 'nix build .#spa'
 
 .fetch: &fetch
   - nix develop --command ./scripts/download-openwebui.sh

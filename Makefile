@@ -17,11 +17,14 @@ endif
 # mac-x64 (Intel) is omitted: modern Python wheels (torch, brotlicffi, …) ship
 # macOS arm64-only, so an x86_64-darwin cross-install is unsatisfiable. Apple
 # Silicon (mac-arm64) is the supported macOS target.
+# NixOS is not a separate target: the linux-x64 bundle ships the FHS helper
+# closure and the static-musl launcher FHS-reexecs on NixOS, so one linux build
+# runs everywhere (incl. NixOS). `make dev` covers local NixOS iteration.
 TARGETS := linux-x64 win-x64 mac-arm64
-ALLTGTS := $(TARGETS) nixos-x64
+ALLTGTS := $(TARGETS)
 
 .PHONY: all dev download download-curl vendor-lock update ollama openwebui wheel \
-        runtime runtimes app components bundle bundles nixos image seed test \
+        runtime runtimes app spa components bundle bundles image seed test \
         test-usb test-vm test-nixos test-clean test-all clean help
 
 all: download wheel app runtimes components bundles image ## build EVERY target (mac/win/linux/nixos) + image
@@ -34,9 +37,6 @@ components: ## pack modular component archives (runtimes + all ollama flavours +
 
 bundles: ## package every target from the components
 	@for t in $(ALLTGTS); do $(MAKE) --no-print-directory bundle TARGET=$$t; done
-
-nixos: ## build just the NixOS target (runtime + components + bundle)
-	$(MAKE) runtime TARGET=nixos-x64 && $(MAKE) components && $(MAKE) bundle TARGET=nixos-x64
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
@@ -63,8 +63,11 @@ wheel: ## build open-webui frontend+wheel + prefetch offline assets
 runtime: ## relocatable python runtime for TARGET
 	./scripts/make-runtime.sh $(TARGET)
 
-app: ## install app deps + build tailwind css
-	cd app && npm ci && npm run css
+app: ## install the thin Electron shell deps
+	cd app && npm ci
+
+spa: ## build the Dioxus SPA dashboard into launcher/spa/ (nix build .#spa)
+	./scripts/build-spa.sh
 
 bundle: ## package single-file artifact for TARGET
 	./scripts/bundle.sh $(TARGET)

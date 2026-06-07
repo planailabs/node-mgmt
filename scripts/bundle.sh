@@ -80,7 +80,6 @@ copy_comps_into() {  # <components-dir> <tools-parent-dir>
 
 exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
 [ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci )
-( cd "$APP" && npm run css )
 mkdir -p "$OUT"
 
 # ---------------------------------------------------------------------------
@@ -262,42 +261,12 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   log "mac bundle -> $OUT/plan.ai.app (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"
 }
 
-package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node loader)
-  [ -n "${ELECTRON_OVERRIDE_DIST_PATH:-}" ] || die "run in 'nix develop'"
-  local ELECTRON_BIN="$ELECTRON_OVERRIDE_DIST_PATH/electron"
-  [ -x "$ELECTRON_BIN" ] || die "nix electron not at $ELECTRON_BIN"
-  need patchelf; local PATCHELF_DIR; PATCHELF_DIR="$(dirname "$(command -v patchelf)")"
-  local DIR="$OUT/plan-ai-nixos-x64"; rm -rf "$DIR"; mkdir -p "$DIR/app" "$DIR/components"
-  # app + its production node_modules (tar, for the loader)
-  cp -a "$APP/main" "$APP/renderer" "$APP/package.json" "$DIR/app/"
-  cp -a "$APP/node_modules" "$DIR/app/node_modules"
-  # nixos stays self-contained (a dir bundle): its squashfs components + static
-  # unsquashfs live inside the dir (the loader force-extracts on NixOS; no FUSE).
-  copy_comps_into "$DIR/components" "$DIR/tools"
-  mkdir -p "$DIR/models" "$DIR/data"
-  cat > "$DIR/plan-ai" <<EOF
-#!/bin/sh
-# plan.ai NixOS launcher: nixpkgs Electron + the in-app component loader, which
-# extracts the right ollama flavour + the nix runtime and patchelf's ollama to
-# the nix loader (PLANAI_NIX_LD). Requires a nix store (paths baked below).
-here=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-export PLANAI_COMPONENTS="\$here/components"
-export PLANAI_MOUNT_TOOLS="\$here/tools/bin"   # static unsquashfs for the loader
-export PLANAI_PORTABLE_ROOT="\${PLANAI_PORTABLE_ROOT:-\$here}"
-export PLANAI_CHILD_LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH}"
-export PLANAI_NIX_LD="${NIX_LD}"
-export PLANAI_NIX_LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH}"
-export PATH="${PATCHELF_DIR}:\$PATH"   # patchelf for the loader's ollama fixup
-exec "${ELECTRON_BIN}" "\$here/app" --no-sandbox "\$@"
-EOF
-  chmod +x "$DIR/plan-ai"
-  need zstd; need tar
-  ( cd "$OUT" && tar -cf - plan-ai-nixos-x64 | zstd -q -19 -T0 -o "plan-ai-$VERSION-nixos-x64.tar.zst" -f )
-  log "nixos bundle -> $DIR (./plan-ai) + $OUT/plan-ai-$VERSION-nixos-x64.tar.zst"
-}
+# NixOS has no separate bundle: the linux-x64 artifact ships the FHS helper
+# closure (emit_nixos_fhs) and the static-musl launcher FHS-reexecs on NixOS, so
+# the regular linux build runs there too. `make dev` covers local NixOS dev.
 
 case "$TARGET" in
-  nixos-*)       package_nixos ;;
   linux-*|win-*) package_electron_builder ;;
   mac-*)         package_mac ;;
+  *)             die "unknown TARGET '$TARGET' (expected linux-x64 | win-x64 | mac-arm64)" ;;
 esac

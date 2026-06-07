@@ -37,7 +37,6 @@ if [ -n "${NIX_LD:-}" ]; then
   while IFS= read -r p; do patch_generic_elf "$p"; done < <(find "$DIST_DIR/runtime" -type f -name 'python3*' 2>/dev/null)
 fi
 
-[ -f "$APP/renderer/tailwind.css" ] || ( cd "$APP" && npm run css )
 
 # Pass nix libs to the CHILDREN only (Open-WebUI's native wheels, ollama runners).
 # Do NOT set LD_LIBRARY_PATH for electron itself — mixing foreign libs into the

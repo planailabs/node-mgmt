@@ -9,8 +9,6 @@
 // It assembles <cache>/dist/{runtime,ollama,ow-assets}, exports PLANAI_RESOURCES,
 // launches the bundled Electron app, waits, and tears the mounts down on exit.
 // (The Electron-side loader becomes a no-op when PLANAI_RESOURCES is already set.)
-use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -690,10 +688,32 @@ fn main() {
         }
     };
 
-    // Supervise Electron (so we can tear the mounts down on exit), forwarding the
-    // environment and user args.
-    let mut env: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
-    let _ = &mut env;
+    // Rust control plane (phase 5): start the supervisor + register ollama +
+    // open-webui, then serve the embedded Dioxus SPA + control API over
+    // localhost. Electron becomes a thin webview that loads PLANAI_UI_URL — the
+    // node supervisor/loader/renderer are gone. The server tasks run on this
+    // runtime (kept alive for the whole electron session).
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => { log(&format!("runtime: {e}")); teardown(&mounts); std::process::exit(1); }
+    };
+    let socket = supervisor_socket_path();
+    let self_exe = exe.clone();
+    rt.block_on(async {
+        match control::start_stack(&self_exe, &socket).await {
+            Ok(client) => {
+                let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
+                match serve::run_server(client, port).await {
+                    Ok(url) => { std::env::set_var("PLANAI_UI_URL", &url); log(&format!("UI server on {url}")); }
+                    Err(e) => log(&format!("serve: {e} — UI may be unavailable")),
+                }
+            }
+            Err(e) => log(&format!("control plane: {e} — services may be unavailable")),
+        }
+    });
+
+    // Run Electron (thin webview). It inherits the environment (incl.
+    // PLANAI_UI_URL) and user args; we tear the mounts down on exit.
     let mut cmd = Command::new(&program);
     // Dev: the nixpkgs Electron (PLANAI_ELECTRON) needs the app DIR as its first
     // arg; the bundled Electron has the app baked in, so PLANAI_ELECTRON_APP is
@@ -712,6 +732,14 @@ fn main() {
             1
         }
     };
+
+    // Stop the supervisor (it stops its managed children on shutdown), then the
+    // llmfit serve, then release the component mounts.
+    rt.block_on(async {
+        if let Ok(mut c) = mac_mgmt_services::Client::connect(&socket, std::time::Duration::from_secs(5)).await {
+            let _ = c.shutdown().await;
+        }
+    });
     if let Some(mut c) = llmfit_child {
         let _ = c.kill();
         let _ = c.wait();

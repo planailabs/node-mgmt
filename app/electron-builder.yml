@@ -10,14 +10,13 @@ directories:
   output: ../dist/bundle
   buildResources: build
 
-# Only the app code is packed — a BARE launcher. The heavy payload (ollama, the
-# python runtime, offline assets) ships OUTSIDE the artifact as a shared
-# components/ dir beside the launcher on the USB; the loader (main/loader.js)
-# finds it next to the AppImage/exe (or via PLANAI_COMPONENTS). This keeps each
-# launcher small and lets all platforms share one copy of the components.
+# Only the thin Electron shell is packed. The rust launcher prepares the runtime,
+# runs the control plane, and serves the Dioxus SPA over localhost; Electron just
+# loads PLANAI_UI_URL. The heavy payload (ollama, the python runtime, offline
+# assets) ships OUTSIDE the artifact as a shared components/ dir the launcher
+# mounts. This keeps each launcher small and lets all platforms share components.
 files:
   - main/**/*
-  - renderer/**/*
   - package.json
 
 # Single-file artifacts per OS.

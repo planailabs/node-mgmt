@@ -33,6 +33,12 @@ pub fn Dashboard() -> Element {
     let logs = state.logs.read().clone();
     let webui_ready = state.ready("webui");
 
+    // Keep the log tail pinned to the bottom as new lines stream in.
+    use_effect(move || {
+        let _ = state.logs.read().len();
+        document::eval("var e=document.getElementById('logs'); if(e){e.scrollTop=e.scrollHeight;}");
+    });
+
     let control = move |path: String| {
         spawn(async move {
             let _ = api::post_action(&path).await;
@@ -140,7 +146,7 @@ pub fn Dashboard() -> Element {
                         "clear"
                     }
                 }
-                pre { class: "log-output", "{logs}" }
+                pre { id: "logs", class: "log-output", "{logs}" }
             }
 
             if services.is_empty() {
