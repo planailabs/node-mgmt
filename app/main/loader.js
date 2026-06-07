@@ -64,14 +64,22 @@ function mountTools() {
   return { squashfuse: find('squashfuse_ll'), unsquashfs: find('unsquashfs') };
 }
 
+function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
+
 // the single runtime component shipped in this bundle (one per OS), by base name
 function runtimeBase(comp) {
-  const m = fs.readdirSync(comp).find((f) => /^runtime-.*\.(squashfs|tar\.gz|dmg)$/.test(f));
-  return m ? m.replace(/\.(squashfs|tar\.gz|dmg)$/, '') : null;
+  const list = fs.readdirSync(comp);
+  const f = list.find((x) => /^runtime-.*\.(squashfs|tar\.gz|dmg)$/.test(x))
+         || list.find((x) => /^runtime-/.test(x) && isDir(path.join(comp, x))); // windows: pre-extracted dir
+  return f ? f.replace(/\.(squashfs|tar\.gz|dmg)$/, '') : null;
 }
 
-// pick the on-disk component file for a base name, preferring mountable formats
+// pick the on-disk component for a base name. A pre-extracted DIRECTORY (windows:
+// no archive — used in place; a plain dir needs no special FAT32 flags) wins;
+// otherwise the mountable/archived formats in OS preference order.
 function componentFile(comp, base) {
+  const dir = path.join(comp, base);
+  if (isDir(dir)) return { file: dir, ext: '/dir' };
   const order = process.platform === 'darwin'
     ? ['.dmg', '.squashfs', '.tar.gz']
     : ['.squashfs', '.dmg', '.tar.gz'];
@@ -99,7 +107,8 @@ function libPresent(names) {
 // ROCm runtime libs are installed — otherwise that build crashes on launch.
 function detectOllama(comp) {
   const list = fs.readdirSync(comp);
-  const has = (key) => list.some((f) => new RegExp(`^ollama-${key}\\.(squashfs|tar\\.gz|dmg)$`).test(f));
+  const has = (key) => list.some((f) => new RegExp(`^ollama-${key}\\.(squashfs|tar\\.gz|dmg)$`).test(f))
+    || isDir(path.join(comp, `ollama-${key}`)); // windows: pre-extracted dir
   const base = (key) => (has(key) ? `ollama-${key}` : null);
   const checks = [];
   const add = (key, usable, why) => checks.push({ flavour: key, bundled: has(key), usable, why });
@@ -214,6 +223,20 @@ function provide(comp, base, dest, root, log, opts = {}) {
   if (!found) throw new Error('component not found: ' + base);
   const { file, ext } = found;
   const tools = mountTools();
+  if (ext === '/dir') {
+    // pre-extracted on the USB (windows): use IN PLACE — a directory junction
+    // (windows, no admin) / symlink (posix) to the component dir. No copy, no
+    // extraction, and FAT32 needs no special flags for a plain directory.
+    try {
+      try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ignore */ }
+      fs.symlinkSync(file, dest, process.platform === 'win32' ? 'junction' : 'dir');
+      log(`linked ${base} (pre-extracted dir)`);
+    } catch (e) {
+      log(`link ${base} failed (${e.message.split('\n')[0]}) — copying`);
+      fs.cpSync(file, dest, { recursive: true });
+    }
+    return;
+  }
   if (ext === '.squashfs') {
     if (!opts.forceExtract && tryMountSquashfs(file, dest, tools, log)) { log(`mounted ${base} (squashfs)`); return; }
     log(`extracting ${base} (squashfs)`);

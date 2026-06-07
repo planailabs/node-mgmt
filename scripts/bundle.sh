@@ -41,16 +41,20 @@ case "$TARGET" in
 esac
 # Component FORMAT this OS's loader consumes (it picks this from the shared pool):
 #   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
-#   windows     = tar.gz   ;   macOS = dmg (hdiutil mount, verified on real macOS)
+#   macOS = dmg (hdiutil mount)  ;  windows = dir (pre-extracted, used in place)
 case "$TARGET" in
   linux-*|nixos-*) FMTS="squashfs"; MOUNTABLE=1 ;;
-  win-*)           FMTS="tar.gz";   MOUNTABLE=0 ;;
+  win-*)           FMTS="dir";      MOUNTABLE=0 ;;
   mac-*)           FMTS="dmg";      MOUNTABLE=0 ;;
   *)               FMTS="tar.gz";   MOUNTABLE=0 ;;
 esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
-[ -f "$COMP_SRC/runtime-$TARGET.${FMTS%% *}" ] || die "missing runtime component runtime-$TARGET.${FMTS%% *} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
+# a component exists in this OS's format as a FILE (base.ext) or a DIR (windows)
+comp_present() { local base="$1" e; for e in $FMTS; do
+  case "$e" in dir) [ -d "$COMP_SRC/$base" ] && return 0 ;; *) [ -f "$COMP_SRC/$base.$e" ] && return 0 ;; esac
+done; return 1; }
+comp_present "runtime-$TARGET" || die "missing runtime component for $TARGET ($FMTS) in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
 
 # Components ship OUTSIDE the launcher as a SHARED pool beside it (not embedded),
 # so each launcher stays small and all platforms share one copy on the USB. The
@@ -59,7 +63,10 @@ COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BA
 copy_comps_into() {  # <components-dir> <tools-parent-dir>
   local cdst="$1" tdst="$2" base ext; mkdir -p "$cdst"
   for base in $COMP_BASES; do for ext in $FMTS; do
-    [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true
+    case "$ext" in
+      dir) [ -d "$COMP_SRC/$base" ] && { rm -rf "$cdst/$base"; cp -a "$COMP_SRC/$base" "$cdst/"; } || true ;;
+      *)   [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true ;;
+    esac
   done; done
   [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
   if [ "$MOUNTABLE" = 1 ]; then

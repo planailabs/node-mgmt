@@ -46,21 +46,27 @@ emit_dmg() {
   sudo cp -a "$dir/." "$mnt/" && sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
   log "+ $name.dmg ($(du -h "$img" | cut -f1)) [hfsplus]"
 }
-# <srcdir> <name> <fmt...>   fmt in {gz,sqfs,dmg}
+# windows: ship the component PRE-EXTRACTED as a plain directory. The win pbs
+# tree has no symlinks/special perms, so it lives on FAT32 with no special flags
+# and the loader uses it IN PLACE (no first-launch extraction, no mount tooling).
+emit_dir() { rm -rf "$OUT/$2"; mkdir -p "$OUT/$2"; cp -a "$1/." "$OUT/$2/"
+  log "+ $2/ (dir, $(du -sh "$OUT/$2" | cut -f1))"; }
+# <srcdir> <name> <fmt...>   fmt in {gz,sqfs,dmg,dir}
 emit() { local dir="$1" name="$2"; shift 2; local f
   for f in "$@"; do case "$f" in
     gz)   emit_gz "$dir" "$name" ;;
     sqfs) emit_sqfs "$dir" "$name" ;;
     dmg)  emit_dmg "$dir" "$name" || { [ -f "$OUT/$name.tar.gz" ] || emit_gz "$dir" "$name"; } ;;
+    dir)  emit_dir "$dir" "$name" ;;
   esac; done; }
 # which formats a component name ships in (drives the per-OS bundle staging).
-# mac ships dmg ONLY (mounted via hdiutil, verified on real macOS) — no tar.gz
-# fallback, which would ~double the bundle (raw HFS+ dmgs are uncompressed).
+#   linux/nixos = squashfs (mounted/extracted) ; macOS = dmg (hdiutil mount) ;
+#   windows = pre-extracted dir (used in place). No .tar.gz is produced anymore.
 fmts_for() { case "$1" in
-  *linux-*|*nixos-*) echo sqfs ;;        # mounted/extracted via squashfuse/unsquashfs
-  *windows-*|*win-*) echo gz ;;
+  *linux-*|*nixos-*) echo sqfs ;;
+  *windows-*|*win-*) echo dir ;;
   *darwin*|*mac-*)   echo dmg ;;
-  ow-assets)         echo "sqfs gz dmg" ;; # shared by every OS (linux/win/mac)
+  ow-assets)         echo "sqfs dmg dir" ;; # shared: linux(sqfs) mac(dmg) win(dir)
   *)                 echo gz ;;
 esac; }
 

@@ -52,7 +52,9 @@ check_size() { local f; for f in "$@"; do [ -f "$f" ] || continue
   [ "$sz" -le "$FOURGIB" ] || die "$(basename "$f") = $((sz/1024/1024))MB exceeds FAT32's 4 GiB/file limit"
 done; }
 check_size "${FILES[@]}"
-shopt -s nullglob; check_size "$POOL"/*; shopt -u nullglob
+# every file in the shared pool too (recurse — windows components are directories)
+big="$(find "$POOL" -type f -size +"${FOURGIB}c" 2>/dev/null | head -1)"
+[ -z "$big" ] || die "$(basename "$big") = $(( $(stat -c%s "$big")/1024/1024 ))MB exceeds FAT32's 4 GiB/file limit"
 
 MODELS="$REPO_ROOT/models"
 HAVE_MODELS=no; [ -d "$MODELS" ] && [ -n "$(ls -A "$MODELS" 2>/dev/null)" ] && HAVE_MODELS=yes
