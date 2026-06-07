@@ -15,6 +15,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod config;
+mod control;
+mod paths;
+
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
 const UNSQUASHFS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unsquashfs"));
@@ -518,13 +522,41 @@ fn run_supervisor(socket: &Path) -> ! {
     }
 }
 
+/// `plan-ai serve-stack`: drive the rust control plane standalone (spawn the
+/// supervisor + register ollama + open-webui, wait for health, report, shut down).
+/// A smoke test of the control plane; the live wiring lands with the thin Electron.
+fn run_serve_stack() -> ! {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => { log(&format!("control runtime: {e}")); std::process::exit(1); }
+    };
+    let code = rt.block_on(async {
+        let self_exe = std::env::current_exe().expect("current_exe");
+        let socket = supervisor_socket_path();
+        let mut client = match control::start_stack(&self_exe, &socket).await {
+            Ok(c) => c,
+            Err(e) => { log(&format!("control: {e}")); return 1; }
+        };
+        log("control: services registered; waiting for health (≤120s)…");
+        let (ollama, webui) = control::await_healthy(std::time::Duration::from_secs(120)).await;
+        log(&format!("control: ollama={ollama} open-webui={webui}"));
+        let _ = client.shutdown().await;
+        if ollama && webui { 0 } else { 1 }
+    });
+    std::process::exit(code);
+}
+
 fn main() {
-    // Subcommand: run the supervisor (a re-invocation of this same binary).
+    // Subcommands (re-invocations of this same binary):
     {
         let mut a = std::env::args_os().skip(1);
-        if a.next().as_deref() == Some(std::ffi::OsStr::new("supervisor")) {
-            let socket = a.next().map(PathBuf::from).unwrap_or_else(supervisor_socket_path);
-            run_supervisor(&socket);
+        match a.next().as_deref().and_then(|s| s.to_str()) {
+            Some("supervisor") => {
+                let socket = a.next().map(PathBuf::from).unwrap_or_else(supervisor_socket_path);
+                run_supervisor(&socket);
+            }
+            Some("serve-stack") => run_serve_stack(),
+            _ => {}
         }
     }
 
