@@ -133,23 +133,28 @@ fn detect_ollama(comp: &Path) -> Option<(String, String)> {
     None
 }
 
+// The shared pool may hold every platform's runtime; pick the one in THIS OS's
+// format (linux=squashfs, mac=dmg, windows=pre-extracted dir).
 fn runtime_base(comp: &Path) -> Option<String> {
-    let mut dirs: Vec<String> = Vec::new();
     for ent in fs::read_dir(comp).ok()?.flatten() {
         let n = ent.file_name().to_string_lossy().into_owned();
         if !n.starts_with("runtime-") {
             continue;
         }
-        for e in [".squashfs", ".tar.gz", ".dmg"] {
-            if n.ends_with(e) {
-                return Some(n.trim_end_matches(e).to_string());
-            }
-        }
+        #[cfg(target_os = "windows")]
         if ent.path().is_dir() {
-            dirs.push(n);
+            return Some(n);
+        }
+        #[cfg(target_os = "macos")]
+        if n.ends_with(".dmg") {
+            return Some(n.trim_end_matches(".dmg").to_string());
+        }
+        #[cfg(target_os = "linux")]
+        if n.ends_with(".squashfs") {
+            return Some(n.trim_end_matches(".squashfs").to_string());
         }
     }
-    dirs.into_iter().next()
+    None
 }
 
 /// Write an embedded tool to `dir` once and return its path (linux only).

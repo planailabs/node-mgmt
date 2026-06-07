@@ -66,11 +66,17 @@ function mountTools() {
 
 function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 
-// the single runtime component shipped in this bundle (one per OS), by base name
+// the runtime for THIS OS, by base name. The shared pool may hold several
+// platforms' runtimes, so pick by this OS's format (mac=dmg, win=dir, else squashfs).
 function runtimeBase(comp) {
   const list = fs.readdirSync(comp);
-  const f = list.find((x) => /^runtime-.*\.(squashfs|tar\.gz|dmg)$/.test(x))
-         || list.find((x) => /^runtime-/.test(x) && isDir(path.join(comp, x))); // windows: pre-extracted dir
+  if (process.platform === 'win32') {
+    const d = list.find((x) => /^runtime-/.test(x) && isDir(path.join(comp, x)));
+    return d || null;
+  }
+  const ext = process.platform === 'darwin' ? '.dmg' : '.squashfs';
+  const f = list.find((x) => x.startsWith('runtime-') && x.endsWith(ext))
+         || list.find((x) => /^runtime-.*\.tar\.gz$/.test(x)); // legacy fallback
   return f ? f.replace(/\.(squashfs|tar\.gz|dmg)$/, '') : null;
 }
 
