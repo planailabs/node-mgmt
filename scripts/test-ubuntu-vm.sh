@@ -138,7 +138,8 @@ incus exec "$VM" -- bash -c '
   echo "--- run.log tail ---"; tail -30 /root/run.log
   kill "$APP" 2>/dev/null; sleep 1; pkill -f plan-ai.AppImage 2>/dev/null || true
   ls -l /root/shot.png 2>/dev/null || echo "no screenshot (best-effort)"
-' 2>&1 | sed 's/^/    /'
+  true   # teardown kill must not propagate a non-zero exit
+' 2>&1 | sed 's/^/    /' || true
 
 incus file pull "$VM/root/run.log" /tmp/ubuntu-run.log 2>/dev/null || true
 incus file pull "$VM/root/shot.png" "$SHOT" 2>/dev/null && [ -s "$SHOT" ] \
