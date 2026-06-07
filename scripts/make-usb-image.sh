@@ -6,11 +6,13 @@
 #
 # Usage: scripts/make-usb-image.sh [out.img] [--size-mb N] [--label NAME]
 #
-# Layout (everything at the image root so each artifact finds the shared
-# models/ + data/ via its own USB-relative path resolution):
-#   /plan-ai-<ver>-linux-x86_64.AppImage
-#   /plan-ai-<ver>-win-x64.zip
-#   /plan-ai-<ver>-mac-<arch>.zip
+# Layout (everything at the image root; the bare launchers find the SHARED
+# components/ + tools/ beside them, and models/ + data/ via USB-relative paths):
+#   /plan-ai-<ver>-linux-x86_64.AppImage   (bare launcher)
+#   /plan-ai-<ver>-win-x64.zip             (bare; extract beside components/)
+#   /plan-ai-<ver>-mac-<arch>.zip          (bare .app; unzip beside components/)
+#   /components/   shared component pool (one copy for all platforms)
+#   /tools/        static squashfuse/unsquashfs (linux mount)
 #   /models/   /data/   /README.txt
 #
 # No root required: formatted with mkfs.vfat, populated with mtools (mcopy).
@@ -39,19 +41,26 @@ for f in "$BUNDLE"/*.AppImage "$BUNDLE"/plan-ai-*-win-*.zip "$BUNDLE"/plan-ai-*-
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || die "no artifacts in $BUNDLE — run scripts/bundle.sh <target> first"
 
-# FAT32 4 GiB per-file guard — the component model keeps artifacts under this.
+# the shared component pool + mount tools that ship beside the launchers
+POOL="$BUNDLE/components"; TOOLSDIR="$BUNDLE/tools"
+[ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh <target> first"
+
+# FAT32 4 GiB per-file guard — applies to launchers AND every component file.
 FOURGIB=$((4*1024*1024*1024 - 1))
-for f in "${FILES[@]}"; do
-  sz=$(stat -c%s "$f")
-  [ "$sz" -le "$FOURGIB" ] || die "$(basename "$f") = $((sz/1024/1024))MB exceeds FAT32's 4 GiB limit \
-(a GPU build with rocm? ship that artifact separately, or drop OLLAMA_FLAVOURS extras)"
-done
+check_size() { local f; for f in "$@"; do [ -f "$f" ] || continue
+  local sz; sz=$(stat -c%s "$f")
+  [ "$sz" -le "$FOURGIB" ] || die "$(basename "$f") = $((sz/1024/1024))MB exceeds FAT32's 4 GiB/file limit"
+done; }
+check_size "${FILES[@]}"
+shopt -s nullglob; check_size "$POOL"/*; shopt -u nullglob
 
 MODELS="$REPO_ROOT/models"
 HAVE_MODELS=no; [ -d "$MODELS" ] && [ -n "$(ls -A "$MODELS" 2>/dev/null)" ] && HAVE_MODELS=yes
 
 total=0
 for f in "${FILES[@]}"; do total=$((total + $(stat -c%s "$f"))); done
+total=$((total + $(du -sb "$POOL" | cut -f1)))
+[ -d "$TOOLSDIR" ] && total=$((total + $(du -sb "$TOOLSDIR" | cut -f1)))
 [ "$HAVE_MODELS" = yes ] && total=$((total + $(du -sb "$MODELS" | cut -f1)))
 [ -z "$SIZE_MB" ] && SIZE_MB=$(( total / 1048576 * 115 / 100 + 128 ))
 log "FAT32 image: $OUT  size=${SIZE_MB}MB  artifacts=${#FILES[@]}  models=$HAVE_MODELS"
@@ -74,6 +83,9 @@ your data live in /models and /data on this drive. Everything runs offline.
 EOF
 "${MC[@]}" "$README" ::/README.txt; rm -f "$README"
 for f in "${FILES[@]}"; do "${MC[@]}" "$f" ::/ ; done
+# shared component pool + mount tools (one copy, beside the launchers)
+mmd -i "$OUT" ::/components 2>/dev/null || true; "${MC[@]}" "$POOL"/* ::/components/
+[ -d "$TOOLSDIR" ] && { mmd -i "$OUT" ::/tools 2>/dev/null || true; "${MC[@]}" "$TOOLSDIR"/* ::/tools/ ; }
 if [ "$HAVE_MODELS" = yes ]; then mmd -i "$OUT" ::/models 2>/dev/null || true; "${MC[@]}" "$MODELS"/* ::/models/ ; fi
 mmd -i "$OUT" ::/data 2>/dev/null || true
 
