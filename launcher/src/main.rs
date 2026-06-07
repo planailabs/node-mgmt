@@ -93,7 +93,12 @@ fn is_nixos() -> bool {
 #[cfg(target_os = "linux")]
 fn maybe_reexec_in_fhs(comp: Option<&Path>) {
     use std::os::unix::process::CommandExt;
-    if std::env::var_os("PLANAI_FHS_REEXEC").is_some() || !is_nixos() {
+    // Skip in dev (nixpkgs Electron + staged dist/, no generic binaries to sandbox)
+    // and once already re-exec'd; only the prod NixOS path needs the FHS.
+    if std::env::var_os("PLANAI_FHS_REEXEC").is_some()
+        || std::env::var_os("PLANAI_DEV").is_some()
+        || !is_nixos()
+    {
         return;
     }
     let comp = match comp { Some(c) => c, None => return };
@@ -564,11 +569,17 @@ fn main() {
     let _ = resources;
 
     // llmfit: GPU detection (→ PLANAI_GPU_JSON for Electron) + the model-browser
-    // serve API (→ PLANAI_LLMFIT_URL, proxied by the dashboard). Best-effort.
+    // serve API (→ PLANAI_LLMFIT_URL, proxied by the dashboard). The binary comes
+    // from PLANAI_LLMFIT (dev) or the shared pool (prod). Best-effort.
     let mut llmfit_child: Option<std::process::Child> = None;
-    if let Some(comp) = comp_dir.as_ref() {
-        let tools = cache_root().join("root").join("tools");
-        if let Some(lf) = prepare_llmfit(comp, &tools) {
+    {
+        let lf = std::env::var_os("PLANAI_LLMFIT")
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .or_else(|| comp_dir.as_ref().and_then(|c| {
+                prepare_llmfit(c, &cache_root().join("root").join("tools"))
+            }));
+        if let Some(lf) = lf {
             llmfit_child = start_llmfit(&lf);
         }
     }
@@ -593,6 +604,12 @@ fn main() {
     let mut env: BTreeMap<OsString, OsString> = std::env::vars_os().collect();
     let _ = &mut env;
     let mut cmd = Command::new(&program);
+    // Dev: the nixpkgs Electron (PLANAI_ELECTRON) needs the app DIR as its first
+    // arg; the bundled Electron has the app baked in, so PLANAI_ELECTRON_APP is
+    // unset there.
+    if let Some(appdir) = std::env::var_os("PLANAI_ELECTRON_APP") {
+        cmd.arg(appdir);
+    }
     #[cfg(target_os = "linux")]
     cmd.arg("--no-sandbox"); // read-only AppImage mount can't setuid chrome-sandbox
     cmd.args(std::env::args_os().skip(1));

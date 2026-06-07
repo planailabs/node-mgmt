@@ -55,25 +55,20 @@ if [ -n "${PLANAI_SETUP_ONLY:-}" ]; then
   exit 0
 fi
 
-# llmfit: GPU detection (→ PLANAI_GPU_JSON) + the model-browser serve API
-# (→ PLANAI_LLMFIT_URL), matching the native launcher so the dev dashboard has the
-# Acceleration panel + Models tab. The musl llmfit runs on NixOS as-is. Best-effort.
-LLMFIT_PID=""
+# Drive the SAME native launcher as the shipped artifacts, in DEV mode: it does the
+# shared llmfit GPU-detect + serve (no bash reimplementation), then runs the nixpkgs
+# Electron against the source app. The dev specifics (nix-native runtime staged in
+# dist/, patchelf'd ollama, child LD libs) were prepared above; PLANAI_DEV makes the
+# launcher skip component mounting + the NixOS FHS re-exec and use these instead.
+LAUNCHER="$(cd "$REPO_ROOT" && nix build .#launcher-linux-x64 --no-link --print-out-paths 2>/dev/null)/plan-ai"
+[ -x "$LAUNCHER" ] || die "launcher build failed (nix build .#launcher-linux-x64)"
 LLMFIT="$(cd "$REPO_ROOT" && nix build .#llmfit-linux-x64 --no-link --print-out-paths 2>/dev/null)/llmfit"
-if [ -x "$LLMFIT" ]; then
-  GPU_JSON="$("$LLMFIT" system --json 2>/dev/null || true)"
-  [ -n "$GPU_JSON" ] && export PLANAI_GPU_JSON="$GPU_JSON"
-  OLLAMA_HOST="127.0.0.1:11434" "$LLMFIT" serve --host 127.0.0.1 --port 8787 >/dev/null 2>&1 &
-  LLMFIT_PID=$!
-  export PLANAI_LLMFIT_URL="http://127.0.0.1:8787"
-  log "llmfit serve (dev) on 127.0.0.1:8787"
-else
-  warn "llmfit unavailable — dev dashboard without GPU panel / Models tab"
-fi
 
-log "launching dashboard via nixpkgs electron"
-cd "$APP"
-# Not exec'd, so we can stop llmfit serve when electron exits.
-./node_modules/.bin/electron . --no-sandbox "$@"; code=$?
-[ -n "$LLMFIT_PID" ] && kill "$LLMFIT_PID" 2>/dev/null || true
-exit "$code"
+export PLANAI_DEV=1
+export PLANAI_RESOURCES="$DIST_DIR"                          # staged dev runtime/ollama/assets
+export PLANAI_ELECTRON="$ELECTRON_OVERRIDE_DIST_PATH/electron"  # nixpkgs electron
+export PLANAI_ELECTRON_APP="$APP"                            # source app dir
+[ -x "$LLMFIT" ] && export PLANAI_LLMFIT="$LLMFIT" || warn "llmfit unavailable — no GPU panel / Models tab"
+
+log "launching dashboard via the native launcher (dev mode) + nixpkgs electron"
+exec "$LAUNCHER" "$@"
