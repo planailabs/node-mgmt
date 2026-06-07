@@ -71,6 +71,19 @@ fn components_dir(here: &Path) -> Option<PathBuf> {
     None
 }
 
+/// NixOS has a bare nix-ld stub that can't run a generic glibc FHS binary, and
+/// mounting the read-only squashfs leaves no room to patchelf the bundled tools.
+/// So on NixOS we EXTRACT components (writable) instead of FUSE-mounting — the
+/// same path the node loader takes when PLANAI_NIX_LD is set. Detected via the
+/// markers NixOS always creates. (Always false off linux.)
+fn is_nixos() -> bool {
+    if std::env::var_os("PLANAI_NIX_LD").is_some() {
+        return true;
+    }
+    cfg!(target_os = "linux")
+        && (Path::new("/etc/NIXOS").exists() || Path::new("/run/current-system/sw").exists())
+}
+
 fn cache_root() -> PathBuf {
     if let Some(c) = std::env::var_os("PLANAI_CACHE") {
         return PathBuf::from(c);
@@ -381,7 +394,10 @@ fn main() {
             let tools = root.join("tools");
             let _ = fs::create_dir_all(&dist);
             // On NixOS the generic ollama needs patchelf (writable) → extract.
-            let force_extract = std::env::var_os("PLANAI_NIX_LD").is_some();
+            let force_extract = is_nixos();
+            if force_extract {
+                log("NixOS detected — extracting components (no FUSE mount)");
+            }
 
             let rt = pick_base(comp, "runtime-").unwrap_or_else(|| {
                 log("no runtime component found");

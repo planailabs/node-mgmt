@@ -24,7 +24,8 @@
 
         # rust toolchain with the cross-target std libs the launcher needs
         rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
-          targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin" "x86_64-unknown-linux-gnu" ];
+          targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
+                      "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
         };
         # native launcher (zero deps → builds offline) cross-compiled via cargo-zigbuild.
         # zigTarget may pin a glibc (e.g. ...gnu.2.17) for broad portability; outDir
@@ -105,8 +106,11 @@
           inherit linuxMountTools appimageRuntime;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
-          # linux: pin glibc 2.17 so the AppRun runs on any modern distro
-          launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-gnu.2.17"; outDir = "x86_64-unknown-linux-gnu"; };
+          # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
+          # ANY linux incl. NixOS (whose bare nix-ld stub can't run a glibc FHS
+          # binary). It autodetects NixOS at runtime and EXTRACTS components there
+          # (the generic squashfs mount/patchelf path the node loader uses).
+          launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-musl"; outDir = "x86_64-unknown-linux-musl"; };
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });
