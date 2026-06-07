@@ -30,6 +30,8 @@ ollama_repo()    { lock '.ollama.repo'; }
 ollama_version() { lock '.ollama.version'; }
 ow_repo()        { lock '.openwebui.repo'; }
 ow_version()     { lock '.openwebui.version'; }
+llmfit_repo()    { lock '.llmfit.repo'; }
+llmfit_version() { lock '.llmfit.version'; }
 py_version()     { lock '.python'; }
 pbs_release()    { lock '.pbs_release'; }
 

@@ -18,23 +18,6 @@
         "type": "github"
       }
     },
-    "llmfit": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1780841819,
-        "narHash": "sha256-9Sh523jFAT6X9aw/V9wCWHFA2q7UD+OkA7tABTMfU3U=",
-        "owner": "AlexsJones",
-        "repo": "llmfit",
-        "rev": "6c0b69701e8ec9be28a7a98bd0e94812f64a037c",
-        "type": "github"
-      },
-      "original": {
-        "owner": "AlexsJones",
-        "repo": "llmfit",
-        "rev": "6c0b69701e8ec9be28a7a98bd0e94812f64a037c",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780243769,
@@ -54,7 +37,6 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "llmfit": "llmfit",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

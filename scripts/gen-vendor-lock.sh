@@ -45,14 +45,34 @@ OW_URL="https://github.com/$OW_REPO/archive/refs/tags/$OW_TAG.tar.gz"
 log "open-webui source $OW_TAG (hashing)"
 OW_SHA="$(curl -fsSL "$OW_URL" | sha256sum | awk '{print $1}')"
 
+# --- llmfit: upstream prebuilt binaries (sha256 from sidecar .sha256 files) --
+# Cross-building llmfit hits toolchain walls (win synchronization.lib, mac libobjc),
+# so we bundle its official prebuilt binaries; flake.nix fetches these as FODs.
+LLMFIT_REPO="$(llmfit_repo)"; LLMFIT_TAG="$(llmfit_version)"
+log "llmfit $LLMFIT_REPO@$LLMFIT_TAG (prebuilt binaries)"
+llmfit_entry() {  # <target> <ext>
+  local target="$1" ext="$2" url sha
+  url="https://github.com/$LLMFIT_REPO/releases/download/${LLMFIT_TAG}/llmfit-${LLMFIT_TAG}-${target}.${ext}"
+  sha="$(curl -fsSL "${url}.sha256" 2>/dev/null | awk '{print $1}')"
+  [ -n "$sha" ] || { warn "llmfit $target: no .sha256 sidecar"; return 0; }
+  jq -nc --arg t "$target" --arg e "$ext" --arg u "$url" --arg s "$sha" \
+    '{target:$t, ext:$e, url:$u, sha256:$s}'
+}
+LLMFIT_ASSETS="$(printf '%s\n' \
+  "$(llmfit_entry x86_64-unknown-linux-musl tar.gz)" \
+  "$(llmfit_entry x86_64-pc-windows-msvc zip)" \
+  "$(llmfit_entry aarch64-apple-darwin tar.gz)" | jq -sc 'map(select(. != null and . != {}))')"
+
 jq -n \
   --arg otag "$OLLAMA_TAG" --argjson oassets "$OLLAMA_ASSETS" \
   --arg pyver "$PYVER" --arg pbs "$PBS" --argjson pbsent "$PBS_ENTRIES" \
-  --arg owtag "$OW_TAG" --arg owurl "$OW_URL" --arg owsha "$OW_SHA" '
+  --arg owtag "$OW_TAG" --arg owurl "$OW_URL" --arg owsha "$OW_SHA" \
+  --arg lftag "$LLMFIT_TAG" --argjson lfassets "$LLMFIT_ASSETS" '
 {
   ollama:    { tag: $otag, assets: $oassets },
   pbs:       { python: $pyver, release: $pbs, files: $pbsent },
-  openwebui: { tag: $owtag, url: $owurl, sha256: $owsha }
+  openwebui: { tag: $owtag, url: $owurl, sha256: $owsha },
+  llmfit:    { tag: $lftag, assets: $lfassets }
 }' > "$OUT"
 
-log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1"
+log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1 llmfit:$(jq '.llmfit.assets|length' "$OUT")"

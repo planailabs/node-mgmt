@@ -121,6 +121,20 @@ make test-all     # test-build, test-nixos, test-usb-image, test-ubuntu-vm
   fetch a different builder. Keep `app/package-lock.json` committed + in sync.
 - **Never ship a partial runtime.** `make-runtime` removes `dist/runtime/<t>` on
   failure; `build-components` skips runtimes without `open_webui`.
+- **llmfit (GPU detection + model browser).** [`llmfit`](https://github.com/AlexsJones/llmfit)
+  (MIT, rust) is bundled beside the launcher. The launcher runs `llmfit system
+  --json` to detect the GPU/VRAM/backend (passed to Electron) and `llmfit serve`
+  to back the dashboard's model browser (`/api/v1/system`, `/api/v1/models/top`,
+  `POST /api/v1/download` → ollama pull). We **bundle upstream's prebuilt binaries**
+  (not cross-built): cross-compiling it from NixOS hits walls its heavy deps need
+  — **win** wants `synchronization.lib` (parking_lot/windows-sys), **mac** wants
+  `libobjc`/the Apple SDK (objc2/sysinfo) — which zig doesn't bundle. linux uses
+  their **static-musl** build (runs anywhere incl. NixOS, like our launcher).
+  - **Pins live in `usb.lock` (`.llmfit.version`) → `vendor.lock.json`
+    (`.llmfit.assets`, url+sha256 per target) → `flake.nix` FODs** (`llmfitBin`/
+    `llmfit-{linux-x64,win-x64,mac-arm64}`). **Regenerate via `make update-locks`**
+    (→ `gen-vendor-lock.sh`, which reads each release's `.sha256` sidecar). To bump:
+    edit `usb.lock` `.llmfit.version`, run `make update-locks`, commit.
 
 ## Pitfalls that bit us
 

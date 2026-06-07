@@ -57,5 +57,28 @@
     "tag": "v0.9.6",
     "url": "https://github.com/open-webui/open-webui/archive/refs/tags/v0.9.6.tar.gz",
     "sha256": "62ee09360bf45c5c2ea5ba8bf9d43cdc85755edb0c293ab90f1a845111e0cabb"
+  },
+  "llmfit": {
+    "tag": "v0.9.30",
+    "assets": [
+      {
+        "target": "x86_64-unknown-linux-musl",
+        "ext": "tar.gz",
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "98b464373d1dac42ccd09af99cdd40f7c32f66285f86034b363f3100fec14484"
+      },
+      {
+        "target": "x86_64-pc-windows-msvc",
+        "ext": "zip",
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-x86_64-pc-windows-msvc.zip",
+        "sha256": "ecf6ed89515339e881d113edfd04637ff6fd28a0cead04eabef9f7e495ba67e6"
+      },
+      {
+        "target": "aarch64-apple-darwin",
+        "ext": "tar.gz",
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-aarch64-apple-darwin.tar.gz",
+        "sha256": "9197689f5ab566aecdaf928d779f089adce8435ebca3286cfb43c218928d6455"
+      }
+    ]
   }
 }

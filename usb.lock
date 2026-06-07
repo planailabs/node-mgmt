@@ -8,6 +8,10 @@
     "repo": "open-webui/open-webui",
     "version": "v0.9.6"
   },
+  "llmfit": {
+    "repo": "AlexsJones/llmfit",
+    "version": "v0.9.30"
+  },
   "python": "3.12.13",
   "pbs_release": "20260602",
   "targets": [
