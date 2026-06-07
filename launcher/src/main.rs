@@ -43,8 +43,9 @@ fn external_roots(here: &Path) -> Vec<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     {
-        // .../plan.ai.app/Contents/MacOS/<exe> -> the dir containing the .app
-        if let Some(p) = here.ancestors().nth(4) {
+        // here = .../plan.ai.app/Contents/MacOS  →  up 3 = the dir containing the
+        // .app (where the shared components/ pool sits beside the launcher .app).
+        if let Some(p) = here.ancestors().nth(3) {
             roots.push(p.to_path_buf());
         }
     }
