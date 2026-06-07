@@ -1,0 +1,15 @@
+[package]
+name = "plan-ai-launcher"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny native launcher: locate the shared components beside it and start the bundled Electron app (first step of moving logic to Rust)."
+
+[[bin]]
+name = "plan-ai"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

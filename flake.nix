@@ -4,17 +4,41 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # rust toolchain with cross-target std (for the native launcher, cross-built
+    # win/mac from NixOS via cargo-zigbuild). Pattern from plan-ai/mac-mgmt.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   # Thin entrypoint — the real definitions live in nix/:
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         lib = pkgs.lib;
+
+        # rust toolchain with the cross-target std libs the launcher needs
+        rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin" "x86_64-unknown-linux-gnu" ];
+        };
+        # native launcher (zero deps → builds offline) cross-compiled via cargo-zigbuild.
+        launcherFor = rustTarget:
+          pkgs.runCommand "plan-ai-launcher-${rustTarget}"
+            { nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]; }
+            ''
+              export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
+              cp -r ${./launcher}/. src && chmod -R u+w src && cd src
+              cargo zigbuild --release --offline --target ${rustTarget}
+              mkdir -p "$out"
+              for b in plan-ai plan-ai.exe; do
+                [ -f "target/${rustTarget}/release/$b" ] && cp "target/${rustTarget}/release/$b" "$out/"
+              done
+            '';
 
         vendorLock = builtins.fromJSON (builtins.readFile ./vendor.lock.json);
         vendorPkgs = import ./nix/vendor.nix { inherit pkgs lib system vendorLock; };
@@ -63,6 +87,8 @@
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
           inherit linuxMountTools;
+          launcher-win-x64 = launcherFor "x86_64-pc-windows-gnu";
+          launcher-mac-arm64 = launcherFor "aarch64-apple-darwin";
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });
