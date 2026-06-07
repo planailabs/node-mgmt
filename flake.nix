@@ -12,11 +12,10 @@
     };
     # mac-mgmt provides mac-mgmt-services (the cross-platform process supervisor the
     # launcher's control plane drives). flake=false: we consume the crate source,
-    # copied into the launcher's vendor/ at build time. git+file for local dev;
-    # switch to git+ssh://git@git.plan.ai/plan-ai/mac-mgmt once the windows-port
-    # commits are pushed.
+    # copied into the launcher's vendor/ at build time. Pinned by rev for
+    # reproducibility; bump after landing changes in mac-mgmt.
     mac-mgmt = {
-      url = "git+file:///home/maciej/plan-ai/mac-mgmt";
+      url = "git+ssh://git@git.plan.ai/plan-ai/mac-mgmt?ref=trunk&rev=ea420ee4443e91c667422bd4b368e6b763ef8e46";
       flake = false;
     };
   };

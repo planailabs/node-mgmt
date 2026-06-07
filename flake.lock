@@ -23,15 +23,17 @@
       "locked": {
         "lastModified": 1780868779,
         "narHash": "sha256-rNSBdrrUnkxhYyNLjcsapELA5sQPJhjv33mJWUffGQw=",
-        "ref": "refs/heads/trunk",
+        "ref": "trunk",
         "rev": "ea420ee4443e91c667422bd4b368e6b763ef8e46",
         "revCount": 2236,
         "type": "git",
-        "url": "file:///home/maciej/plan-ai/mac-mgmt"
+        "url": "ssh://git@git.plan.ai/plan-ai/mac-mgmt"
       },
       "original": {
+        "ref": "trunk",
+        "rev": "ea420ee4443e91c667422bd4b368e6b763ef8e46",
         "type": "git",
-        "url": "file:///home/maciej/plan-ai/mac-mgmt"
+        "url": "ssh://git@git.plan.ai/plan-ai/mac-mgmt"
       }
     },
     "nixpkgs": {
