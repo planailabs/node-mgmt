@@ -69,6 +69,7 @@ copy_comps_into() {  # <components-dir> <tools-parent-dir>
     esac
   done; done
   [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
+  copy_llmfit_into "$cdst"
   if [ "$MOUNTABLE" = 1 ]; then
     local T; T="$(cd "$REPO_ROOT" && nix build .#linuxMountTools --no-link --print-out-paths 2>/dev/null || true)"
     if [ -n "$T" ] && [ -d "$T/bin" ]; then mkdir -p "$tdst/bin"; cp -L "$T/bin/"* "$tdst/bin/"; chmod -R u+w "$tdst"
@@ -94,6 +95,25 @@ nix_launcher() {  # <flake-attr> <binary-name>
     || die "launcher build failed: .#$attr"
   [ -f "$out/$bin" ] || die "launcher $bin missing in $out"
   echo "$out/$bin"
+}
+
+# Copy the bundled llmfit binary for THIS target into the shared pool, with an
+# OS-distinct name (one pool holds every platform's copy). The launcher runs it
+# (`llmfit system --json` for GPU detect + `llmfit serve` for the model browser).
+copy_llmfit_into() {  # <pool-dir>
+  local pool="$1" attr name out bin
+  case "$TARGET" in
+    linux-*|nixos-*) attr=llmfit-linux-x64; name=llmfit-linux ;;
+    win-*)           attr=llmfit-win-x64;   name=llmfit-windows.exe ;;
+    mac-*)           attr=llmfit-mac-arm64; name=llmfit-darwin ;;
+    *) return 0 ;;
+  esac
+  out="$(cd "$REPO_ROOT" && nix build ".#$attr" --no-link --print-out-paths 2>/dev/null || true)"
+  [ -n "$out" ] || { warn "llmfit build failed for $TARGET — model browser disabled"; return 0; }
+  bin="$(find "$out" -maxdepth 1 -type f | head -1)"
+  [ -n "$bin" ] || { warn "no llmfit binary in $out"; return 0; }
+  cp -f "$bin" "$pool/$name"; chmod +x "$pool/$name" 2>/dev/null || true
+  log "llmfit -> components/$name ($(du -h "$pool/$name" | cut -f1))"
 }
 
 package_electron_builder() {  # linux AppImage / windows zip

@@ -432,6 +432,69 @@ fn electron_target(here: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The bundled llmfit binary for THIS OS, in the shared pool (OS-distinct names so
+/// one pool can hold every platform's copy).
+fn pool_llmfit(comp: &Path) -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &["llmfit-windows.exe", "llmfit.exe"]
+    } else if cfg!(target_os = "macos") {
+        &["llmfit-darwin", "llmfit"]
+    } else {
+        &["llmfit-linux", "llmfit"]
+    };
+    names.iter().map(|n| comp.join(n)).find(|p| p.exists())
+}
+
+/// Copy the pool's llmfit into the (writable) tools dir + make it executable, so it
+/// runs even off a FAT32 USB (no exec bit). Falls back to the pool path on copy fail.
+fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
+    let src = pool_llmfit(comp)?;
+    let name = if cfg!(target_os = "windows") { "llmfit.exe" } else { "llmfit" };
+    let dst = tools.join(name);
+    let _ = fs::create_dir_all(tools);
+    if fs::copy(&src, &dst).is_err() {
+        return Some(src);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
+    }
+    Some(dst)
+}
+
+const LLMFIT_PORT: &str = "8787";
+
+/// Run `llmfit system --json` (GPU/VRAM/backend) → pass the raw JSON to Electron via
+/// PLANAI_GPU_JSON (the JS side parses it), and start `llmfit serve` (model browser
+/// API the dashboard proxies). Returns the serve child so we can stop it on exit.
+fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
+    if let Ok(out) = Command::new(lf).args(["system", "--json"]).output() {
+        if out.status.success() {
+            let json = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !json.is_empty() {
+                std::env::set_var("PLANAI_GPU_JSON", json);
+                log("llmfit: GPU detected (PLANAI_GPU_JSON set)");
+            }
+        }
+    }
+    match Command::new(lf)
+        .args(["serve", "--host", "127.0.0.1", "--port", LLMFIT_PORT])
+        .env("OLLAMA_HOST", "127.0.0.1:11434")
+        .spawn()
+    {
+        Ok(child) => {
+            std::env::set_var("PLANAI_LLMFIT_URL", format!("http://127.0.0.1:{LLMFIT_PORT}"));
+            log(&format!("llmfit serve on 127.0.0.1:{LLMFIT_PORT}"));
+            Some(child)
+        }
+        Err(e) => {
+            log(&format!("llmfit serve failed to start: {e}"));
+            None
+        }
+    }
+}
+
 fn main() {
     let exe = std::env::current_exe().expect("current_exe");
     let here = exe.parent().expect("exe parent").to_path_buf();
@@ -500,6 +563,16 @@ fn main() {
     }
     let _ = resources;
 
+    // llmfit: GPU detection (→ PLANAI_GPU_JSON for Electron) + the model-browser
+    // serve API (→ PLANAI_LLMFIT_URL, proxied by the dashboard). Best-effort.
+    let mut llmfit_child: Option<std::process::Child> = None;
+    if let Some(comp) = comp_dir.as_ref() {
+        let tools = cache_root().join("root").join("tools");
+        if let Some(lf) = prepare_llmfit(comp, &tools) {
+            llmfit_child = start_llmfit(&lf);
+        }
+    }
+
     // Prefer the Electron binary inside the mounted app component; fall back to one
     // sitting beside the launcher (back-compat).
     let program = app_dir
@@ -531,6 +604,10 @@ fn main() {
             1
         }
     };
+    if let Some(mut c) = llmfit_child {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
     teardown(&mounts);
     std::process::exit(code);
 }
