@@ -8,6 +8,15 @@ description = "Tiny native launcher: locate the shared components beside it and 
 name = "plan-ai"
 path = "src/main.rs"
 
+[dependencies]
+# the supervisor/control plane (ported from app/main/*.js into rust). Sourced via
+# the `mac-mgmt` flake input, copied into vendor/ at build time (see flake.nix).
+mac-mgmt-services = { path = "vendor/mac-mgmt-services" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "net", "io-util", "sync", "signal", "fs"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [profile.release]
 opt-level = "z"
 lto = true

@@ -10,13 +10,22 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # mac-mgmt provides mac-mgmt-services (the cross-platform process supervisor the
+    # launcher's control plane drives). flake=false: we consume the crate source,
+    # copied into the launcher's vendor/ at build time. git+file for local dev;
+    # switch to git+ssh://git@git.plan.ai/plan-ai/mac-mgmt once the windows-port
+    # commits are pushed.
+    mac-mgmt = {
+      url = "git+file:///home/maciej/plan-ai/mac-mgmt";
+      flake = false;
+    };
   };
 
   # Thin entrypoint — the real definitions live in nix/:
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, mac-mgmt }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
@@ -27,9 +36,15 @@
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
                       "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
         };
-        # native launcher (zero deps → builds offline) cross-compiled via cargo-zigbuild.
-        # zigTarget may pin a glibc (e.g. ...gnu.2.17) for broad portability; outDir
-        # is the bare rust target triple cargo writes under.
+        # registry deps for the launcher's Cargo.lock (tokio, interprocess, …),
+        # vendored offline. The mac-mgmt-services path dep is supplied separately
+        # (copied from the mac-mgmt input into vendor/ in the build).
+        launcherVendor = pkgs.rustPlatform.importCargoLock {
+          lockFile = ./launcher/Cargo.lock;
+        };
+        # native launcher cross-compiled via cargo-zigbuild. It now carries deps
+        # (the control plane), so the build vendors crates.io (launcherVendor) and
+        # copies mac-mgmt-services from the mac-mgmt input into vendor/.
         launcherFor = { zigTarget, outDir }:
           pkgs.runCommand "plan-ai-launcher-${outDir}"
             {
@@ -42,6 +57,13 @@
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
+              # path dep: the standalone mac-mgmt-services crate from the input
+              rm -rf vendor && mkdir -p vendor
+              cp -r ${mac-mgmt}/mac-mgmt-services vendor/mac-mgmt-services
+              chmod -R u+w vendor
+              # crates.io deps from the vendored cargo lock
+              mkdir -p .cargo
+              printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${launcherVendor}" > .cargo/config.toml
               cargo zigbuild --release --offline --target ${zigTarget}
               mkdir -p "$out"
               for b in plan-ai plan-ai.exe; do

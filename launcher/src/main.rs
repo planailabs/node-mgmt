@@ -500,7 +500,34 @@ fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
     }
 }
 
+/// Default socket the control plane and supervisor meet on.
+fn supervisor_socket_path() -> PathBuf {
+    cache_root().join("services.sock")
+}
+
+/// `plan-ai supervisor <socket>`: run the mac-mgmt-services process supervisor
+/// (spawns + restarts + log-streams the services the control plane registers).
+fn run_supervisor(socket: &Path) -> ! {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => { log(&format!("supervisor runtime: {e}")); std::process::exit(1); }
+    };
+    match rt.block_on(mac_mgmt_services::server::run(socket)) {
+        Ok(_) => std::process::exit(0),
+        Err(e) => { log(&format!("supervisor: {e}")); std::process::exit(1); }
+    }
+}
+
 fn main() {
+    // Subcommand: run the supervisor (a re-invocation of this same binary).
+    {
+        let mut a = std::env::args_os().skip(1);
+        if a.next().as_deref() == Some(std::ffi::OsStr::new("supervisor")) {
+            let socket = a.next().map(PathBuf::from).unwrap_or_else(supervisor_socket_path);
+            run_supervisor(&socket);
+        }
+    }
+
     let exe = std::env::current_exe().expect("current_exe");
     let here = exe.parent().expect("exe parent").to_path_buf();
 
