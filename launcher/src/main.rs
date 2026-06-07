@@ -338,8 +338,12 @@ fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract
     let dmg = comp.join(format!("{base}.dmg"));
     if dmg.exists() {
         fs::create_dir_all(dest)?;
+        // Our .dmg components are bare HFS+ filesystem images built on Linux
+        // (mkfs.hfsplus), not UDIF wrappers — hdiutil needs the raw-disk-image
+        // class to recognise them ("image not recognised" otherwise).
         let ok = Command::new("hdiutil")
-            .args(["attach", "-nobrowse", "-noverify", "-mountpoint"])
+            .args(["attach", "-nobrowse", "-noverify",
+                   "-imagekey", "diskimage-class=CRawDiskImage", "-mountpoint"])
             .arg(dest)
             .arg(&dmg)
             .status()

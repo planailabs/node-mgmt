@@ -216,7 +216,8 @@ function tryMountDmg(img, dest, log) {
   fs.mkdirSync(dest, { recursive: true });
   if (isMountpoint(dest)) { mounts.push({ dest, type: 'dmg' }); return true; }
   try {
-    execFileSync('hdiutil', ['attach', '-nobrowse', '-noverify', '-mountpoint', dest, img], { stdio: 'pipe' });
+    // bare HFS+ images (mkfs.hfsplus on Linux) need the raw-disk-image class
+    execFileSync('hdiutil', ['attach', '-nobrowse', '-noverify', '-imagekey', 'diskimage-class=CRawDiskImage', '-mountpoint', dest, img], { stdio: 'pipe' });
     mounts.push({ dest, type: 'dmg' });
     return true;
   } catch (e) { log('hdiutil attach failed (' + e.message.split('\n')[0] + ')'); return false; }
