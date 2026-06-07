@@ -54,12 +54,12 @@ emit() { local dir="$1" name="$2"; shift 2; local f
     dmg)  emit_dmg "$dir" "$name" || { [ -f "$OUT/$name.tar.gz" ] || emit_gz "$dir" "$name"; } ;;
   esac; done; }
 # which formats a component name ships in (drives the per-OS bundle staging).
-# mac ships dmg (mounted via hdiutil) + tar.gz (loader's extraction fallback,
-# since dmg mounting can't be verified off a real mac).
+# mac ships dmg ONLY (mounted via hdiutil, verified on real macOS) — no tar.gz
+# fallback, which would ~double the bundle (raw HFS+ dmgs are uncompressed).
 fmts_for() { case "$1" in
   *linux-*|*nixos-*) echo sqfs ;;        # mounted/extracted via squashfuse/unsquashfs
   *windows-*|*win-*) echo gz ;;
-  *darwin*|*mac-*)   echo "dmg gz" ;;
+  *darwin*|*mac-*)   echo dmg ;;
   ow-assets)         echo "sqfs gz dmg" ;; # shared by every OS (linux/win/mac)
   *)                 echo gz ;;
 esac; }

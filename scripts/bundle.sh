@@ -47,7 +47,7 @@ esac
 case "$TARGET" in
   linux-*|nixos-*) FMT_ORDER="squashfs"; MOUNTABLE=1; STAGE_ALL=0 ;;
   win-*)           FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
-  mac-*)           FMT_ORDER="dmg tar.gz"; MOUNTABLE=0; STAGE_ALL=1 ;;
+  mac-*)           FMT_ORDER="dmg";      MOUNTABLE=0; STAGE_ALL=0 ;;  # hdiutil mount (verified); no tar.gz dup
   *)               FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
 esac
 # copy component file(s) for a base name into the staged components/. With
