@@ -84,6 +84,57 @@ fn is_nixos() -> bool {
         && (Path::new("/etc/NIXOS").exists() || Path::new("/run/current-system/sw").exists())
 }
 
+// On NixOS the generic glibc Electron/ollama can't run (bare nix-ld stub). We ship
+// a buildFHSEnv wrapper's closure as a NAR (its /nix/store paths don't exist on the
+// target); import it, then re-exec OURSELF inside the wrapper so the Electron we
+// later spawn inherits the FHS mount namespace (/lib64/ld-linux + GUI libs) and
+// runs. Guarded by PLANAI_FHS_REEXEC so the in-FHS copy proceeds normally.
+#[cfg(target_os = "linux")]
+fn maybe_reexec_in_fhs(comp: Option<&Path>) {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("PLANAI_FHS_REEXEC").is_some() || !is_nixos() {
+        return;
+    }
+    let comp = match comp { Some(c) => c, None => return };
+    let wrapper = match fs::read_to_string(comp.join("nixos-fhs.path")) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return, // no FHS helper shipped — best-effort, run bare
+    };
+    if wrapper.is_empty() {
+        return;
+    }
+    if !Path::new(&wrapper).exists() {
+        let closure = comp.join("nixos-fhs.closure");
+        if !closure.exists() {
+            log("NixOS FHS: helper closure missing — generic binaries may not run");
+            return;
+        }
+        log("NixOS FHS: importing helper closure into the nix store (first run)");
+        let f = match fs::File::open(&closure) {
+            Ok(f) => f,
+            Err(e) => { log(&format!("NixOS FHS: open closure: {e}")); return; }
+        };
+        let ok = Command::new("nix-store")
+            .arg("--import")
+            .stdin(f)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok || !Path::new(&wrapper).exists() {
+            log("NixOS FHS: import failed (untrusted nix user? nix missing?) — running bare");
+            return;
+        }
+    }
+    log("NixOS FHS: re-executing launcher inside the FHS sandbox");
+    let self_exe = std::env::current_exe().unwrap_or_default();
+    let err = Command::new(&wrapper)
+        .arg(&self_exe)
+        .args(std::env::args_os().skip(1))
+        .env("PLANAI_FHS_REEXEC", "1")
+        .exec(); // returns only on failure
+    log(&format!("NixOS FHS: exec {wrapper} failed: {err} — running bare"));
+}
+
 fn cache_root() -> PathBuf {
     if let Some(c) = std::env::var_os("PLANAI_CACHE") {
         return PathBuf::from(c);
@@ -386,6 +437,11 @@ fn main() {
     // The app component is mounted/linked here so we can run Electron from it.
     let mut app_dir: Option<PathBuf> = None;
     let comp_dir = components_dir(&here);
+
+    // On NixOS, re-exec inside the shipped FHS sandbox so the generic Electron/
+    // ollama can run (this replaces the process when it succeeds).
+    #[cfg(target_os = "linux")]
+    maybe_reexec_in_fhs(comp_dir.as_deref());
 
     if resources.is_none() {
         if let Some(comp) = comp_dir.as_ref() {

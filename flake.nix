@@ -94,6 +94,28 @@
           hash = "sha256-okGdzkdWg5WuecAf+ppaNB3TOVgTUv8QTQc1J1Qxd+U=";
         };
 
+        # NixOS FHS helper. NixOS's bare nix-ld stub can't run a generic glibc FHS
+        # binary (the bundled Electron/ollama). buildFHSEnv gives a bubblewrap
+        # sandbox that provides /lib64/ld-linux + the usual GUI/runtime libs under
+        # an FHS layout. The static-musl launcher, on NixOS, imports this env's
+        # closure (shipped as a NAR — its /nix/store paths don't exist on the
+        # target) and re-execs ITSELF inside the wrapper, so the Electron it then
+        # spawns inherits the FHS mount namespace and runs. runScript just execs
+        # its args (so `planai-fhs <launcher> <args...>` runs the launcher in-FHS).
+        nixosFhs = pkgs.buildFHSEnv {
+          name = "planai-fhs";
+          runScript = "${pkgs.writeShellScript "planai-fhs-run" ''exec "$@"''}";
+          targetPkgs = p: with p; [
+            glibc gcc-unwrapped.lib zlib
+            glib gtk3 nss nspr atk at-spi2-atk at-spi2-core cairo pango gdk-pixbuf
+            cups dbus expat libdrm libxkbcommon mesa libgbm alsa-lib
+            freetype fontconfig libGL systemd
+            xorg.libX11 xorg.libXcomposite xorg.libXcursor xorg.libXdamage
+            xorg.libXext xorg.libXfixes xorg.libXi xorg.libXrender xorg.libXtst
+            xorg.libxcb xorg.libXrandr xorg.libXScrnSaver
+          ];
+        };
+
         linuxMountTools = pkgs.runCommand "plan-ai-linux-mount-tools" { } ''
           mkdir -p "$out/bin"
           cp ${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll "$out/bin/squashfuse_ll"
@@ -103,7 +125,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime;
+          inherit linuxMountTools appimageRuntime nixosFhs;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
