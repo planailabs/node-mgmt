@@ -131,6 +131,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
   copy_comps_into "$OUT/components" "$OUT/tools"   # shared dmg pool beside the .app
   local ZIP="$OUT/plan-ai-$VERSION-$TARGET.zip"
+  rm -f "$ZIP"   # zip UPDATES an existing archive — remove so we don't keep stale content
   ( cd "$(dirname "$APPDIR")" && zip -qry "$ZIP" "$(basename "$APPDIR")" )
   log "mac bundle -> $ZIP (bare .app) + shared $OUT/components/"
 }
