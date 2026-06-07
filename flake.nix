@@ -36,7 +36,7 @@
               cargo zigbuild --release --offline --target ${rustTarget}
               mkdir -p "$out"
               for b in plan-ai plan-ai.exe; do
-                [ -f "target/${rustTarget}/release/$b" ] && cp "target/${rustTarget}/release/$b" "$out/"
+                if [ -f "target/${rustTarget}/release/$b" ]; then cp "target/${rustTarget}/release/$b" "$out/"; fi
               done
             '';
 
