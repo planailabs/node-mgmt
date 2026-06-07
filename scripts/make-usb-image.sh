@@ -6,12 +6,14 @@
 #
 # Usage: scripts/make-usb-image.sh [out.img] [--size-mb N] [--label NAME]
 #
-# Layout (everything at the image root; the bare launchers find the SHARED
-# components/ + tools/ beside them, and models/ + data/ via USB-relative paths):
-#   /plan-ai-<ver>-linux-x86_64.AppImage   (bare launcher)
-#   /plan-ai-<ver>-win-x64.zip             (bare; extract beside components/)
-#   /plan-ai-<ver>-mac-<arch>.zip          (bare .app; unzip beside components/)
-#   /components/   shared component pool (one copy for all platforms)
+# Layout (everything at the image root; the standalone launchers find the SHARED
+# components/ + tools/ beside them, and models/ + data/ via USB-relative paths).
+# The Electron app itself ships as a component (app-<os> in the pool); each tiny
+# launcher mounts/links it + the runtime/ollama/ow-assets and runs Electron:
+#   /plan-ai           linux launcher (static musl ELF; chmod +x)
+#   /plan-ai.exe       windows launcher
+#   /plan.ai.app/      macOS launcher (.app; double-clickable)
+#   /components/   shared component pool incl. app-<os> (one copy for all platforms)
 #   /tools/        static squashfuse/unsquashfs (linux mount)
 #   /models/   /data/   /README.txt
 #
@@ -37,9 +39,10 @@ BUNDLE="$DIST_DIR/bundle"
 declare -a FILES=()
 add_if() { [ -e "$1" ] && FILES+=("$1") && log "include $(basename "$1")"; }
 shopt -s nullglob
-for f in "$BUNDLE"/*.AppImage "$BUNDLE"/plan-ai-*-win-*.zip "$BUNDLE"/plan-ai-*-mac-*.zip; do add_if "$f"; done
+# the standalone launchers (the app itself rides inside components/ as app-<os>)
+for f in "$BUNDLE"/plan-ai "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan.ai.app; do add_if "$f"; done
 shopt -u nullglob
-[ "${#FILES[@]}" -gt 0 ] || die "no artifacts in $BUNDLE — run scripts/bundle.sh <target> first"
+[ "${#FILES[@]}" -gt 0 ] || die "no launchers in $BUNDLE — run scripts/bundle.sh <target> first"
 
 # the shared component pool + mount tools that ship beside the launchers
 POOL="$BUNDLE/components"; TOOLSDIR="$BUNDLE/tools"
@@ -60,7 +63,7 @@ MODELS="$REPO_ROOT/models"
 HAVE_MODELS=no; [ -d "$MODELS" ] && [ -n "$(ls -A "$MODELS" 2>/dev/null)" ] && HAVE_MODELS=yes
 
 total=0
-for f in "${FILES[@]}"; do total=$((total + $(stat -c%s "$f"))); done
+for f in "${FILES[@]}"; do total=$((total + $(du -sb "$f" | cut -f1))); done
 total=$((total + $(du -sb "$POOL" | cut -f1)))
 [ -d "$TOOLSDIR" ] && total=$((total + $(du -sb "$TOOLSDIR" | cut -f1)))
 [ "$HAVE_MODELS" = yes ] && total=$((total + $(du -sb "$MODELS" | cut -f1)))
@@ -75,13 +78,15 @@ README="$(mktemp)"
 cat > "$README" <<EOF
 plan.ai — portable offline AI (Ollama + Open-WebUI), v$VERSION
 
-Run on:
-  Linux    : ./plan-ai-$VERSION-linux-x86_64.AppImage   (chmod +x first)
-  Windows  : extract plan-ai-$VERSION-win-x64.zip, run plan.ai.exe
-  macOS    : unzip plan-ai-$VERSION-mac-*.zip, then open plan.ai.app
+Run on (each launcher mounts the matching app + runtime from /components):
+  Linux    : chmod +x ./plan-ai   then  ./plan-ai
+  Windows  : run plan-ai.exe
+  macOS    : open plan.ai.app  (or ./plan.ai.app/Contents/MacOS/plan-ai)
 
-First launch unpacks the runtime for your machine into a local cache; models and
-your data live in /models and /data on this drive. Everything runs offline.
+First launch unpacks/mounts the runtime for your machine into a local cache;
+models and your data live in /models and /data on this drive. Everything runs
+offline. (On FAT32 the unix exec bit is not stored — Linux/macOS may need a
+chmod +x on the launcher; exFAT preserves it.)
 EOF
 "${MC[@]}" "$README" ::/README.txt; rm -f "$README"
 for f in "${FILES[@]}"; do "${MC[@]}" "$f" ::/ ; done

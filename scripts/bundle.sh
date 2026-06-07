@@ -83,6 +83,19 @@ exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
 mkdir -p "$OUT"
 
 # ---------------------------------------------------------------------------
+# Cross-built RUST launcher (rust prepares the runtime, then launches Electron),
+# shipped BESIDE the Electron app. Running it mounts/links the shared components/
+# pool and sets PLANAI_RESOURCES before exec'ing the bare app — the same job the
+# in-app node loader does, but as a native entry point (parity with the linux
+# AppImage, whose AppRun already IS this launcher). Prints the built binary path.
+nix_launcher() {  # <flake-attr> <binary-name>
+  local attr="$1" bin="$2" out
+  out="$(cd "$REPO_ROOT" && nix build ".#$attr" --no-link --print-out-paths)" \
+    || die "launcher build failed: .#$attr"
+  [ -f "$out/$bin" ] || die "launcher $bin missing in $out"
+  echo "$out/$bin"
+}
+
 package_electron_builder() {  # linux AppImage / windows zip
   local EB_OS; case "$TARGET" in linux-*) EB_OS="--linux";; win-*) EB_OS="--win";; esac
   patch_eb_build_tools() {
@@ -98,37 +111,98 @@ package_electron_builder() {  # linux AppImage / windows zip
   log "electron-builder $EB_OS -> $OUT"
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
-  [ "$EB_OS" = "--linux" ] && assemble_linux_appimage
-  [ "$EB_OS" = "--win" ] && sign_windows || true
   copy_comps_into "$OUT/components" "$OUT/tools"   # shared pool beside the launcher
-  log "bundle done -> $OUT/ (bare launcher + shared components/)"
+  if [ "$EB_OS" = "--linux" ]; then
+    local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
+    emit_app_component "$UNPACK"          # -> components/app-linux-x64.squashfs
+    emit_nixos_fhs                        # -> components/nixos-fhs.{closure,path}
+    local L; L="$(nix_launcher launcher-linux-x64 plan-ai)"
+    cp -f "$L" "$OUT/plan-ai"; chmod +x "$OUT/plan-ai"
+    log "linux standalone launcher -> $OUT/plan-ai (static musl)"
+  else
+    local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
+    emit_app_component "$UNPACK"          # -> components/app-win-x64/ (used in place)
+    local L; L="$(nix_launcher launcher-win-x64 plan-ai.exe)"
+    cp -f "$L" "$OUT/plan-ai.exe"
+    sign_windows || true                  # signs the standalone launcher exe (if WIN_PFX set)
+    log "win standalone launcher -> $OUT/plan-ai.exe"
+  fi
+  log "bundle done -> $OUT/ (standalone launcher + shared components/ incl. app-$TARGET)"
 }
 
-# Wrap electron-builder's linux-unpacked into an AppImage whose AppRun is the
-# RUST launcher (rust launches Electron). An AppImage is just the type2 runtime
-# with a squashfs of the AppDir appended — no appimagetool needed.
-assemble_linux_appimage() {
-  need mksquashfs
-  local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
-  local LL RT APPDIR SQ IMG
-  LL="$(cd "$REPO_ROOT" && nix build .#launcher-linux-x64 --no-link --print-out-paths)" || die "launcher build failed"
-  RT="$(cd "$REPO_ROOT" && nix build .#appimageRuntime --no-link --print-out-paths)" || die "runtime fetch failed"
-  APPDIR="$OUT/.plan-ai.AppDir"; rm -rf "$APPDIR"; cp -a "$UNPACK" "$APPDIR"
-  cp "$LL/plan-ai" "$APPDIR/AppRun"; chmod +x "$APPDIR/AppRun"   # rust AppRun execs ./plan-ai (Electron)
-  cat > "$APPDIR/plan-ai.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=plan.ai
-Exec=AppRun
-Icon=plan-ai
-Categories=Utility;
+# Emit the Electron app itself as a component (app-$TARGET) in THIS OS's format,
+# into the shipped pool — the launcher mounts/links it and runs Electron from it
+# (parity with runtime/ollama/ow-assets). linux=squashfs, win=dir, mac=hfsplus dmg.
+emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding plan.ai.app)
+  local src="$1" name="app-$TARGET" cdst="$OUT/components"; mkdir -p "$cdst"
+  case "$FMTS" in
+    squashfs) need mksquashfs; rm -f "$cdst/$name.squashfs"
+      mksquashfs "$src" "$cdst/$name.squashfs" -comp zstd -processors "$(nproc)" -all-root -no-xattrs -noappend -quiet
+      log "app component -> $name.squashfs ($(du -h "$cdst/$name.squashfs" | cut -f1))" ;;
+    dir) rm -rf "$cdst/$name"; mkdir -p "$cdst/$name"; cp -a "$src/." "$cdst/$name/"
+      log "app component -> $name/ ($(du -sh "$cdst/$name" | cut -f1))" ;;
+    dmg) emit_hfsplus_dmg "$src" "$cdst/$name.dmg" ;;
+    *) die "no app-component format for FMTS=$FMTS" ;;
+  esac
+}
+
+# raw HFS+ image macOS mounts via hdiutil. Needs mkfs.hfsplus (hfsprogs) + sudo
+# loop mount (the dev box has both — same path build-components.sh uses for dmgs).
+emit_hfsplus_dmg() {  # <src-dir> <out.dmg>
+  need mkfs.hfsplus
+  local src="$1" img="$2" mnt sz
+  sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB overhead
+  rm -f "$img"; truncate -s "$sz" "$img"
+  mkfs.hfsplus -v PlanAI "$img" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $img"
+  mnt="$(mktemp -d)"
+  sudo mount -o loop,umask=0000 "$img" "$mnt" || die "loop-mount failed (sudo?) for $img"
+  sudo cp -a "$src/." "$mnt/"; sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
+  log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [hfsplus]"
+}
+
+# Ship the NixOS FHS helper closure (NAR) into the pool. On NixOS the static-musl
+# launcher imports it + re-execs inside the sandbox so the generic glibc Electron/
+# ollama run (NixOS's bare nix-ld stub can't run them directly).
+emit_nixos_fhs() {
+  local cdst="$OUT/components" fhs
+  command -v nix-store >/dev/null 2>&1 || { warn "no nix-store — skip NixOS FHS helper"; return 0; }
+  fhs="$(cd "$REPO_ROOT" && nix build .#nixosFhs --no-link --print-out-paths 2>/dev/null || true)"
+  [ -n "$fhs" ] || { warn "nixosFhs build failed — skip FHS helper"; return 0; }
+  log "exporting NixOS FHS closure (NAR) -> components/ (first-run import on NixOS)"
+  nix-store --export $(nix-store -qR "$fhs") > "$cdst/nixos-fhs.closure"
+  echo "$fhs/bin/planai-fhs" > "$cdst/nixos-fhs.path"
+  log "  nixos-fhs.closure ($(du -h "$cdst/nixos-fhs.closure" | cut -f1)) + nixos-fhs.path"
+}
+
+# Wrap the mac launcher binary in a tiny .app so Finder double-click works. Its
+# MacOS executable IS the rust launcher; it mounts app-mac-*.dmg from the pool and
+# runs the real Electron app from it. Signed (ad-hoc unless MAC_P12 is set).
+build_mac_launcher_app() {
+  local L; L="$(nix_launcher launcher-mac-arm64 plan-ai)"
+  local LAPP="$OUT/plan.ai.app"; rm -rf "$LAPP"
+  mkdir -p "$LAPP/Contents/MacOS" "$LAPP/Contents/Resources"
+  cp -f "$L" "$LAPP/Contents/MacOS/plan-ai"; chmod +x "$LAPP/Contents/MacOS/plan-ai"
+  cat > "$LAPP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>plan.ai</string>
+  <key>CFBundleDisplayName</key><string>plan.ai</string>
+  <key>CFBundleIdentifier</key><string>ai.plan.usb.launcher</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>plan-ai</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
 EOF
-  : > "$APPDIR/plan-ai.png"; : > "$APPDIR/.DirIcon"   # placeholders (not needed to run)
-  SQ="$(mktemp -u "$OUT/.appfs.XXXXXX.sqfs")"
-  mksquashfs "$APPDIR" "$SQ" -root-owned -noappend -comp zstd -quiet
-  IMG="$OUT/plan-ai-$VERSION-linux-x86_64.AppImage"; rm -f "$IMG"
-  cat "$RT" "$SQ" > "$IMG"; chmod +x "$IMG"; rm -rf "$SQ" "$APPDIR"
-  log "linux AppImage (rust AppRun -> Electron) -> $IMG ($(du -h "$IMG" | cut -f1))"
+  printf 'APPL????' > "$LAPP/Contents/PkgInfo"
+  if [ -n "${MAC_P12:-}" ]; then
+    rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$LAPP"
+  else rcodesign sign "$LAPP"; warn "MAC_P12 unset — launcher .app ad-hoc signed"; fi
+  rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
+  log "mac launcher .app -> $LAPP (double-clickable; runs the app-mac component)"
 }
 
 sign_windows() {  # optional Authenticode signing via osslsigncode
@@ -157,11 +231,14 @@ package_mac() {  # @electron/packager (cross) + rcodesign
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$APPDIR"
   else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable)"; fi
   rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
-  copy_comps_into "$OUT/components" "$OUT/tools"   # shared dmg pool beside the .app
-  local ZIP="$OUT/plan-ai-$VERSION-$TARGET.zip"
-  rm -f "$ZIP"   # zip UPDATES an existing archive — remove so we don't keep stale content
-  ( cd "$(dirname "$APPDIR")" && zip -qry "$ZIP" "$(basename "$APPDIR")" )
-  log "mac bundle -> $ZIP (bare .app) + shared $OUT/components/"
+  copy_comps_into "$OUT/components" "$OUT/tools"   # shared dmg pool beside the launcher
+  # The Electron .app ships as the app-mac component (a dmg holding plan.ai.app);
+  # the launcher mounts it and runs Electron from it.
+  local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"
+  emit_app_component "$STAGE"; rm -rf "$STAGE"
+  # standalone, Finder-double-clickable launcher .app sitting beside the pool.
+  build_mac_launcher_app
+  log "mac bundle -> $OUT/plan.ai.app (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"
 }
 
 package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node loader)

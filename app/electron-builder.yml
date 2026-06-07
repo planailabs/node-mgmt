@@ -32,12 +32,12 @@ linux:
   artifactName: plan-ai-${version}-linux-${arch}.${ext}
 
 win:
-  # zip needs no wine: portable/nsis targets execute the built exe under wine,
-  # which fails on the minimal nix wine prefix (missing ole32.dll). The zip is a
-  # single-file artifact users extract and run (plan.ai.exe). nsis/portable can
-  # be produced on a Windows CI runner or with a fully-initialised wine prefix.
+  # `dir` only (win-unpacked) — bundle.sh emits it as the app-win-x64 COMPONENT
+  # (a pre-extracted dir the launcher junctions in place) and ships the bare rust
+  # launcher (plan-ai.exe) standalone beside the shared components/ pool. No wine
+  # needed; nsis/portable can be produced on a Windows CI runner.
   target:
-    - zip
+    - dir
   artifactName: plan-ai-${version}-win-${arch}.${ext}
 
 mac:
