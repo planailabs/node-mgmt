@@ -31,7 +31,13 @@
         # is the bare rust target triple cargo writes under.
         launcherFor = { zigTarget, outDir }:
           pkgs.runCommand "plan-ai-launcher-${outDir}"
-            { nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]; }
+            {
+              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
+              # build.rs embeds these into the linux launcher (mounts squashfs itself,
+              # like the AppImage runtime); ignored for win/mac targets.
+              PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
+              PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
+            }
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src

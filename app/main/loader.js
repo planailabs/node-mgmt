@@ -281,6 +281,16 @@ function prepare(log = () => {}) {
       return false;
     }
   }
+  // The native rust launcher may have already prepared the runtime (mounted the
+  // component squashfs/dmg + set PLANAI_RESOURCES). If so, don't re-do it — just
+  // record the chosen ollama flavour for the dashboard.
+  if (process.env.PLANAI_RESOURCES) {
+    const comp = componentsDir();
+    if (comp) { try { lastAccel = detectOllama(comp); } catch { /* ignore */ } }
+    log('runtime prepared by native launcher (PLANAI_RESOURCES set)');
+    return true;
+  }
+
   const comp = componentsDir();
   if (!comp || !runtimeBase(comp)) return false;
 
