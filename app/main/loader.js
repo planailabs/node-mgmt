@@ -20,14 +20,27 @@ const { execFileSync } = require('child_process');
 const tar = require('tar'); // pure-JS, streams .tar.gz (no native/zstd dep)
 const { app } = require('electron');
 
+// Roots NEXT TO the launcher on the USB, where the shared components/ and
+// tools/ dirs live (so they are not embedded — and duplicated — in every app):
+//   linux AppImage : the dir containing the .AppImage file (process.env.APPIMAGE)
+//   macOS .app     : the dir containing plan.ai.app (execPath is .app/Contents/MacOS/plan.ai)
+//   windows / nixos: the dir containing the launcher (execPath / dir)
+function externalRoots() {
+  const roots = [];
+  if (process.env.APPIMAGE) roots.push(path.dirname(process.env.APPIMAGE));
+  if (process.platform === 'darwin') roots.push(path.resolve(process.execPath, '..', '..', '..', '..'));
+  roots.push(path.dirname(process.execPath));
+  return roots;
+}
+
 function componentsDir() {
   const cands = [
     process.env.PLANAI_COMPONENTS,
-    app.isPackaged ? path.join(process.resourcesPath, 'components') : null,
-    path.join(__dirname, '..', '..', 'dist', 'components'), // dev
-    path.join(path.dirname(process.execPath), 'components'),
+    ...externalRoots().map((r) => path.join(r, 'components')),       // shared, beside the launcher
+    app.isPackaged ? path.join(process.resourcesPath, 'components') : null, // embedded fallback
+    path.join(__dirname, '..', '..', 'dist', 'components'),          // dev
   ].filter(Boolean);
-  return cands.find((c) => fs.existsSync(path.join(c, 'manifest.json')) || fs.existsSync(c)) || null;
+  return cands.find((c) => fs.existsSync(path.join(c, 'manifest.json'))) || null;
 }
 
 function cacheRoot() {
@@ -41,9 +54,9 @@ function cacheRoot() {
 function mountTools() {
   const dirs = [
     process.env.PLANAI_MOUNT_TOOLS,
-    app.isPackaged ? path.join(process.resourcesPath, 'tools', 'bin') : null,
-    path.join(__dirname, '..', '..', 'dist', 'tools', 'bin'), // dev
-    path.join(path.dirname(process.execPath), 'tools', 'bin'),
+    ...externalRoots().map((r) => path.join(r, 'tools', 'bin')),       // shared, beside the launcher
+    app.isPackaged ? path.join(process.resourcesPath, 'tools', 'bin') : null, // embedded fallback
+    path.join(__dirname, '..', '..', 'dist', 'tools', 'bin'),          // dev
   ].filter(Boolean);
   const find = (n) => { for (const d of dirs) { const p = path.join(d, n); if (fs.existsSync(p)) return p; } return null; };
   return { squashfuse: find('squashfuse_ll'), unsquashfs: find('unsquashfs') };

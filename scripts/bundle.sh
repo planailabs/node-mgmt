@@ -27,7 +27,6 @@ TARGET="${1:-$(host_target)}"
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 APP="$REPO_ROOT/app"
 COMP_SRC="$DIST_DIR/components"
-STAGE="$APP/.stage/resources"
 OUT="$DIST_DIR/bundle"
 
 # runtime key + the ollama flavours this OS ships (loader picks one by arch/GPU)
@@ -40,61 +39,38 @@ case "$TARGET" in
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
-# component format(s) per OS (mirror the loader): linux/nixos ship squashfs
-# (mounted in place / extracted via squashfuse/unsquashfs); windows ships tar.gz;
-# mac ships dmg (hdiutil mount) AND tar.gz (the loader's extraction fallback,
-# since dmg mounting isn't verifiable off a real mac) — STAGE_ALL keeps both.
+# Component FORMAT this OS's loader consumes (it picks this from the shared pool):
+#   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
+#   windows     = tar.gz   ;   macOS = dmg (hdiutil mount, verified on real macOS)
 case "$TARGET" in
-  linux-*|nixos-*) FMT_ORDER="squashfs"; MOUNTABLE=1; STAGE_ALL=0 ;;
-  win-*)           FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
-  mac-*)           FMT_ORDER="dmg";      MOUNTABLE=0; STAGE_ALL=0 ;;  # hdiutil mount (verified); no tar.gz dup
-  *)               FMT_ORDER="tar.gz";   MOUNTABLE=0; STAGE_ALL=0 ;;
+  linux-*|nixos-*) FMTS="squashfs"; MOUNTABLE=1 ;;
+  win-*)           FMTS="tar.gz";   MOUNTABLE=0 ;;
+  mac-*)           FMTS="dmg";      MOUNTABLE=0 ;;
+  *)               FMTS="tar.gz";   MOUNTABLE=0 ;;
 esac
-# copy component file(s) for a base name into the staged components/. With
-# STAGE_ALL, copy every available format in FMT_ORDER (mac: dmg + tar.gz); else
-# the first match only.
-stage_comp() {  # <base>
-  local base="$1" ext found=1
-  for ext in $FMT_ORDER; do
-    [ -f "$COMP_SRC/$base.$ext" ] || continue
-    cp "$COMP_SRC/$base.$ext" "$STAGE/components/"; found=0
-    [ "$STAGE_ALL" = 1 ] || break
-  done
-  return $found
-}
-# true if a component base name exists in COMP_SRC in any of this OS's formats
-comp_exists() { local base="$1" ext; for ext in $FMT_ORDER; do [ -f "$COMP_SRC/$base.$ext" ] && return 0; done; return 1; }
-RT_BASE="runtime-$TARGET"
-comp_exists "$RT_BASE" || die "missing runtime component $RT_BASE.{${FMT_ORDER// /,}} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
+# component base names this launcher needs (loader picks the ollama flavour)
+COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
+[ -f "$COMP_SRC/runtime-$TARGET.${FMTS%% *}" ] || die "missing runtime component runtime-$TARGET.${FMTS%% *} in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
 
-# Serialize: targets share app/.stage.
-exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
-
-# --- stage the per-OS component subset --------------------------------------
-log "staging components for $TARGET (fmt: ${FMT_ORDER%% *}, ollama: $OKEYS)"
-rm -rf "$APP/.stage"; mkdir -p "$STAGE/components"
-stage_comp "$RT_BASE"
-stage_comp "ow-assets" || warn "no ow-assets component"
-[ -f "$COMP_SRC/manifest.json" ] && cp "$COMP_SRC/manifest.json" "$STAGE/components/"
-for k in $OKEYS; do
-  stage_comp "ollama-$k" || warn "no ollama-$k component"
-done
-
-# linux/nixos: ship the static squashfs tools so the loader can mount in place
-# (squashfuse_ll) and extract as a fallback (unsquashfs). macOS uses hdiutil
-# (system) and windows extracts tar.gz — neither needs bundled tools.
-if [ "$MOUNTABLE" = 1 ]; then
-  TOOLS="$(cd "$REPO_ROOT" && nix build .#linuxMountTools --no-link --print-out-paths 2>/dev/null || true)"
-  if [ -n "$TOOLS" ] && [ -d "$TOOLS/bin" ]; then
-    mkdir -p "$STAGE/tools/bin"; cp -L "$TOOLS/bin/"* "$STAGE/tools/bin/"; chmod -R u+w "$STAGE/tools"
-    log "staged mount tools: $(ls "$STAGE/tools/bin" | tr '\n' ' ')"
-  else
-    warn "linuxMountTools unavailable — loader will extract (no in-place mount)"
+# Components ship OUTSIDE the launcher as a SHARED pool beside it (not embedded),
+# so each launcher stays small and all platforms share one copy on the USB. The
+# loader (main/loader.js) finds components/ + tools/ next to the AppImage/exe/.app
+# (or via PLANAI_COMPONENTS). Copy this target's format(s) + static mount tools in.
+copy_comps_into() {  # <components-dir> <tools-parent-dir>
+  local cdst="$1" tdst="$2" base ext; mkdir -p "$cdst"
+  for base in $COMP_BASES; do for ext in $FMTS; do
+    [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true
+  done; done
+  [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
+  if [ "$MOUNTABLE" = 1 ]; then
+    local T; T="$(cd "$REPO_ROOT" && nix build .#linuxMountTools --no-link --print-out-paths 2>/dev/null || true)"
+    if [ -n "$T" ] && [ -d "$T/bin" ]; then mkdir -p "$tdst/bin"; cp -L "$T/bin/"* "$tdst/bin/"; chmod -R u+w "$tdst"
+    else warn "linuxMountTools unavailable — loader will extract"; fi
   fi
-fi
-log "staged: $(cd "$STAGE/components" && du -ch ./* | tail -1 | cut -f1) of components"
+  log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
+}
 
-# pinned app deps (runtime dep: tar; build deps: electron-builder/packager)
+exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
 [ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci )
 ( cd "$APP" && npm run css )
 mkdir -p "$OUT"
@@ -116,7 +92,8 @@ package_electron_builder() {  # linux AppImage / windows zip
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
   [ "$EB_OS" = "--win" ] && sign_windows || true
-  rm -rf "$APP/.stage"; log "bundle done -> $OUT/"
+  copy_comps_into "$OUT/components" "$OUT/tools"   # shared pool beside the launcher
+  log "bundle done -> $OUT/ (bare launcher + shared components/)"
 }
 
 sign_windows() {  # optional Authenticode signing via osslsigncode
@@ -134,9 +111,10 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   local ARCH; case "$TARGET" in mac-arm64) ARCH=arm64;; mac-x64) ARCH=x64;; esac
   local APPROOT="$OUT/mac-$ARCH"; rm -rf "$APPROOT"; mkdir -p "$APPROOT"
   log "@electron/packager mac/$ARCH"
+  # bare .app — components ship OUTSIDE it (shared pool beside the .app). --ignore
+  # keeps the (now absent) .stage and any local build cruft out of the bundle.
   ( cd "$APP" && npx --no-install @electron/packager . "plan.ai" --platform=darwin --arch="$ARCH" \
-      --out="$APPROOT" --overwrite --app-bundle-id=ai.plan.usb \
-      --extra-resource=".stage/resources/components" )
+      --out="$APPROOT" --overwrite --app-bundle-id=ai.plan.usb --ignore="(^/\.stage)" )
   local APPDIR; APPDIR="$(ls -d "$APPROOT"/plan.ai-darwin-*/plan.ai.app 2>/dev/null | head -1)"
   [ -d "$APPDIR" ] || die "packager produced no .app"
   log "rcodesign sign"
@@ -144,9 +122,10 @@ package_mac() {  # @electron/packager (cross) + rcodesign
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$APPDIR"
   else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable)"; fi
   rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
+  copy_comps_into "$OUT/components" "$OUT/tools"   # shared dmg pool beside the .app
   local ZIP="$OUT/plan-ai-$VERSION-$TARGET.zip"
   ( cd "$(dirname "$APPDIR")" && zip -qry "$ZIP" "$(basename "$APPDIR")" )
-  rm -rf "$APP/.stage"; log "mac bundle -> $ZIP"
+  log "mac bundle -> $ZIP (bare .app) + shared $OUT/components/"
 }
 
 package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node loader)
@@ -158,10 +137,9 @@ package_nixos() {  # runnable dir launched via nixpkgs electron (uses the node l
   # app + its production node_modules (tar, for the loader)
   cp -a "$APP/main" "$APP/renderer" "$APP/package.json" "$DIR/app/"
   cp -a "$APP/node_modules" "$DIR/app/node_modules"
-  cp -a "$STAGE/components"/. "$DIR/components/"
-  # static unsquashfs so the loader can extract the .squashfs components (NixOS
-  # force-extracts; no FUSE/fusermount needed).
-  [ -d "$STAGE/tools" ] && cp -a "$STAGE/tools" "$DIR/tools"
+  # nixos stays self-contained (a dir bundle): its squashfs components + static
+  # unsquashfs live inside the dir (the loader force-extracts on NixOS; no FUSE).
+  copy_comps_into "$DIR/components" "$DIR/tools"
   mkdir -p "$DIR/models" "$DIR/data"
   cat > "$DIR/plan-ai" <<EOF
 #!/bin/sh
@@ -181,7 +159,7 @@ EOF
   chmod +x "$DIR/plan-ai"
   need zstd; need tar
   ( cd "$OUT" && tar -cf - plan-ai-nixos-x64 | zstd -q -19 -T0 -o "plan-ai-$VERSION-nixos-x64.tar.zst" -f )
-  rm -rf "$APP/.stage"; log "nixos bundle -> $DIR (./plan-ai) + $OUT/plan-ai-$VERSION-nixos-x64.tar.zst"
+  log "nixos bundle -> $DIR (./plan-ai) + $OUT/plan-ai-$VERSION-nixos-x64.tar.zst"
 }
 
 case "$TARGET" in

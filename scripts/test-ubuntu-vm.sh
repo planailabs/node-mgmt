@@ -91,9 +91,16 @@ incus exec "$VM" -- bash -c '
   echo "deps install attempted"
 ' 2>&1 | sed 's/^/    /'
 
-log "push AppImage into VM"
+log "push bare AppImage + shared components/ + tools/ into VM (siblings, as on the USB)"
 incus file push "$APPIMAGE" "$VM/root/plan-ai.AppImage"
 incus exec "$VM" -- chmod +x /root/plan-ai.AppImage
+# components ship OUTSIDE the launcher now; the loader finds them next to the
+# .AppImage (process.env.APPIMAGE dir). Push the shared pool built by bundle.sh.
+POOL="$DIST_DIR/bundle/components"; TOOLS="$DIST_DIR/bundle/tools"
+[ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh linux-x64"
+incus file push -r "$POOL" "$VM/root/" 2>/dev/null
+[ -d "$TOOLS" ] && incus file push -r "$TOOLS" "$VM/root/" 2>/dev/null || true
+incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/*.squashfs >/dev/null 2>&1 && echo "components staged beside AppImage" || echo "WARN no components"'
 
 log "run AppImage on stock Ubuntu; assert the stack serves (screenshot best-effort)"
 # What proves "runs on Ubuntu": ollama + Open-WebUI actually serving. These are

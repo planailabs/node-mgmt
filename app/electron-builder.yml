@@ -10,17 +10,15 @@ directories:
   output: ../dist/bundle
   buildResources: build
 
-# Only the app code is packed into the asar; the heavy payload (ollama binary,
-# python runtime, offline assets) is staged by bundle.sh into .stage/resources
-# and copied in verbatim via extraResources.
+# Only the app code is packed — a BARE launcher. The heavy payload (ollama, the
+# python runtime, offline assets) ships OUTSIDE the artifact as a shared
+# components/ dir beside the launcher on the USB; the loader (main/loader.js)
+# finds it next to the AppImage/exe (or via PLANAI_COMPONENTS). This keeps each
+# launcher small and lets all platforms share one copy of the components.
 files:
   - main/**/*
   - renderer/**/*
   - package.json
-
-extraResources:
-  - from: .stage/resources
-    to: .
 
 # Single-file artifacts per OS.
 linux:
