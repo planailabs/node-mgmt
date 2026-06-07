@@ -29,7 +29,9 @@ function externalRoots() {
   const roots = [];
   if (process.env.APPIMAGE) roots.push(path.dirname(process.env.APPIMAGE));
   if (process.platform === 'darwin') roots.push(path.resolve(process.execPath, '..', '..', '..', '..'));
-  roots.push(path.dirname(process.execPath));
+  const exeDir = path.dirname(process.execPath);
+  roots.push(exeDir);                 // exe / launcher dir
+  roots.push(path.dirname(exeDir));   // one up: win zip extracted into a subdir beside components/
   return roots;
 }
 
