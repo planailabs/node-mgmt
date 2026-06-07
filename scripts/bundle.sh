@@ -98,9 +98,37 @@ package_electron_builder() {  # linux AppImage / windows zip
   log "electron-builder $EB_OS -> $OUT"
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
+  [ "$EB_OS" = "--linux" ] && assemble_linux_appimage
   [ "$EB_OS" = "--win" ] && sign_windows || true
   copy_comps_into "$OUT/components" "$OUT/tools"   # shared pool beside the launcher
   log "bundle done -> $OUT/ (bare launcher + shared components/)"
+}
+
+# Wrap electron-builder's linux-unpacked into an AppImage whose AppRun is the
+# RUST launcher (rust launches Electron). An AppImage is just the type2 runtime
+# with a squashfs of the AppDir appended — no appimagetool needed.
+assemble_linux_appimage() {
+  need mksquashfs
+  local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
+  local LL RT APPDIR SQ IMG
+  LL="$(cd "$REPO_ROOT" && nix build .#launcher-linux-x64 --no-link --print-out-paths)" || die "launcher build failed"
+  RT="$(cd "$REPO_ROOT" && nix build .#appimageRuntime --no-link --print-out-paths)" || die "runtime fetch failed"
+  APPDIR="$OUT/.plan-ai.AppDir"; rm -rf "$APPDIR"; cp -a "$UNPACK" "$APPDIR"
+  cp "$LL/plan-ai" "$APPDIR/AppRun"; chmod +x "$APPDIR/AppRun"   # rust AppRun execs ./plan-ai (Electron)
+  cat > "$APPDIR/plan-ai.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=plan.ai
+Exec=AppRun
+Icon=plan-ai
+Categories=Utility;
+EOF
+  : > "$APPDIR/plan-ai.png"; : > "$APPDIR/.DirIcon"   # placeholders (not needed to run)
+  SQ="$(mktemp -u "$OUT/.appfs.XXXXXX.sqfs")"
+  mksquashfs "$APPDIR" "$SQ" -root-owned -noappend -comp zstd -quiet
+  IMG="$OUT/plan-ai-$VERSION-linux-x86_64.AppImage"; rm -f "$IMG"
+  cat "$RT" "$SQ" > "$IMG"; chmod +x "$IMG"; rm -rf "$SQ" "$APPDIR"
+  log "linux AppImage (rust AppRun -> Electron) -> $IMG ($(du -h "$IMG" | cut -f1))"
 }
 
 sign_windows() {  # optional Authenticode signing via osslsigncode

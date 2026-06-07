@@ -34,12 +34,19 @@ fn electron_target(here: &Path) -> Option<(PathBuf, Vec<String>)> {
             return Some((mac, vec![]));
         }
     }
-    // windows / generic: plan.ai.exe (or plan.ai) beside the launcher or one up
+    // explicit override (the AppImage AppRun can set this)
+    if let Some(p) = env::var_os("PLANAI_ELECTRON") {
+        let p = PathBuf::from(p);
+        if p.exists() { return Some((p, vec![])); }
+    }
+    // windows: plan.ai.exe ; linux (AppDir): the electron binary (electron-builder
+    // names it after package.json `name` = plan-ai-usb). Beside us or one up; never
+    // ourselves (the AppRun).
+    let me = env::current_exe().ok();
     for root in [Some(here), here.parent()].into_iter().flatten() {
-        for name in ["plan.ai.exe", "plan.ai"] {
+        for name in ["plan.ai.exe", "plan-ai-usb", "plan.ai", "plan-ai"] {
             let p = root.join(name);
-            // don't recurse into ourselves
-            if p.exists() && env::current_exe().map(|e| e != p).unwrap_or(true) {
+            if p.exists() && me.as_ref().map(|e| *e != p).unwrap_or(true) {
                 return Some((p, vec![]));
             }
         }
@@ -73,6 +80,10 @@ fn main() {
 
     let mut cmd = Command::new(&program);
     cmd.args(&extra);
+    // On linux the app runs from a read-only AppImage mount where chrome-sandbox
+    // can't be setuid, so Electron needs --no-sandbox.
+    #[cfg(target_os = "linux")]
+    cmd.arg("--no-sandbox");
     cmd.args(env::args_os().skip(1)); // forward user args
 
     #[cfg(unix)]

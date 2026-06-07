@@ -27,16 +27,18 @@
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin" "x86_64-unknown-linux-gnu" ];
         };
         # native launcher (zero deps → builds offline) cross-compiled via cargo-zigbuild.
-        launcherFor = rustTarget:
-          pkgs.runCommand "plan-ai-launcher-${rustTarget}"
+        # zigTarget may pin a glibc (e.g. ...gnu.2.17) for broad portability; outDir
+        # is the bare rust target triple cargo writes under.
+        launcherFor = { zigTarget, outDir }:
+          pkgs.runCommand "plan-ai-launcher-${outDir}"
             { nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]; }
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
-              cargo zigbuild --release --offline --target ${rustTarget}
+              cargo zigbuild --release --offline --target ${zigTarget}
               mkdir -p "$out"
               for b in plan-ai plan-ai.exe; do
-                if [ -f "target/${rustTarget}/release/$b" ]; then cp "target/${rustTarget}/release/$b" "$out/"; fi
+                if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
               done
             '';
 
@@ -77,6 +79,14 @@
         # NixOS and stock Ubuntu) bundled into the linux/nixos artifacts so the
         # loader can mount components in place (squashfuse_ll) and extract as a
         # fallback (unsquashfs). Copied out of the store into the bundle.
+        # AppImage type2 runtime (the small ELF prepended to the squashfs). We
+        # assemble the AppImage by hand — runtime + mksquashfs(AppDir) — so the
+        # AppRun can be our rust launcher (rust launches Electron). Pinned by hash.
+        appimageRuntime = pkgs.fetchurl {
+          url = "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64";
+          hash = "sha256-okGdzkdWg5WuecAf+ppaNB3TOVgTUv8QTQc1J1Qxd+U=";
+        };
+
         linuxMountTools = pkgs.runCommand "plan-ai-linux-mount-tools" { } ''
           mkdir -p "$out/bin"
           cp ${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll "$out/bin/squashfuse_ll"
@@ -86,9 +96,11 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools;
-          launcher-win-x64 = launcherFor "x86_64-pc-windows-gnu";
-          launcher-mac-arm64 = launcherFor "aarch64-apple-darwin";
+          inherit linuxMountTools appimageRuntime;
+          launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
+          launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
+          # linux: pin glibc 2.17 so the AppRun runs on any modern distro
+          launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-gnu.2.17"; outDir = "x86_64-unknown-linux-gnu"; };
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });

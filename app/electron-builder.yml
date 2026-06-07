@@ -22,8 +22,12 @@ files:
 
 # Single-file artifacts per OS.
 linux:
+  # `dir` only (linux-unpacked) — bundle.sh wraps it into an AppImage whose AppRun
+  # is the rust launcher (rust launches Electron), assembled from the pinned
+  # type2 runtime + mksquashfs. executableName fixed so the launcher finds it.
   target:
-    - AppImage
+    - dir
+  executableName: plan-ai
   category: Utility
   artifactName: plan-ai-${version}-linux-${arch}.${ext}
 
