@@ -136,9 +136,10 @@ package_electron_builder() {  # linux AppImage / windows zip
     local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
     emit_app_component "$UNPACK"          # -> components/app-linux-x64.squashfs
     emit_nixos_fhs                        # -> components/nixos-fhs.{closure,path}
+    # named .linux.exe (a distinct, explicit per-OS launcher name)
     local L; L="$(nix_launcher launcher-linux-x64 plan-ai)"
-    cp -f "$L" "$OUT/plan-ai"; chmod +x "$OUT/plan-ai"
-    log "linux standalone launcher -> $OUT/plan-ai (static musl)"
+    cp -f "$L" "$OUT/plan-ai.linux.exe"; chmod +x "$OUT/plan-ai.linux.exe"
+    log "linux standalone launcher -> $OUT/plan-ai.linux.exe (static musl)"
   else
     local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
     emit_app_component "$UNPACK"          # -> components/app-win-x64/ (used in place)
