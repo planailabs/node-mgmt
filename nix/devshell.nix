@@ -1,6 +1,6 @@
 # Development shell: the full NixOS build leg toolchain + the env that makes
 # generic/prebuilt binaries and electron-builder behave on NixOS.
-{ pkgs, lib }:
+{ pkgs, lib, spaTools ? [ ] }:
 let
   # Toolchain to build Open-WebUI (node + python), assemble the relocatable
   # runtime (uv), build the Electron app + tailwind, and run the bundler.
@@ -42,7 +42,9 @@ let
   ];
 in
 pkgs.mkShell {
-  packages = buildTools;
+  # buildTools + the Dioxus SPA toolchain (rust+wasm32, dx, wasm-bindgen-cli,
+  # binaryen, lld) so `nix develop` can build launcher/spa-src via scripts/build-spa.sh.
+  packages = buildTools ++ spaTools;
   shellHook = ''
     export ELECTRON_OVERRIDE_DIST_PATH="${pkgs.electron}/libexec/electron"
     export ELECTRON_SKIP_BINARY_DOWNLOAD=1

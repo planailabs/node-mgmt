@@ -18,6 +18,7 @@ use std::process::Command;
 mod config;
 mod control;
 mod paths;
+mod proxy;
 mod serve;
 
 // Embedded static tools (non-empty only on linux; see build.rs).

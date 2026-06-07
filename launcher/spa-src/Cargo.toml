@@ -1,0 +1,43 @@
+[package]
+name = "plan-ai-spa"
+version = "0.1.0"
+edition = "2021"
+description = "plan.ai dashboard — Dioxus web/wasm SPA, embedded into the launcher (phase 4)."
+
+# Own workspace root (like plan-ai-design / mac-mgmt config-ui) so it builds
+# standalone with its own fork [patch] and isn't absorbed by a parent workspace.
+[workspace]
+
+# [patch] applies only from the build root. Standalone, these forks redirect
+# dioxus to mkg's feat/embed fork (the same the design crate + mac-mgmt use).
+[patch.crates-io]
+dioxus = { git = "https://github.com/mkg20001/dioxus.git", branch = "feat/embed" }
+dioxus-i18n = { git = "https://github.com/mkg20001/dioxus-i18n.git", branch = "feat/dioxus-0.8" }
+
+[[bin]]
+name = "plan-ai-spa"
+path = "src/main.rs"
+
+[dependencies]
+dioxus = { version = "0.8.0-alpha.0", features = ["web"] }
+dioxus-i18n = "0.5"
+# the shared design system (reversing the prior Tailwind-CSS-only treatment):
+# real Dioxus components, same look as the rest of plan.ai.
+plan-ai-design = { path = "../../third_party/plan-ai-design" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unic-langid = { version = "0.9", features = ["macros"] }
+# pinned to match the wasm-bindgen-cli the nix build ships (0.2.121) — dx checks
+# the project's wasm-bindgen version against the installed CLI.
+wasm-bindgen = "=0.2.121"
+# wasm HTTP + SSE to the launcher's same-origin /api/*.
+gloo-net = { version = "0.6", features = ["http", "eventsource"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures-util = "0.3"
+wasm-bindgen-futures = "0.4"
+# getrandom on wasm needs the js backend (pulled in transitively).
+getrandom = { version = "0.2", features = ["js"] }
+
+[profile.release]
+opt-level = "s"
+lto = true

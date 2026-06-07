@@ -18,6 +18,10 @@
       url = "git+ssh://git@git.plan.ai/plan-ai/mac-mgmt?ref=trunk&rev=ea420ee4443e91c667422bd4b368e6b763ef8e46";
       flake = false;
     };
+    # Include git submodules in the flake source — the SPA build needs
+    # third_party/plan-ai-design (the shared Dioxus component library), which is a
+    # submodule and would otherwise be excluded from the flake source tree.
+    self.submodules = true;
   };
 
   # Thin entrypoint — the real definitions live in nix/:
@@ -34,6 +38,63 @@
         rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
                       "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
+        };
+        # Full stable toolchain + wasm32 for the Dioxus SPA (dx/cargo need a full
+        # rustc for wasm32-unknown-unknown).
+        wasmToolchain = pkgs.rust-bin.stable.latest.default.override {
+          targets = [ "wasm32-unknown-unknown" ];
+        };
+        wasmRustPlatform = pkgs.makeRustPlatform { cargo = wasmToolchain; rustc = wasmToolchain; };
+
+        # Dioxus `feat/embed` fork git-dep hashes (same rev mac-mgmt pins). dx is
+        # nixpkgs' stock 0.7.9 — it prints a non-fatal "incompatible" notice for
+        # 0.8-alpha but builds fine once the wasm-bindgen-cli version matches the
+        # project's (pinned to 0.2.121 in spa-src/Cargo.toml).
+        dioxusHash = "sha256-asz/Sm7BHGBNYvPXZS/rx+tlZrTbrmNNCoHal16LKzk=";
+        dioxusI18nHash = "sha256-Y05EJtoJMw07aonrkIXp1gcDZKrhm30Aok7mClxAL78=";
+        spaGitHashes = import ./launcher/spa-src/cargo-git-hashes.nix {
+          inherit dioxusHash dioxusI18nHash;
+        };
+        spaTools = [
+          wasmToolchain pkgs.dioxus-cli pkgs.wasm-bindgen-cli_0_2_121
+          pkgs.binaryen pkgs.lld pkgs.tailwindcss_3 pkgs.nodejs_22
+        ];
+
+        # The plan.ai dashboard: a Dioxus 0.8 web/wasm SPA reusing plan-ai-design,
+        # built to static assets (index.html + wasm + js + tailwind) that the
+        # launcher rust-embeds and serves over localhost. `dx build` vendors the
+        # fork via importCargoLock (offline); tailwind compiles the design CSS.
+        spa = wasmRustPlatform.buildRustPackage {
+          pname = "plan-ai-spa";
+          version = "0.1.0";
+          # whole flake source (git-tracked only): needs spa-src + the
+          # third_party/plan-ai-design path dep.
+          src = ./.;
+          # the crate (and its Cargo.lock) live in this subdir.
+          cargoRoot = "launcher/spa-src";
+          buildAndTestSubdir = "launcher/spa-src";
+          cargoLock = {
+            lockFile = ./launcher/spa-src/Cargo.lock;
+            outputHashes = spaGitHashes;
+          };
+          nativeBuildInputs = spaTools;
+          buildPhase = ''
+            runHook preBuild
+            export HOME="$TMPDIR" CARGO_NET_OFFLINE=true
+            cd launcher/spa-src
+            tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \
+              -o assets/tailwind.css --config tailwind.config.js --minify
+            dx build --platform web --release
+            cd ../..
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out"
+            cp -r launcher/spa-src/target/dx/plan-ai-spa/release/web/public/. "$out/"
+            runHook postInstall
+          '';
+          doCheck = false;
         };
         # registry deps for the launcher's Cargo.lock (tokio, interprocess, …),
         # vendored offline. The mac-mgmt-services path dep is supplied separately
@@ -56,6 +117,10 @@
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
+              # the SPA source isn't part of the launcher crate build; the built
+              # web assets come from the `spa` derivation, embedded below.
+              rm -rf spa-src
+              rm -rf spa && cp -r ${spa} spa && chmod -R u+w spa
               # path dep: the standalone mac-mgmt-services crate from the input
               rm -rf vendor && mkdir -p vendor
               cp -r ${mac-mgmt}/mac-mgmt-services vendor/mac-mgmt-services
@@ -172,7 +237,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime nixosFhs;
+          inherit linuxMountTools appimageRuntime nixosFhs spa;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
@@ -186,6 +251,6 @@
           llmfit-win-x64   = llmfitBin (llmfitAsset "x86_64-pc-windows-msvc");
           llmfit-mac-arm64 = llmfitBin (llmfitAsset "aarch64-apple-darwin");
         } // runtimes;
-        devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
+        devShells.default = import ./nix/devshell.nix { inherit pkgs lib spaTools; };
       });
 }

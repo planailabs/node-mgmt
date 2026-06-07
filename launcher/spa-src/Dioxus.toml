@@ -1,0 +1,6 @@
+[application]
+name = "plan-ai-spa"
+asset_dir = "assets"
+
+[web.app]
+title = "plan.ai"

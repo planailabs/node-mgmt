@@ -22,3 +22,8 @@ __pycache__/
 /models/
 /result
 /launcher/vendor/
+
+# SPA (Dioxus) build artifacts
+/launcher/spa-src/target/
+/launcher/spa-src/.cargo/
+/launcher/target/
