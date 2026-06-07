@@ -25,7 +25,11 @@ let
     name = "ollama-${ollamaKeyOf a.name}.tar.gz";
     builder = "${pkgs.bash}/bin/bash";
     args = [ "-c" ''
-      export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar zstd pigz unzip ])}"
+      # gzip is required: `tar -z` (the darwin .tgz path) execs the gzip program;
+      # pigz alone is not enough and darwin would repack EMPTY (linux=.tar.zst,
+      # win=.zip don't hit it).
+      export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar zstd gzip pigz unzip ])}"
+      set -e
       mkdir x
       case "$assetName" in
         *.tar.zst) zstd -dc "$src" | tar -x -C x ;;
