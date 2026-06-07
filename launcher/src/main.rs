@@ -133,12 +133,15 @@ fn detect_ollama(comp: &Path) -> Option<(String, String)> {
     None
 }
 
-// The shared pool may hold every platform's runtime; pick the one in THIS OS's
-// format (linux=squashfs, mac=dmg, windows=pre-extracted dir).
-fn runtime_base(comp: &Path) -> Option<String> {
+// The shared pool may hold every platform's copy of a component; pick the one
+// whose name starts with `prefix` in THIS OS's format (linux=squashfs, mac=dmg,
+// windows=pre-extracted dir). Used for the runtime AND the Electron app itself
+// (both ship as components — app-<os>: app-linux-x64.squashfs / app-win-x64/ /
+// app-mac-arm64.dmg).
+fn pick_base(comp: &Path, prefix: &str) -> Option<String> {
     for ent in fs::read_dir(comp).ok()?.flatten() {
         let n = ent.file_name().to_string_lossy().into_owned();
-        if !n.starts_with("runtime-") {
+        if !n.starts_with(prefix) {
             continue;
         }
         #[cfg(target_os = "windows")]
@@ -216,6 +219,20 @@ fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract
         let dir = comp.join(base);
         if dir.is_dir() {
             let _ = fs::remove_dir_all(dest);
+            if let Some(parent) = dest.parent() { let _ = fs::create_dir_all(parent); }
+            // Prefer a directory JUNCTION (mklink /J) — unlike a symlink it needs no
+            // admin/developer-mode and no copy. Fall back to a symlink, then a copy.
+            let junction = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(dest)
+                .arg(&dir)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if junction {
+                log(&format!("{base}: directory junction (used in place)"));
+                return Ok(MountKind::None);
+            }
             std::os::windows::fs::symlink_dir(&dir, dest).or_else(|_| copy_dir(&dir, dest))?;
             log(&format!("{base}: directory used in place"));
             return Ok(MountKind::None);
@@ -302,7 +319,27 @@ fn teardown(mounts: &[Mount]) {
     }
 }
 
-/// Locate the bundled Electron executable beside the launcher.
+/// Find the Electron executable inside a provided app component tree (the dir the
+/// app-<os> component was mounted/linked/extracted to):
+///   macOS  : <app>/plan.ai.app/Contents/MacOS/plan.ai
+///   windows: <app>/plan.ai.exe
+///   linux  : <app>/plan-ai (electron-builder executableName)
+fn electron_in(app: &Path) -> Option<PathBuf> {
+    let mac = app.join("plan.ai.app/Contents/MacOS/plan.ai");
+    if mac.exists() {
+        return Some(mac);
+    }
+    for name in ["plan.ai.exe", "plan-ai", "plan.ai", "plan-ai-usb"] {
+        let p = app.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Fallback: locate a bundled Electron executable beside the launcher (back-compat
+/// with an app shipped next to the launcher rather than as an app-<os> component).
 fn electron_target(here: &Path) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("PLANAI_ELECTRON") {
         let p = PathBuf::from(p);
@@ -310,14 +347,12 @@ fn electron_target(here: &Path) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    for root in external_roots(here) {
-        let mac = root.join("plan.ai.app/Contents/MacOS/plan.ai");
-        if mac.exists() {
-            return Some(mac);
-        }
-    }
     let me = std::env::current_exe().ok();
     for root in external_roots(here) {
+        let mac = root.join("plan.ai.app/Contents/MacOS/plan.ai");
+        if mac.exists() && me.as_ref().map(|e| *e != mac).unwrap_or(true) {
+            return Some(mac);
+        }
         for name in ["plan.ai.exe", "plan-ai-usb", "plan.ai", "plan-ai"] {
             let p = root.join(name);
             if p.exists() && me.as_ref().map(|e| *e != p).unwrap_or(true) {
@@ -335,9 +370,12 @@ fn main() {
     let mut mounts: Vec<Mount> = Vec::new();
     // If something upstream already prepared the resources, don't touch them.
     let mut resources = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from);
+    // The app component is mounted/linked here so we can run Electron from it.
+    let mut app_dir: Option<PathBuf> = None;
+    let comp_dir = components_dir(&here);
 
     if resources.is_none() {
-        if let Some(comp) = components_dir(&here) {
+        if let Some(comp) = comp_dir.as_ref() {
             let root = cache_root().join("root");
             let dist = root.join("dist");
             let tools = root.join("tools");
@@ -345,38 +383,56 @@ fn main() {
             // On NixOS the generic ollama needs patchelf (writable) → extract.
             let force_extract = std::env::var_os("PLANAI_NIX_LD").is_some();
 
-            let rt = runtime_base(&comp).unwrap_or_else(|| {
+            let rt = pick_base(comp, "runtime-").unwrap_or_else(|| {
                 log("no runtime component found");
                 std::process::exit(1);
             });
-            match provide(&comp, &rt, &dist.join("runtime"), &tools, force_extract) {
+            match provide(comp, &rt, &dist.join("runtime"), &tools, force_extract) {
                 Ok(k) => mounts.push(Mount { dest: dist.join("runtime"), kind: k }),
                 Err(e) => { log(&format!("runtime: {e}")); std::process::exit(1); }
             }
             if comp.join("ow-assets.squashfs").exists() || comp.join("ow-assets.dmg").exists() || comp.join("ow-assets").is_dir() {
-                if let Ok(k) = provide(&comp, "ow-assets", &dist.join("ow-assets"), &tools, force_extract) {
+                if let Ok(k) = provide(comp, "ow-assets", &dist.join("ow-assets"), &tools, force_extract) {
                     mounts.push(Mount { dest: dist.join("ow-assets"), kind: k });
                 }
             }
-            if let Some((ol, why)) = detect_ollama(&comp) {
+            if let Some((ol, why)) = detect_ollama(comp) {
                 log(&format!("ollama flavour: {ol} — {why}"));
-                match provide(&comp, &ol, &dist.join("ollama"), &tools, force_extract) {
+                match provide(comp, &ol, &dist.join("ollama"), &tools, force_extract) {
                     Ok(k) => mounts.push(Mount { dest: dist.join("ollama"), kind: k }),
                     Err(e) => log(&format!("ollama: {e}")),
                 }
                 std::env::set_var("PLANAI_OLLAMA_FLAVOUR", ol);
                 std::env::set_var("PLANAI_OLLAMA_REASON", why);
             }
+            // The Electron app itself ships as a component (app-<os>): mount/link it
+            // and run Electron from the mounted tree (never extract — Electron runs
+            // fine read-only). NixOS still needs a writable tree for its loader bits.
+            if let Some(app) = pick_base(comp, "app-") {
+                match provide(comp, &app, &dist.join("app"), &tools, force_extract) {
+                    Ok(k) => { mounts.push(Mount { dest: dist.join("app"), kind: k }); app_dir = Some(dist.join("app")); }
+                    Err(e) => log(&format!("app: {e}")),
+                }
+            }
             std::env::set_var("PLANAI_RESOURCES", &dist);
+            // Electron's node loader finds the shared pool via this (it no longer
+            // sits beside the running app — the app runs from <cache>/dist/app).
+            std::env::set_var("PLANAI_COMPONENTS", comp);
             resources = Some(dist);
         }
     }
     let _ = resources;
 
-    let program = match electron_target(&here) {
+    // Prefer the Electron binary inside the mounted app component; fall back to one
+    // sitting beside the launcher (back-compat).
+    let program = app_dir
+        .as_deref()
+        .and_then(electron_in)
+        .or_else(|| electron_target(&here));
+    let program = match program {
         Some(p) => p,
         None => {
-            log(&format!("could not find the bundled app beside {}", here.display()));
+            log(&format!("could not find the bundled app (no app-<os> component, none beside {})", here.display()));
             teardown(&mounts);
             std::process::exit(1);
         }
