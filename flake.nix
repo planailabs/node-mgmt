@@ -10,13 +10,20 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # llmfit (MIT) — hardware-aware model selector. Cross-built + bundled so the
+    # launcher can detect the GPU (llmfit system --json) and serve the model
+    # browser API (llmfit serve). Pinned; flake=false (we build the source).
+    llmfit = {
+      url = "github:AlexsJones/llmfit/6c0b69701e8ec9be28a7a98bd0e94812f64a037c";
+      flake = false;
+    };
   };
 
   # Thin entrypoint — the real definitions live in nix/:
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, llmfit }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
@@ -27,27 +34,61 @@
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
                       "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
         };
+        # Shared cross-build helper: build a rust binary via cargo-zigbuild (offline)
+        # for win/mac/linux from NixOS. Zero-dep crates (the launcher) need no
+        # vendoring; crates with deps pass a `vendor` dir (rustPlatform.importCargoLock)
+        # so the --offline build resolves crates.io from the store.
+        # Args: pname, src, zigTarget, outDir, bins; optional package, vendor, env, extra.
+        zigRustBin =
+          { pname, src, zigTarget, outDir, bins
+          , package ? null, vendor ? null, env ? { }, extra ? "" }:
+          pkgs.runCommand "${pname}-${outDir}"
+            ({ nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]; } // env)
+            ''
+              export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
+              cp -r ${src}/. src && chmod -R u+w src && cd src
+              ${lib.optionalString (vendor != null) ''
+                mkdir -p .cargo
+                printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${vendor}" > .cargo/config.toml
+              ''}
+              ${extra}
+              cargo zigbuild --release --offline --target ${zigTarget} \
+                ${lib.optionalString (package != null) "-p ${package}"}
+              mkdir -p "$out"
+              for b in ${lib.concatStringsSep " " bins}; do
+                if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
+              done
+            '';
+
         # native launcher (zero deps → builds offline) cross-compiled via cargo-zigbuild.
         # zigTarget may pin a glibc (e.g. ...gnu.2.17) for broad portability; outDir
         # is the bare rust target triple cargo writes under.
         launcherFor = { zigTarget, outDir }:
-          pkgs.runCommand "plan-ai-launcher-${outDir}"
-            {
-              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
+          zigRustBin {
+            pname = "plan-ai-launcher"; src = ./launcher;
+            inherit zigTarget outDir;
+            bins = [ "plan-ai" "plan-ai.exe" ];
+            env = {
               # build.rs embeds these into the linux launcher (mounts squashfs itself,
               # like the AppImage runtime); ignored for win/mac targets.
               PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
-            }
-            ''
-              export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
-              cp -r ${./launcher}/. src && chmod -R u+w src && cd src
-              cargo zigbuild --release --offline --target ${zigTarget}
-              mkdir -p "$out"
-              for b in plan-ai plan-ai.exe; do
-                if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
-              done
-            '';
+            };
+          };
+
+        # llmfit cross-build: reuses the launcher's zig toolchain, plus a vendored
+        # Cargo.lock (647 crates, all crates.io → no manual hashes). Builds only the
+        # `llmfit` bin (skips llmfit-web/desktop — we use our own dashboard).
+        llmfitVendor = pkgs.rustPlatform.importCargoLock {
+          lockFile = "${llmfit}/Cargo.lock";
+        };
+        llmfitFor = { zigTarget, outDir }:
+          zigRustBin {
+            pname = "llmfit"; src = llmfit;
+            inherit zigTarget outDir;
+            package = "llmfit"; bins = [ "llmfit" "llmfit.exe" ];
+            vendor = llmfitVendor;
+          };
 
         vendorLock = builtins.fromJSON (builtins.readFile ./vendor.lock.json);
         vendorPkgs = import ./nix/vendor.nix { inherit pkgs lib system vendorLock; };
@@ -133,6 +174,10 @@
           # binary). It autodetects NixOS at runtime and EXTRACTS components there
           # (the generic squashfs mount/patchelf path the node loader uses).
           launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-musl"; outDir = "x86_64-unknown-linux-musl"; };
+          # llmfit cross-builds (bundled beside the launcher; GPU detect + serve)
+          llmfit-linux-x64 = llmfitFor { zigTarget = "x86_64-unknown-linux-musl"; outDir = "x86_64-unknown-linux-musl"; };
+          llmfit-win-x64 = llmfitFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
+          llmfit-mac-arm64 = llmfitFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib; };
       });
