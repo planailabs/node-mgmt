@@ -17,6 +17,11 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.2"
+# serve the embedded Dioxus SPA + control API over localhost (phase 3)
+axum = "0.8"
+rust-embed = "8"
+mime_guess = "2"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [profile.release]
 opt-level = "z"

@@ -18,6 +18,7 @@ use std::process::Command;
 mod config;
 mod control;
 mod paths;
+mod serve;
 
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
@@ -546,6 +547,35 @@ fn run_serve_stack() -> ! {
     std::process::exit(code);
 }
 
+/// `plan-ai serve`: start the control plane + serve the SPA + control API over
+/// localhost; print/export PLANAI_UI_URL and run until signalled. Electron (thin
+/// webview, phase 5) loads this URL.
+fn run_serve() -> ! {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => { log(&format!("serve runtime: {e}")); std::process::exit(1); }
+    };
+    let code = rt.block_on(async {
+        let self_exe = std::env::current_exe().expect("current_exe");
+        let socket = supervisor_socket_path();
+        let client = match control::start_stack(&self_exe, &socket).await {
+            Ok(c) => c,
+            Err(e) => { log(&format!("control: {e}")); return 1; }
+        };
+        let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
+        match serve::run_server(client, port).await {
+            Ok(url) => {
+                std::env::set_var("PLANAI_UI_URL", &url);
+                log(&format!("UI server on {url}"));
+            }
+            Err(e) => { log(&format!("serve: {e}")); return 1; }
+        }
+        let _ = tokio::signal::ctrl_c().await;
+        0
+    });
+    std::process::exit(code);
+}
+
 fn main() {
     // Subcommands (re-invocations of this same binary):
     {
@@ -556,6 +586,7 @@ fn main() {
                 run_supervisor(&socket);
             }
             Some("serve-stack") => run_serve_stack(),
+            Some("serve") => run_serve(),
             _ => {}
         }
     }
