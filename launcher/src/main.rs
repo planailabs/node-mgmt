@@ -208,16 +208,18 @@ fn find_fusermount() -> Option<String> {
 
 /// Make a component available at `dest`. Returns how it was provided (for teardown).
 fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract: bool) -> std::io::Result<MountKind> {
-    // pre-extracted directory (windows): use in place via a symlink/junction
-    let dir = comp.join(base);
-    if dir.is_dir() {
-        let _ = fs::remove_dir_all(dest);
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&dir, dest).or_else(|_| copy_dir(&dir, dest))?;
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&dir, dest).or_else(|_| copy_dir(&dir, dest))?;
-        log(&format!("{base}: directory used in place"));
-        return Ok(MountKind::None);
+    // pre-extracted directory: windows' format (used in place). Only on windows —
+    // on linux/mac a dir in the multi-platform pool belongs to windows; prefer the
+    // OS's own mountable squashfs/dmg below.
+    #[cfg(target_os = "windows")]
+    {
+        let dir = comp.join(base);
+        if dir.is_dir() {
+            let _ = fs::remove_dir_all(dest);
+            std::os::windows::fs::symlink_dir(&dir, dest).or_else(|_| copy_dir(&dir, dest))?;
+            log(&format!("{base}: directory used in place"));
+            return Ok(MountKind::None);
+        }
     }
     let squashfs = comp.join(format!("{base}.squashfs"));
     if squashfs.exists() {
@@ -270,6 +272,7 @@ fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract
     Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("component {base} not found")))
 }
 
+#[allow(dead_code)] // used only on windows (dir-in-place fallback)
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for ent in fs::read_dir(src)? {
