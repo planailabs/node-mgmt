@@ -261,8 +261,10 @@ EOF
   printf 'APPL????' > "$LAPP/Contents/PkgInfo"
   if [ -n "${MAC_P12:-}" ]; then
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$LAPP"
-  else rcodesign sign "$LAPP"; warn "MAC_P12 unset — launcher .app ad-hoc signed"; fi
-  rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
+    # verify only a real signature — ad-hoc sigs always "fail" verify (rcodesign
+    # prints "problems reported during verification"), which is just noise.
+    rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
+  else rcodesign sign "$LAPP"; warn "MAC_P12 unset — launcher .app ad-hoc signed (skipping verify)"; fi
   # Wrap the signed .app in a dmg (volume "plan.ai") so it survives the FAT32 USB
   # with exec bit + signature intact. emit_hfsplus_dmg copies the staging dir's
   # contents, so the dmg volume holds plan.ai.app at its root.
@@ -301,8 +303,9 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   log "rcodesign sign"
   if [ -n "${MAC_P12:-}" ]; then
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$APPDIR"
-  else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable)"; fi
-  rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
+    # verify only a real signature — ad-hoc sigs always "fail" verify (noise).
+    rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
+  else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable; skipping verify)"; fi
   # Overlap the component copy (+ llmfit nix build, no sudo) with the dmg work. The
   # two dmg builds (app-mac component + launcher .app) BOTH need a sudo loop-mount,
   # so they stay serial w.r.t. each other inside one job to avoid loop-device churn.

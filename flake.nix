@@ -334,9 +334,9 @@
             glib gtk3 nss nspr atk at-spi2-atk at-spi2-core cairo pango gdk-pixbuf
             cups dbus expat libdrm libxkbcommon mesa libgbm alsa-lib
             freetype fontconfig libGL systemd
-            xorg.libX11 xorg.libXcomposite xorg.libXcursor xorg.libXdamage
-            xorg.libXext xorg.libXfixes xorg.libXi xorg.libXrender xorg.libXtst
-            xorg.libxcb xorg.libXrandr xorg.libXScrnSaver
+            libx11 libxcomposite libxcursor libxdamage
+            libxext libxfixes libxi libxrender libxtst
+            libxcb libxrandr libxscrnsaver
           ];
         };
 
