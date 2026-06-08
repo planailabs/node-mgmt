@@ -18,6 +18,26 @@ die()  { printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2; exit 1; }
 # --- prerequisites ----------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1 (enter 'nix develop')"; }
 
+# --- temp output dirs -------------------------------------------------------
+# Build each step into a FRESH temp dir, then atomically swap it in. A failed /
+# interrupted step then never leaves a partial output for a later step to consume
+# ("no stale files just there"); the previous good output stays until the new one
+# is complete. The temp lives under DIST_DIR so the final `mv` is same-filesystem
+# (atomic). Pair stage_dir at the start with publish_dir at the end.
+stage_dir() {  # <name> -> prints a fresh temp build dir under dist/
+  mkdir -p "$DIST_DIR"
+  mktemp -d "$DIST_DIR/.stage-$1.XXXXXX"
+}
+publish_dir() {  # <tmp-dir> <final-dir>
+  local tmp="$1" final="$2"
+  [ -d "$tmp" ] || die "publish_dir: missing staged dir $tmp"
+  mkdir -p "$(dirname "$final")"
+  rm -rf "$final.prev" 2>/dev/null || true
+  [ -e "$final" ] && mv "$final" "$final.prev"
+  mv "$tmp" "$final"
+  rm -rf "$final.prev" 2>/dev/null || true
+}
+
 # --- usb.lock accessors -----------------------------------------------------
 # lock <jq-filter> -> value from usb.lock
 lock() {

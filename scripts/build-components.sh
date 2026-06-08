@@ -17,7 +17,10 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 need tar; need jq
-OUT="$DIST_DIR/components"; rm -rf "$OUT"; mkdir -p "$OUT"
+# Build into a fresh temp dir, publish atomically at the end (see lib.sh): an
+# interrupted run never leaves a partial dist/components for a later step.
+FINAL="$DIST_DIR/components"; OUT="$(stage_dir components)"
+trap 'rm -rf "$OUT" 2>/dev/null || true' EXIT
 OLLAMA_TAG="$(ollama_version)"
 OLLAMA_DIR="$VENDOR_DIR/ollama/$OLLAMA_TAG"
 
@@ -149,4 +152,5 @@ jq -n --arg otag "$OLLAMA_TAG" --argjson runtimes "$RUNTIMES" --argjson ollama "
     note:"loader picks runtime-<this bundles OS> + ollama by CPU arch (rocm if /dev/kfd); mounts .squashfs (else extracts), extracts .tar.gz"}' \
   > "$OUT/manifest.json"
 
-log "components -> $OUT ($(du -sh "$OUT" | cut -f1))"
+publish_dir "$OUT" "$FINAL"
+log "components -> $FINAL ($(du -sh "$FINAL" | cut -f1))"
