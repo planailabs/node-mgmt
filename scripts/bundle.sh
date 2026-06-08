@@ -201,7 +201,8 @@ build_mac_launcher_app() {
   local L; L="$(nix_launcher launcher-mac-arm64 plan-ai)"
   local LAPP="$OUT/plan.ai.app"; rm -rf "$LAPP"
   mkdir -p "$LAPP/Contents/MacOS" "$LAPP/Contents/Resources"
-  cp -f "$L" "$LAPP/Contents/MacOS/plan-ai"; chmod +x "$LAPP/Contents/MacOS/plan-ai"
+  # nix store binaries are read-only; rcodesign signs in place → needs u+w.
+  cp -f "$L" "$LAPP/Contents/MacOS/plan-ai"; chmod 0755 "$LAPP/Contents/MacOS/plan-ai"
   cat > "$LAPP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

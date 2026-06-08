@@ -37,7 +37,7 @@ VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 BUNDLE="$DIST_DIR/bundle"
 
 declare -a FILES=()
-add_if() { [ -e "$1" ] && FILES+=("$1") && log "include $(basename "$1")"; }
+add_if() { [ -e "$1" ] || return 0; FILES+=("$1"); log "include $(basename "$1")"; }
 shopt -s nullglob
 # the standalone launchers (the app itself rides inside components/ as app-<os>)
 for f in "$BUNDLE"/plan-ai.linux.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan.ai.app; do add_if "$f"; done

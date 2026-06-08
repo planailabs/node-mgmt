@@ -2,7 +2,7 @@
   "name": "plan-ai-usb",
   "productName": "plan.ai",
   "version": "0.1.0",
-  "description": "Thin Electron shell for the plan.ai launcher (loads the launcher's localhost SPA)",
+  "description": "Thin Electron shell for the plan.ai launcher",
   "license": "MIT",
   "main": "main/index.js",
   "scripts": {
