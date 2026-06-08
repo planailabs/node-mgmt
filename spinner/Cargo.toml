@@ -1,0 +1,21 @@
+[package]
+name = "plan-ai-spinner"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny native splash window (animated spinner) shown while the launcher mounts the runtime, before Electron's window appears."
+
+[[bin]]
+name = "plan-ai-spinner"
+path = "src/main.rs"
+
+[dependencies]
+# eframe with the glow (OpenGL) backend, NOT wgpu — glow/winit dlopen the GL +
+# windowing libs at runtime (no nix-store NEEDED entries baked in), so a binary
+# cross-built from NixOS still resolves the target machine's system libs. accesskit
+# is dropped (a splash needs no screen-reader, and it's a cross-compile pain point).
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

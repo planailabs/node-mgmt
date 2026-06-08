@@ -147,6 +147,35 @@
               done
             '';
 
+        # registry deps for the spinner crate's Cargo.lock (eframe + its tree).
+        spinnerVendor = pkgs.rustPlatform.importCargoLock {
+          lockFile = ./spinner/Cargo.lock;
+        };
+        # The native splash spinner (eframe/glow), cross-built like the launcher via
+        # cargo-zigbuild. Unlike the launcher it CANNOT be static-musl (a GUI needs a
+        # dynamic loader), so linux targets gnu. glow/winit dlopen the GL + windowing
+        # libs at runtime, so the binary carries no nix-store paths and resolves the
+        # TARGET machine's system libs (libGL/libX11/…). mac links AppKit/OpenGL etc.
+        # from the Apple SDK via SDKROOT (same mechanism the launcher uses for Cocoa).
+        spinnerFor = { zigTarget, outDir }:
+          pkgs.runCommand "plan-ai-spinner-${outDir}"
+            ({
+              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
+            } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
+              SDKROOT = macosx-sdk;
+            })
+            ''
+              export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
+              cp -r ${./spinner}/. src && chmod -R u+w src && cd src
+              mkdir -p .cargo
+              printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${spinnerVendor}" > .cargo/config.toml
+              cargo zigbuild --release --offline --target ${zigTarget}
+              mkdir -p "$out"
+              for b in plan-ai-spinner plan-ai-spinner.exe; do
+                if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
+              done
+            '';
+
         # llmfit — hardware-aware model selector. Bundled beside the launcher so it
         # can detect the GPU (`llmfit system --json`) and serve the model-browser API
         # (`llmfit serve`). Cross-building it from NixOS hits toolchain walls its heavy
@@ -301,6 +330,11 @@
           llmfit-linux-x64 = llmfitBin (llmfitAsset "x86_64-unknown-linux-musl");
           llmfit-win-x64   = llmfitBin (llmfitAsset "x86_64-pc-windows-msvc");
           llmfit-mac-arm64 = llmfitBin (llmfitAsset "aarch64-apple-darwin");
+          # native splash spinner (shown while the launcher mounts the runtime).
+          # linux=gnu (dynamic; a GUI can't be static-musl like the launcher).
+          spinner-linux-x64 = spinnerFor { zigTarget = "x86_64-unknown-linux-gnu"; outDir = "x86_64-unknown-linux-gnu"; };
+          spinner-win-x64   = spinnerFor { zigTarget = "x86_64-pc-windows-gnu";    outDir = "x86_64-pc-windows-gnu"; };
+          spinner-mac-arm64 = spinnerFor { zigTarget = "aarch64-apple-darwin";     outDir = "aarch64-apple-darwin"; };
         } // runtimes;
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib spaTools; };
       });

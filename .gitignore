@@ -27,3 +27,4 @@ __pycache__/
 /launcher/spa-src/target/
 /launcher/spa-src/.cargo/
 /launcher/target/
+/spinner/target/
