@@ -27,7 +27,8 @@ ALLTGTS := $(TARGETS)
 # is dependency-tracked — no stale "just there" outputs feeding a later step. The
 # Makefile stays the entrypoint; it just delegates to the ninja graph. xtask is
 # built offline by nix so this works in CI too.
-XTASK := nix run .#xtask --
+# NB: '#' starts a Make comment — escape it (\#) so the flake attr survives.
+XTASK := nix run .\#xtask --
 
 .PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
         runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed test \
