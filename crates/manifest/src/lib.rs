@@ -216,6 +216,89 @@ pub struct Plan {
     pub total_bytes: u64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str, sha: &str, plats: &[&str]) -> Entry {
+        Entry {
+            path: path.into(),
+            kind: "file".into(),
+            sha256: Some(sha.into()),
+            size: Some(1),
+            exec: false,
+            platforms: plats.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn classify_by_name() {
+        assert_eq!(classify("plan-ai.exe"), vec!["win"]);
+        assert_eq!(classify("plan-ai.dmg"), vec!["mac"]);
+        assert_eq!(classify("plan-ai.linux.exe"), vec!["linux"]);
+        assert_eq!(classify("tools/squashfuse_ll"), vec!["linux"]);
+        assert_eq!(classify("components/runtime-mac-arm64.dmg"), vec!["mac"]);
+        assert_eq!(classify("components/ollama-windows-amd64"), vec!["win"]);
+        assert_eq!(classify("components/nixos-fhs.closure"), vec!["linux"]);
+        assert_eq!(classify("components/ow-assets.squashfs"), vec!["all"]);
+        // "darwin" must not be mistaken for win (contains "win")
+        assert_eq!(classify("components/ollama-darwin.dmg"), vec!["mac"]);
+    }
+
+    #[test]
+    fn safety_and_exclusion() {
+        assert!(!is_safe_path("models/x"));
+        assert!(!is_safe_path("../escape"));
+        assert!(!is_safe_path("/abs"));
+        assert!(is_safe_path("components/x"));
+        assert!(is_excluded("data/foo"));
+        assert!(is_excluded("update.json"));
+        assert!(!is_excluded("components/x"));
+    }
+
+    fn manifest(files: Vec<Entry>) -> Manifest {
+        Manifest { schema: 1, product: "p".into(), version: "1".into(), commit: "c".into(), built_at: String::new(), update_url: String::new(), files }
+    }
+
+    #[test]
+    fn diff_bootstrap_keeps_only_wanted_platforms() {
+        let remote = manifest(vec![
+            file("plan-ai.linux.exe", "a", &["linux"]),
+            file("plan-ai.exe", "b", &["win"]),
+            file("components/ow-assets.squashfs", "c", &["all"]),
+        ]);
+        let plan = diff(None, &remote, &["linux".into()]);
+        let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"plan-ai.linux.exe"));
+        assert!(paths.contains(&"components/ow-assets.squashfs")); // "all" wanted
+        assert!(!paths.contains(&"plan-ai.exe")); // win not kept
+        assert!(plan.to_delete.is_empty());
+    }
+
+    #[test]
+    fn diff_prunes_other_platforms_and_skips_unchanged() {
+        let local = manifest(vec![
+            file("plan-ai.linux.exe", "a", &["linux"]),
+            file("plan-ai.exe", "b", &["win"]), // present from a prior multi-platform build
+        ]);
+        let remote = manifest(vec![
+            file("plan-ai.linux.exe", "a", &["linux"]), // unchanged
+            file("plan-ai.exe", "b", &["win"]),
+        ]);
+        let plan = diff(Some(&local), &remote, &["linux".into()]);
+        assert!(plan.to_download.is_empty()); // linux unchanged, win not wanted
+        assert_eq!(plan.to_delete, vec!["plan-ai.exe".to_string()]); // prune win
+    }
+
+    #[test]
+    fn diff_redownloads_changed() {
+        let local = manifest(vec![file("plan-ai.linux.exe", "old", &["linux"])]);
+        let remote = manifest(vec![file("plan-ai.linux.exe", "new", &["linux"])]);
+        let plan = diff(Some(&local), &remote, &["linux".into()]);
+        assert_eq!(plan.to_download.len(), 1);
+    }
+}
+
 /// Diff `local` (what's on the drive; None ⇒ bootstrap) against `remote` for the
 /// `kept` platforms. Wanted = entries any kept platform needs; everything else
 /// local is pruned. Never touches models/ or data/ (excluded from manifests).

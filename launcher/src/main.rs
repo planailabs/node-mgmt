@@ -745,10 +745,13 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
 /// progress dialog on NixOS (can't run the dynamic GL binary) or if eframe won't
 /// spawn on linux. Skipped with no display (headless/CI). Best-effort.
 pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
-    // Need a display; skip in headless CI.
+    // Need a display; skip in headless CI (treat an empty var as unset too).
     #[cfg(target_os = "linux")]
-    if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return None;
+    {
+        let has = |k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false);
+        if !has("DISPLAY") && !has("WAYLAND_DISPLAY") {
+            return None;
+        }
     }
     // NixOS: the dynamic glibc/GL eframe binary can't run (bare nix-ld stub) — use
     // the system dialog directly.
@@ -878,6 +881,24 @@ fn run_serve() -> ! {
     std::process::exit(code);
 }
 
+/// `plan-ai self-update`: check the update server, pre-download the delta, resume
+/// any interrupted apply, then apply the staged update. For ops + integration tests
+/// (drive it with PLANAI_PORTABLE_ROOT + PLANAI_CACHE + a local update server).
+fn run_self_update() -> ! {
+    apply::resume_if_interrupted();
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let up = update::Updater::new();
+    rt.block_on(update::check_and_predownload(up.clone()));
+    let st = up.status();
+    log(&format!("self-update: state={} {}/{}", st.state, st.done, st.total));
+    if st.state == "ready" {
+        let applied = apply::run(&up);
+        log(&format!("self-update: applied={applied}"));
+        std::process::exit(if applied { 0 } else { 1 });
+    }
+    std::process::exit(if st.state == "idle" { 0 } else { 1 });
+}
+
 fn main() {
     // Subcommands (re-invocations of this same binary):
     {
@@ -889,6 +910,9 @@ fn main() {
             }
             Some("serve-stack") => run_serve_stack(),
             Some("serve") => run_serve(),
+            // Ops/test: check the update server, pre-download the delta, and apply it
+            // (no Electron/runtime). Honours PLANAI_PORTABLE_ROOT + PLANAI_CACHE.
+            Some("self-update") => run_self_update(),
             _ => {}
         }
     }
