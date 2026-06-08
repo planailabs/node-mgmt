@@ -30,7 +30,7 @@ ALLTGTS := $(TARGETS)
 XTASK := nix run .#xtask --
 
 .PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
-        runtime runtimes app spa components bundle bundles image update-tarball ninja seed test \
+        runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed test \
         test-usb test-vm test-nixos test-clean test-all clean help
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
@@ -50,6 +50,9 @@ bundles: ## package every target from the components
 
 update-tarball: ## update-server tarball (manifest.json + files/) for the update URL
 	$(XTASK) build update-tarball
+
+tarball-upload: update-tarball ## upload the update tarball to a web-agency webspace (set WEB_AGENCY_TOKEN + WEB_AGENCY_URL [+ WEB_AGENCY_WEBSPACE_ID])
+	$(XTASK) upload
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh

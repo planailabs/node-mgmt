@@ -15,6 +15,12 @@ gone — see git history if you need it.
 Read this before changing the build/packaging. It encodes constraints and
 gotchas that are expensive to re-discover.
 
+**Workflow: first test, then fix. Always add tests for new features.** Reproduce a
+bug with a failing test before changing code; ship every new feature with tests
+(unit tests in the owning crate, e.g. `crates/manifest`; end-to-end via the
+`plan-ai self-update` subcommand against a local server; UI via `make ui` + the
+mock-server).
+
 ---
 
 ## The one rule that shapes everything

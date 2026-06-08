@@ -27,6 +27,33 @@ enum Cmd {
     GenNinja,
     /// (Re)write build.ninja then run ninja for the given targets (default: image).
     Build { targets: Vec<String> },
+    /// Upload an already-built update tarball to a web-agency webspace.
+    Upload(UploadArgs),
+}
+
+#[derive(clap::Args)]
+struct UploadArgs {
+    /// The update tarball to deploy (built by `make update-tarball`).
+    #[arg(default_value = "dist/plan-ai-update.tar.gz")]
+    tarball: PathBuf,
+    /// Deploy token (web-agency).
+    #[arg(long, env = "WEB_AGENCY_TOKEN")]
+    token: String,
+    /// Web-agency server URL.
+    #[arg(long, env = "WEB_AGENCY_URL")]
+    url: String,
+    /// Webspace ID; if omitted, uses the token's scoped webspace.
+    #[arg(long, env = "WEB_AGENCY_WEBSPACE_ID")]
+    webspace_id: Option<String>,
+    /// Cloudflare Pages branch (ignored for local static folders).
+    #[arg(long, env = "WEB_AGENCY_BRANCH")]
+    branch: Option<String>,
+    /// Poll interval (seconds) while waiting for the deployment.
+    #[arg(long, default_value = "3")]
+    poll_interval: u64,
+    /// Don't wait for the deployment to finish.
+    #[arg(long)]
+    no_wait: bool,
 }
 
 #[derive(clap::Args)]
@@ -73,6 +100,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Build { targets } => build(targets),
+        Cmd::Upload(a) => upload(a),
     }
 }
 
@@ -245,4 +273,205 @@ fn run(cmd: &mut Command) -> Result<()> {
         bail!("command failed ({status}): {cmd:?}");
     }
     Ok(())
+}
+
+// ── web-agency upload (HTTP protocol adopted from mac-mgmt's web-agency-upload) ──
+
+#[derive(serde::Deserialize)]
+struct Whoami {
+    kind: String,
+    webspace_id: Option<String>,
+    webspace_name: Option<String>,
+}
+#[derive(serde::Deserialize)]
+struct UploadResp {
+    deployment_id: String,
+    status: String,
+}
+#[derive(serde::Deserialize)]
+struct StatusResp {
+    deployment_id: String,
+    status: String,
+    error_message: Option<String>,
+}
+
+fn upload(a: UploadArgs) -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::blocking::Client::new();
+    deploy(&client, &a)
+}
+
+/// whoami (if no webspace) → POST the tarball → poll status. Split out so tests can
+/// drive it against a local server.
+fn deploy(client: &reqwest::blocking::Client, a: &UploadArgs) -> Result<()> {
+    let base = a.url.trim_end_matches('/');
+    let webspace = match &a.webspace_id {
+        Some(id) => id.clone(),
+        None => resolve_webspace(client, base, &a.token)?,
+    };
+    if !a.tarball.is_file() {
+        bail!("{} not found — run `make update-tarball` first", a.tarball.display());
+    }
+    let mut url = format!("{base}/api/v1/deploy/{webspace}");
+    if let Some(b) = &a.branch {
+        url.push_str(&format!("?branch={}", percent(b)));
+    }
+    eprintln!("uploading {} to webspace {webspace}…", a.tarball.display());
+    let body = reqwest::blocking::Body::from(std::fs::File::open(&a.tarball)?);
+    let resp = client.post(&url).bearer_auth(&a.token).body(body).send().context("upload failed")?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        bail!("upload failed ({s}): {}", resp.text().unwrap_or_default());
+    }
+    let up: UploadResp = resp.json().context("invalid upload response")?;
+    eprintln!("deployment {} started ({})", up.deployment_id, up.status);
+    if a.no_wait {
+        println!("{}", serde_json::json!({ "deployment_id": up.deployment_id, "status": up.status }));
+        return Ok(());
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(a.poll_interval));
+        let resp = client.get(format!("{base}/api/v1/deploy/{webspace}/status")).bearer_auth(&a.token).send().context("status check failed")?;
+        if !resp.status().is_success() {
+            eprintln!("warning: status check failed: {}", resp.text().unwrap_or_default());
+            continue;
+        }
+        let st: StatusResp = resp.json().context("invalid status response")?;
+        match st.status.as_str() {
+            "success" => {
+                eprintln!("deployment {} successful", st.deployment_id);
+                return Ok(());
+            }
+            "failed" => bail!("deployment failed: {}", st.error_message.unwrap_or_else(|| "unknown error".into())),
+            other => eprintln!("status: {other}"),
+        }
+    }
+}
+
+fn resolve_webspace(client: &reqwest::blocking::Client, base: &str, token: &str) -> Result<String> {
+    let resp = client.get(format!("{base}/api/v1/deploy/whoami")).bearer_auth(token).send().context("failed to reach server")?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        bail!("whoami failed ({s}): {}", resp.text().unwrap_or_default());
+    }
+    let w: Whoami = resp.json().context("invalid whoami response")?;
+    if w.kind != "deploy" {
+        bail!("token kind is '{}', expected 'deploy'", w.kind);
+    }
+    let name = w.webspace_name.as_deref().unwrap_or("unknown");
+    w.webspace_id
+        .inspect(|id| eprintln!("using token's scoped webspace: {name} ({id})"))
+        .ok_or_else(|| anyhow::anyhow!("token not scoped to a webspace — pass --webspace-id"))
+}
+
+/// Percent-encode a path/query segment (branch names).
+fn percent(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// A one-shot HTTP/1.1 server that replies to each request with a canned body,
+    /// consuming any Content-Length body first so the client doesn't block.
+    fn serve(responses: Vec<(&'static str, &'static str)>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let resp: Vec<(String, String)> = responses.into_iter().map(|(a, b)| (a.into(), b.into())).collect();
+        let h = std::thread::spawn(move || {
+            for (code, body) in resp {
+                let (mut sock, _) = listener.accept().unwrap();
+                // Read headers, then drain a Content-Length body if present.
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                let mut content_len = 0usize;
+                loop {
+                    let n = sock.read(&mut tmp).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..p]).to_lowercase();
+                        content_len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let have = buf.len() - (p + 4);
+                        let mut remaining = content_len.saturating_sub(have);
+                        while remaining > 0 {
+                            let n = sock.read(&mut tmp).unwrap();
+                            if n == 0 {
+                                break;
+                            }
+                            remaining = remaining.saturating_sub(n);
+                        }
+                        break;
+                    }
+                }
+                let out = format!(
+                    "HTTP/1.1 {code}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                sock.write_all(out.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{addr}"), h)
+    }
+
+    fn test_client() -> reqwest::blocking::Client {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::blocking::Client::new()
+    }
+
+    fn args(url: String, tarball: PathBuf) -> UploadArgs {
+        UploadArgs {
+            tarball,
+            token: "t".into(),
+            url,
+            webspace_id: Some("ws1".into()),
+            branch: None,
+            poll_interval: 0,
+            no_wait: false,
+        }
+    }
+
+    #[test]
+    fn deploy_uploads_then_polls_to_success() {
+        let tb = std::env::temp_dir().join(format!("xtask-upl-{}.tar.gz", std::process::id()));
+        std::fs::write(&tb, b"fake tarball").unwrap();
+        let (url, h) = serve(vec![
+            ("200 OK", r#"{"deployment_id":"d1","status":"queued"}"#), // POST upload
+            ("200 OK", r#"{"deployment_id":"d1","status":"success"}"#), // GET status
+        ]);
+        let client = test_client();
+        let r = deploy(&client, &args(url, tb.clone()));
+        h.join().unwrap();
+        std::fs::remove_file(&tb).ok();
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn deploy_reports_failed_deployment() {
+        let tb = std::env::temp_dir().join(format!("xtask-upl2-{}.tar.gz", std::process::id()));
+        std::fs::write(&tb, b"fake").unwrap();
+        let (url, h) = serve(vec![
+            ("200 OK", r#"{"deployment_id":"d2","status":"queued"}"#),
+            ("200 OK", r#"{"deployment_id":"d2","status":"failed","error_message":"boom"}"#),
+        ]);
+        let client = test_client();
+        let r = deploy(&client, &args(url, tb.clone()));
+        h.join().unwrap();
+        std::fs::remove_file(&tb).ok();
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("boom"));
+    }
 }
