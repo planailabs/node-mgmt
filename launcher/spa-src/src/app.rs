@@ -164,6 +164,16 @@ pub fn App() -> Element {
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
                     TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
                     TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
+                    Button {
+                        size: ButtonSize::Sm,
+                        variant: ButtonVariant::Ghost,
+                        // Electron routes window.open(external) to the system browser
+                        // (setWindowOpenHandler → shell.openExternal in main/index.js).
+                        onclick: move |_| {
+                            document::eval("window.open('https://git.plan.ai/plan-ai/usb', '_blank');");
+                        },
+                        {t!("btn-report-issue")}
+                    }
                     LanguagePicker {}
                     ThemeToggle {}
                 }

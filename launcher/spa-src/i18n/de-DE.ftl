@@ -5,6 +5,7 @@ chrome-tagline = usb · offline
 tab-dashboard = Übersicht
 tab-models = Modelle
 tab-webui = Open WebUI
+btn-report-issue = Problem melden
 webui-not-ready = Open-WebUI ist noch nicht bereit.
 
 # dashboard hero + services

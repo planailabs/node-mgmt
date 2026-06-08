@@ -2,7 +2,7 @@
 // Thin Electron shell (phase 5): the rust launcher prepares the runtime, runs the
 // control plane (ollama + open-webui supervisor) and serves the Dioxus SPA over
 // localhost. Electron just shows that URL — no node supervisor/loader/renderer.
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, shell } = require('electron');
 
 const UI_URL = process.env.PLANAI_UI_URL || '';
 
@@ -21,6 +21,13 @@ function createWindow() {
     },
   });
   win.removeMenu();
+
+  // External links (e.g. the dashboard's "Report issue" button → window.open)
+  // open in the user's default browser rather than a bare Electron popup.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
 
   if (UI_URL) {
     win.loadURL(UI_URL);
