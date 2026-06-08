@@ -143,7 +143,13 @@ pub fn App() -> Element {
         .read()
         .as_ref()
         .and_then(|i| i.get("webui_url").and_then(|v| v.as_str()).map(String::from));
-    // Keep the iframe pane in the tree always; only its visibility tracks the tab.
+    // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
+    // reactive — it tracks the 2s status poll). Mounting earlier would load before
+    // the server accepts connections (blank/errored frame). If readiness later drops
+    // (e.g. a restart), the frame de-materialises and re-mounts fresh when ready
+    // again. The WebUi tab is disabled until ready, so this is the only gate users
+    // actually hit; while ready, only the iframe's visibility tracks the active tab.
+    let webui_src = webui_url.filter(|_| webui_ready);
     let webui_view_cls = if tab == Tab::WebUi { "flex-1 min-h-0" } else { "hidden" };
 
     rsx! {
@@ -181,13 +187,14 @@ pub fn App() -> Element {
                 }
             }
 
-            // views — Dashboard/Models mount per tab; the Open-WebUI iframe stays
-            // mounted across switches (just hidden when inactive) so its session +
-            // scroll survive and it's never torn out of the DOM.
+            // views — Dashboard/Models mount per tab; the Open-WebUI iframe mounts
+            // once webui is ready and stays mounted across tab switches (just hidden
+            // when inactive) so its session + scroll survive — until readiness drops,
+            // when it's torn out and re-mounted fresh on the next ready.
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
             div { class: "{webui_view_cls}",
-                if let Some(url) = webui_url {
+                if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
                 } else {
                     div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
