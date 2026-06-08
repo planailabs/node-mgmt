@@ -33,3 +33,5 @@ __pycache__/
 /mock-server/target/
 /crates/*/target/
 /build.ninja
+/.ninja_log
+/.ninja_lock
