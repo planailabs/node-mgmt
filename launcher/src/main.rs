@@ -380,18 +380,22 @@ fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract
     let dmg = comp.join(format!("{base}.dmg"));
     if dmg.exists() {
         fs::create_dir_all(dest)?;
-        // Our .dmg components are bare HFS+ filesystem images built on Linux
-        // (mkfs.hfsplus), not UDIF wrappers — hdiutil needs the raw-disk-image
-        // class to recognise them ("image not recognised" otherwise).
-        let ok = Command::new("hdiutil")
-            .args(["attach", "-nobrowse", "-noverify",
-                   "-imagekey", "diskimage-class=CRawDiskImage", "-mountpoint"])
-            .arg(dest)
-            .arg(&dmg)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
+        // Compressed UDIF dmgs (built on Linux via libdmg-hfsplus) mount with a
+        // normal hdiutil attach. Older bare HFS+ images (mkfs.hfsplus, no UDIF
+        // wrapper) need the raw-disk-image class ("image not recognised"
+        // otherwise) — try the normal path first, then fall back for back-compat.
+        let attach = |extra: &[&str]| {
+            Command::new("hdiutil")
+                .args(["attach", "-nobrowse", "-noverify"])
+                .args(extra)
+                .arg("-mountpoint")
+                .arg(dest)
+                .arg(&dmg)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        };
+        if attach(&[]) || attach(&["-imagekey", "diskimage-class=CRawDiskImage"]) {
             log(&format!("{base}: mounted (dmg)"));
             return Ok(MountKind::Dmg);
         }

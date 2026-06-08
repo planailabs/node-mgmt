@@ -36,15 +36,25 @@ emit_sqfs() { need mksquashfs; rm -f "$OUT/$2.squashfs"
 # caller fall back to .tar.gz when unavailable (e.g. CI without sudo).
 emit_dmg() {
   command -v mkfs.hfsplus >/dev/null 2>&1 || { warn "no mkfs.hfsplus — skip $2.dmg"; return 1; }
-  local dir="$1" name="$2" img="$OUT/$2.dmg" mnt sz
+  local dir="$1" name="$2" img="$OUT/$2.dmg" mnt sz raw
+  raw="$(mktemp -u).rawhfs"
   sz=$(du -sb "$dir" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB HFS+ overhead
-  rm -f "$img"; truncate -s "$sz" "$img"
-  mkfs.hfsplus -v PlanAI "$img" >/dev/null 2>&1 || { warn "mkfs.hfsplus failed: $name"; rm -f "$img"; return 1; }
+  truncate -s "$sz" "$raw"
+  mkfs.hfsplus -v PlanAI "$raw" >/dev/null 2>&1 || { warn "mkfs.hfsplus failed: $name"; rm -f "$raw"; return 1; }
   mnt="$(mktemp -d)"
-  if ! sudo mount -o loop,umask=0000 "$img" "$mnt" 2>/dev/null; then
-    warn "loop-mount failed for $name.dmg (sudo?) — tar.gz fallback"; rmdir "$mnt"; rm -f "$img"; return 1; fi
+  if ! sudo mount -o loop,umask=0000 "$raw" "$mnt" 2>/dev/null; then
+    warn "loop-mount failed for $name.dmg (sudo?) — tar.gz fallback"; rmdir "$mnt"; rm -f "$raw"; return 1; fi
   sudo cp -a "$dir/." "$mnt/" && sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
-  log "+ $name.dmg ($(du -h "$img" | cut -f1)) [hfsplus]"
+  # Compress bare HFS+ -> proper UDIF dmg (Finder-mountable, ~3x smaller) via
+  # libdmg-hfsplus. Falls back to the bare image if the tool is unavailable.
+  rm -f "$img"
+  local DMGTOOL; DMGTOOL="$(cd "$REPO_ROOT" && nix build .#libdmg-hfsplus --no-link --print-out-paths 2>/dev/null)/bin/dmg"
+  if [ -x "$DMGTOOL" ] && "$DMGTOOL" dmg "$raw" "$img" >/dev/null 2>&1; then
+    rm -f "$raw"; log "+ $name.dmg ($(du -h "$img" | cut -f1)) [UDIF compressed]"
+  else
+    warn "libdmg-hfsplus unavailable — bare HFS+ dmg for $name"; mv "$raw" "$img"
+    log "+ $name.dmg ($(du -h "$img" | cut -f1)) [bare hfsplus]"
+  fi
 }
 # windows: ship the component PRE-EXTRACTED as a plain directory. The win pbs
 # tree has no symlinks/special perms, so it lives on FAT32 with no special flags

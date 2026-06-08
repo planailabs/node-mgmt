@@ -166,14 +166,27 @@ emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding p
 # loop mount (the dev box has both — same path build-components.sh uses for dmgs).
 emit_hfsplus_dmg() {  # <src-dir> <out.dmg>
   need mkfs.hfsplus
-  local src="$1" img="$2" mnt sz
+  local src="$1" img="$2" mnt sz raw
+  raw="$(mktemp -u).rawhfs"
   sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB overhead
-  rm -f "$img"; truncate -s "$sz" "$img"
-  mkfs.hfsplus -v PlanAI "$img" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $img"
+  truncate -s "$sz" "$raw"
+  mkfs.hfsplus -v PlanAI "$raw" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $raw"
   mnt="$(mktemp -d)"
-  sudo mount -o loop,umask=0000 "$img" "$mnt" || die "loop-mount failed (sudo?) for $img"
+  sudo mount -o loop,umask=0000 "$raw" "$mnt" || die "loop-mount failed (sudo?) for $raw"
   sudo cp -a "$src/." "$mnt/"; sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
-  log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [hfsplus]"
+  # Compress the bare HFS+ image into a proper UDIF dmg (Finder-mountable, ~3x
+  # smaller) with libdmg-hfsplus (no macOS/hdiutil needed). The launcher mounts
+  # UDIF via a normal `hdiutil attach`; falls back to bare HFS+ if the tool fails.
+  rm -f "$img"
+  local DMGTOOL; DMGTOOL="$(cd "$REPO_ROOT" && nix build .#libdmg-hfsplus --no-link --print-out-paths 2>/dev/null)/bin/dmg"
+  if [ -x "$DMGTOOL" ] && "$DMGTOOL" dmg "$raw" "$img" >/dev/null 2>&1; then
+    rm -f "$raw"
+    log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [UDIF compressed]"
+  else
+    warn "libdmg-hfsplus unavailable — shipping uncompressed bare HFS+ dmg"
+    mv "$raw" "$img"
+    log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [bare hfsplus]"
+  fi
 }
 
 # Ship the NixOS FHS helper closure (NAR) into the pool. On NixOS the static-musl
