@@ -23,6 +23,18 @@ host_target() {
   echo "$os-$arch"
 }
 
+# Run each argument (a command string) as a parallel background job in a subshell,
+# then die if any failed. Used to overlap the independent post-electron steps for a
+# single target — the nix launcher build, the app-component pack, the NixOS FHS
+# export, and the component copy (which itself builds llmfit via nix) don't depend
+# on each other, so there's no reason to run them one after another.
+run_jobs() {
+  local pids=() fail=0 j pid
+  for j in "$@"; do ( eval "$j" ) & pids+=("$!"); done
+  for pid in "${pids[@]}"; do wait "$pid" || fail=1; done
+  [ "$fail" -eq 0 ] || die "a parallel bundle step failed"
+}
+
 TARGET="${1:-$(host_target)}"
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 APP="$REPO_ROOT/app"
@@ -129,24 +141,36 @@ package_electron_builder() {  # linux AppImage / windows zip
   log "electron-builder $EB_OS -> $OUT"
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
-  copy_comps_into "$OUT/components"   # shared pool beside the launcher
+  # Everything after electron-builder is independent (distinct output files), so run
+  # it concurrently: the component copy (+ llmfit nix build), the app-component pack,
+  # the launcher nix build, and (linux) the NixOS FHS export overlap instead of
+  # waiting on each other. None use sudo here, so there's no lock contention.
   if [ "$EB_OS" = "--linux" ]; then
     local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
-    emit_app_component "$UNPACK"          # -> components/app-linux-x64.squashfs
-    emit_nixos_fhs                        # -> components/nixos-fhs.{closure,path}
-    # named .linux.exe (a distinct, explicit per-OS launcher name)
-    local L; L="$(nix_launcher launcher-linux-x64 plan-ai)"
-    cp -f "$L" "$OUT/plan-ai.linux.exe"; chmod +x "$OUT/plan-ai.linux.exe"
-    log "linux standalone launcher -> $OUT/plan-ai.linux.exe (static musl)"
+    run_jobs \
+      'copy_comps_into "$OUT/components"' \
+      'emit_app_component "$UNPACK"' \
+      'emit_nixos_fhs' \
+      'place_standalone_launcher launcher-linux-x64 plan-ai plan-ai.linux.exe'
   else
     local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
-    emit_app_component "$UNPACK"          # -> components/app-win-x64/ (used in place)
-    local L; L="$(nix_launcher launcher-win-x64 plan-ai.exe)"
-    cp -f "$L" "$OUT/plan-ai.exe"
-    sign_windows || true                  # signs the standalone launcher exe (if WIN_PFX set)
-    log "win standalone launcher -> $OUT/plan-ai.exe"
+    run_jobs \
+      'copy_comps_into "$OUT/components"' \
+      'emit_app_component "$UNPACK"' \
+      'place_standalone_launcher launcher-win-x64 plan-ai.exe plan-ai.exe'
   fi
   log "bundle done -> $OUT/ (standalone launcher + shared components/ incl. app-$TARGET)"
+}
+
+# Build a per-OS standalone launcher via nix, drop it beside the Electron app under
+# its explicit shipped name, then (windows) Authenticode-sign it. Self-contained so
+# run_jobs can background it (no stdout capture across the subshell boundary).
+place_standalone_launcher() {  # <flake-attr> <binary-in-store> <shipped-name>
+  local attr="$1" bin="$2" name="$3" L
+  L="$(nix_launcher "$attr" "$bin")"
+  cp -f "$L" "$OUT/$name"; chmod +x "$OUT/$name" 2>/dev/null || true
+  case "$name" in *.exe) [ "$name" = plan-ai.exe ] && sign_windows || true ;; esac
+  log "standalone launcher -> $OUT/$name"
 }
 
 # Emit the Electron app itself as a component (app-$TARGET) in THIS OS's format,
@@ -155,41 +179,20 @@ package_electron_builder() {  # linux AppImage / windows zip
 emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding plan.ai.app)
   local src="$1" name="app-$TARGET" cdst="$OUT/components"; mkdir -p "$cdst"
   case "$FMTS" in
-    squashfs) need mksquashfs; rm -f "$cdst/$name.squashfs"
-      mksquashfs "$src" "$cdst/$name.squashfs" -comp zstd -processors "$(nproc)" -all-root -no-xattrs -noappend -quiet
+    squashfs) pack_squashfs "$src" "$cdst/$name.squashfs"
       log "app component -> $name.squashfs ($(du -h "$cdst/$name.squashfs" | cut -f1))" ;;
-    dir) rm -rf "$cdst/$name"; mkdir -p "$cdst/$name"; cp -a "$src/." "$cdst/$name/"
+    dir) pack_dir "$src" "$cdst/$name"
       log "app component -> $name/ ($(du -sh "$cdst/$name" | cut -f1))" ;;
     dmg) emit_hfsplus_dmg "$src" "$cdst/$name.dmg" ;;
     *) die "no app-component format for FMTS=$FMTS" ;;
   esac
 }
 
-# raw HFS+ image macOS mounts via hdiutil. Needs mkfs.hfsplus (hfsprogs) + sudo
-# loop mount (the dev box has both — the shared pack_dmg primitive in lib.sh).
+# raw HFS+ image macOS mounts via hdiutil, compressed to UDIF via libdmg-hfsplus.
+# Thin wrapper over lib.sh's shared pack_dmg (also used by pack-component.sh).
 emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
-  need mkfs.hfsplus
-  local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw
-  raw="$(mktemp -u).rawhfs"
-  sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB overhead
-  truncate -s "$sz" "$raw"
-  mkfs.hfsplus -v "$vol" "$raw" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $raw"
-  mnt="$(mktemp -d)"
-  sudo mount -o loop,umask=0000 "$raw" "$mnt" || die "loop-mount failed (sudo?) for $raw"
-  sudo cp -a "$src/." "$mnt/"; sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
-  # Compress the bare HFS+ image into a proper UDIF dmg (Finder-mountable, ~3x
-  # smaller) with libdmg-hfsplus (no macOS/hdiutil needed). The launcher mounts
-  # UDIF via a normal `hdiutil attach`; falls back to bare HFS+ if the tool fails.
-  rm -f "$img"
-  local DMGTOOL; DMGTOOL="$(cd "$REPO_ROOT" && nix build .#libdmg-hfsplus --no-link --print-out-paths 2>/dev/null)/bin/dmg"
-  if [ -x "$DMGTOOL" ] && "$DMGTOOL" dmg "$raw" "$img" >/dev/null 2>&1; then
-    rm -f "$raw"
-    log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [UDIF compressed]"
-  else
-    warn "libdmg-hfsplus unavailable — shipping uncompressed bare HFS+ dmg"
-    mv "$raw" "$img"
-    log "app component -> $(basename "$img") ($(du -h "$img" | cut -f1)) [bare hfsplus]"
-  fi
+  pack_dmg "$1" "$2" "${3:-PlanAI}" || die "dmg build failed (mkfs.hfsplus / sudo loop-mount?): $2"
+  log "app component -> $(basename "$2") ($(du -h "$2" | cut -f1))"
 }
 
 # Ship the NixOS FHS helper closure (NAR) into the pool. On NixOS the static-musl
@@ -277,14 +280,16 @@ package_mac() {  # @electron/packager (cross) + rcodesign
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$APPDIR"
   else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable)"; fi
   rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
-  copy_comps_into "$OUT/components"   # shared dmg pool beside the launcher
-  # The Electron .app ships as the app-mac component (a dmg holding plan.ai.app);
-  # the launcher mounts it and runs Electron from it.
+  # Overlap the component copy (+ llmfit nix build, no sudo) with the dmg work. The
+  # two dmg builds (app-mac component + launcher .app) BOTH need a sudo loop-mount,
+  # so they stay serial w.r.t. each other inside one job to avoid loop-device churn.
+  # The Electron .app ships as the app-mac component (a dmg holding plan.ai.app); the
+  # launcher (plan-ai.dmg: mount → double-click plan.ai.app) finds the shared pool.
   local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"
-  emit_app_component "$STAGE"; rm -rf "$STAGE"
-  # standalone launcher, shipped as plan-ai.dmg (mount → double-click plan.ai.app);
-  # it finds the shared pool on the USB.
-  build_mac_launcher_app
+  run_jobs \
+    'copy_comps_into "$OUT/components"' \
+    'emit_app_component "$STAGE"; build_mac_launcher_app'
+  rm -rf "$STAGE"
   log "mac bundle -> $OUT/plan-ai.dmg (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"
 }
 
