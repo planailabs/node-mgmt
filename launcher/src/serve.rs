@@ -113,8 +113,8 @@ async fn info(State(s): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "webui_url": s.webui_url,
         "llmfit_url": s.llmfit_url,
-        "ollama_port": config::OLLAMA_PORT,
-        "webui_port": config::WEBUI_PORT,
+        "ollama_port": config::ollama_port(),
+        "webui_port": config::webui_port(),
         "models_dir": paths::models_dir().to_string_lossy(),
         "data_dir": paths::data_dir().to_string_lossy(),
         "accel": {

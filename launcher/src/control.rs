@@ -24,7 +24,7 @@ pub fn service_specs() -> Vec<(String, SpawnSpec)> {
         &["serve"],
         config::ollama_env(),
     );
-    let port = config::WEBUI_PORT.to_string();
+    let port = config::webui_port().to_string();
     let webui = spec(
         paths::venv_python().to_string_lossy().into_owned(),
         &["-m", "uvicorn", "open_webui.main:app", "--host", config::WEBUI_HOST, "--port", &port],

@@ -570,6 +570,7 @@ fn run_supervisor(socket: &Path) -> ! {
 /// supervisor + register ollama + open-webui, wait for health, report, shut down).
 /// A smoke test of the control plane; the live wiring lands with the thin Electron.
 fn run_serve_stack() -> ! {
+    config::init_ports();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => { log(&format!("control runtime: {e}")); std::process::exit(1); }
@@ -594,6 +595,7 @@ fn run_serve_stack() -> ! {
 /// localhost; print/export PLANAI_UI_URL and run until signalled. Electron (thin
 /// webview, phase 5) loads this URL.
 fn run_serve() -> ! {
+    config::init_ports();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => { log(&format!("serve runtime: {e}")); std::process::exit(1); }
@@ -664,6 +666,11 @@ fn main() {
             Err(false) => None, // couldn't create the lock file — proceed unguarded
         }
     };
+
+    // Choose ollama/open-webui ports up front (host picks; the supervisor + FHS
+    // child inherit via env). Falls back off 11434/8080 when a host service holds
+    // them, so the bundled ollama never crash-loops on "address in use".
+    config::init_ports();
 
     // Prepare components on the HOST (the FHS child skips this — it inherits
     // PLANAI_RESOURCES). Mounting here means FUSE uses the host's fusermount +
