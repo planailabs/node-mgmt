@@ -429,7 +429,12 @@ fn teardown(mounts: &[Mount]) {
                 }
             }
             MountKind::Dmg => {
-                let _ = Command::new("hdiutil").arg("detach").arg(&m.dest).status();
+                let ok = Command::new("hdiutil").arg("detach").arg(&m.dest).status().map(|s| s.success()).unwrap_or(false);
+                if !ok {
+                    // Volume still busy (a child mid-exit) — force-detach (analog of
+                    // the FUSE lazy unmount) so the dmg doesn't leak.
+                    let _ = Command::new("hdiutil").arg("detach").arg("-force").arg(&m.dest).status();
+                }
             }
             MountKind::None => {}
         }
