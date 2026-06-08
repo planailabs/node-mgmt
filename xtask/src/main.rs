@@ -141,7 +141,7 @@ fn write_ninja() -> Result<()> {
     // --- leaf/source-driven steps ------------------------------------------
     stamp_edge("download", &srcs(&["usb.lock", "vendor.lock.json"]), "./scripts/fetch-vendor.sh", "download");
     stamp_edge("wheel", &[stamp("download")], "./scripts/build-openwebui.sh", "openwebui wheel");
-    stamp_edge("app", &srcs(&["app/package.json", "app/package-lock.json"]), "cd app && npm ci", "electron deps");
+    stamp_edge("app", &srcs(&["app/package.json", "app/package-lock.json"]), "(cd app && npm ci)", "electron deps");
     stamp_edge("spa", &src_tree("launcher/spa-src"), "./scripts/build-spa.sh", "dioxus spa");
 
     // runtimes per target (need the downloaded interpreter + the wheel)
