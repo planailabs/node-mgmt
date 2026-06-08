@@ -88,32 +88,6 @@ esac; }
 # provides. Relies on an unmatched glob staying literal (no nullglob).
 glob_exists() { local m; for m in $1; do [ -e "$m" ] && return 0; done; return 1; }
 
-# shared offline assets (both formats — every OS bundle uses ow-assets)
-[ -d "$VENDOR_DIR/ow-assets" ] && emit "$VENDOR_DIR/ow-assets" ow-assets $(fmts_for ow-assets)
-
-# runtimes (one archive per built target)
-RUNTIMES="[]"
-for rt in "$DIST_DIR"/runtime/*/; do
-  t="$(basename "$rt")"
-  [ -d "$rt/venv" ] || [ -d "$rt/python" ] || continue
-  # only pack COMPLETE runtimes — a partial install can leave a python/ dir with
-  # no open_webui; never ship that. open_webui lives under one of these layouts:
-  #   nix-native venv : venv/lib/pythonX.Y/site-packages   (nixos)
-  #   unix pbs        : python/lib/pythonX.Y/site-packages (linux/mac)
-  #   windows pbs     : python/Lib/site-packages           (win)
-  if ! glob_exists "$rt/venv/lib/python*/site-packages/open_webui/main.py" \
-     && ! glob_exists "$rt/python/lib/python*/site-packages/open_webui/main.py" \
-     && [ ! -f "$rt/python/Lib/site-packages/open_webui/main.py" ]; then
-    warn "skip incomplete runtime $t (open_webui missing)"; continue
-  fi
-  emit "$rt" "runtime-$t" $(fmts_for "runtime-$t")
-  RUNTIMES="$(jq -c --arg t "$t" '. + [$t]' <<<"$RUNTIMES")"
-done
-
-# ollama: extracted to a dir, then emitted in the per-OS format. Prefer the Nix
-# no-fixup repack (cached, binaries byte-identical, copied OUT of the store);
-# fall back to the locally downloaded flavour archive.
-OLLAMAS="[]"
 extract_to() {  # <archive> <destdir>
   local src="$1" d="$2"; mkdir -p "$d"
   case "$src" in
@@ -124,6 +98,36 @@ extract_to() {  # <archive> <destdir>
   esac
 }
 
+# ── discovery: collect the independent pack tasks (and the manifest arrays) ──
+# Each component (ow-assets, each runtime, each ollama flavour) writes a distinct
+# file/dir under $OUT, so they're independent and packed in parallel below.
+declare -a TASKS=() OLL_TMPS=()
+add_task() { TASKS+=("$1|$2|$3"); }  # <srcdir> <name> <fmts>
+
+# shared offline assets (linux sqfs + mac dmg + win dir)
+[ -d "$VENDOR_DIR/ow-assets" ] && add_task "$VENDOR_DIR/ow-assets" ow-assets "$(fmts_for ow-assets)"
+
+# runtimes (one per COMPLETE built target). open_webui lives under one of:
+#   nix-native venv : venv/lib/pythonX.Y/site-packages   (nixos)
+#   unix pbs        : python/lib/pythonX.Y/site-packages (linux/mac)
+#   windows pbs     : python/Lib/site-packages           (win)
+RUNTIMES="[]"
+for rt in "$DIST_DIR"/runtime/*/; do
+  t="$(basename "$rt")"
+  [ -d "$rt/venv" ] || [ -d "$rt/python" ] || continue
+  if ! glob_exists "$rt/venv/lib/python*/site-packages/open_webui/main.py" \
+     && ! glob_exists "$rt/python/lib/python*/site-packages/open_webui/main.py" \
+     && [ ! -f "$rt/python/Lib/site-packages/open_webui/main.py" ]; then
+    warn "skip incomplete runtime $t (open_webui missing)"; continue
+  fi
+  add_task "$rt" "runtime-$t" "$(fmts_for "runtime-$t")"
+  RUNTIMES="$(jq -c --arg t "$t" '. + [$t]' <<<"$RUNTIMES")"
+done
+
+# ollama: extract each available flavour (prefer the Nix no-fixup repack — cached,
+# binaries byte-identical, copied OUT of the store — else the local archive), then
+# queue a pack task. Extraction is cheap + sequential; the packing is parallel.
+OLLAMAS="[]"
 NIXOLL=""
 if command -v nix >/dev/null 2>&1 && [ -f "$REPO_ROOT/vendor.lock.json" ]; then
   log "nix build .#ollamaComponents (cached no-fixup repack)"
@@ -141,11 +145,27 @@ for key in linux-amd64 linux-arm64 linux-amd64-rocm darwin windows-amd64; do
     done
   fi
   if [ -n "$got" ]; then
-    emit "$tmp" "ollama-$key" $(fmts_for "ollama-$key")
+    add_task "$tmp" "ollama-$key" "$(fmts_for "ollama-$key")"
+    OLL_TMPS+=("$tmp")
     OLLAMAS="$(jq -c --arg k "$key" '. + [$k]' <<<"$OLLAMAS")"
+  else
+    rm -rf "$tmp"
   fi
-  rm -rf "$tmp"
 done
+
+# ── pack in parallel (bounded) — independent squashfs/dmg/dir builds at once ──
+MAXP="${PLANAI_PACK_JOBS:-3}"
+log "packing ${#TASKS[@]} components (up to $MAXP in parallel)…"
+fail=0 running=0
+for task in "${TASKS[@]}"; do
+  IFS='|' read -r dir name fmts <<<"$task"
+  ( emit "$dir" "$name" $fmts ) &
+  running=$((running + 1))
+  if [ "$running" -ge "$MAXP" ]; then wait -n || fail=1; running=$((running - 1)); fi
+done
+while [ "$running" -gt 0 ]; do wait -n || fail=1; running=$((running - 1)); done
+[ "${#OLL_TMPS[@]}" -eq 0 ] || rm -rf "${OLL_TMPS[@]}"
+[ "$fail" -eq 0 ] || die "component packing failed"
 
 jq -n --arg otag "$OLLAMA_TAG" --argjson runtimes "$RUNTIMES" --argjson ollama "$OLLAMAS" \
   '{ollama_tag:$otag, ow_assets:"ow-assets", runtimes:$runtimes, ollama:$ollama,
