@@ -19,7 +19,11 @@ let
     patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
     # cross-target packaging from NixOS
     rcodesign                 # Apple code signing from Linux (mac target)
-    wineWow64Packages.stable  # electron-builder win build steps (rcedit)
+    # electron-builder's win step runs the 32-bit rcedit-ia32.exe (sets exe
+    # version strings). The new wow64 wine (wineWow64Packages) can't run 32-bit
+    # PEs and segfaults; the classic multilib WoW build does. Deprecation warning
+    # is upstream preferring wow64 — ignore it, we need real 32-bit support.
+    wineWowPackages.stable
     osslsigncode              # Authenticode signing for the windows .exe
     nsis                      # windows installer
     # USB image: FAT32 only (mtools, no root) — artifacts stay < 4 GiB
