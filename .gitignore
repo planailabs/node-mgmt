@@ -23,11 +23,13 @@ __pycache__/
 /result
 /launcher/vendor/
 
-# SPA (Dioxus) build artifacts
+# Rust build artifacts (every crate's target/ — launcher, spa, spinner, xtask,
+# mock-server, and all crates/*)
 /launcher/spa-src/target/
 /launcher/spa-src/.cargo/
 /launcher/target/
 /spinner/target/
 /xtask/target/
-/crates/manifest/target/
+/mock-server/target/
+/crates/*/target/
 /build.ninja
