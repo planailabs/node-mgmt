@@ -12,6 +12,19 @@ let
   wheelhouse = pkgs.linkFarm "wheelhouse" (map
     (w: { name = w.name; path = pkgs.fetchurl { inherit (w) url hash; }; })
     wheelsLock.wheels);
+  # MSVC C++ redistributable runtime (MSVCP140*.dll, concrt140.dll, …) for the
+  # Windows runtime. python-build-standalone bundles only the C runtime
+  # (vcruntime140*.dll), but torch's torch_cpu/torch_python.dll (pulled in by
+  # sentence-transformers → open-webui embeddings) link MSVCP140.dll +
+  # MSVCP140_ATOMIC_WAIT.dll, so without these open-webui dies at `import torch`
+  # with WinError 126. A portable kiosk can't assume the VC++ redist is installed
+  # → bundle these redistributable DLLs into the python root. The `msvc-runtime`
+  # PyPI wheel just ships the redist DLLs (version-agnostic; the cp311 tag is
+  # irrelevant — we take only the DLLs).
+  msvcRuntimeWheel = pkgs.fetchurl {
+    url = "https://files.pythonhosted.org/packages/ce/92/5a10262c2a489d5854f96d69e287923d6f720c4935dd26634deb7a5426e9/msvc_runtime-14.44.35112-cp311-cp311-win_amd64.whl";
+    hash = "sha256-q6f75xiX0l7VP7t/OR6fUCiTeKipriGLoYUwxmNEg5E=";
+  };
 in
 derivation {
   inherit system;
@@ -27,6 +40,12 @@ derivation {
     ${lib.optionalString (lib.hasSuffix "apple-darwin" triple) ''export MACOSX_DEPLOYMENT_TARGET=14.0''}
     mkdir -p "$out"
     tar -xzf "$pbsArchive" -C "$out" --strip-components=1
+    # Windows: bundle the MSVC C++ runtime into the python root (next to
+    # python.exe / vcruntime140.dll, on the DLL search path) so torch loads.
+    ${lib.optionalString (lib.hasInfix "windows" triple) ''
+      python3 -m zipfile -e "${msvcRuntimeWheel}" "$TMPDIR/msvcrt"
+      cp "$TMPDIR"/msvcrt/msvc_runtime-*.data/data/*.dll "$out/"
+    ''}
     # site-packages location differs by OS layout: Windows pbs uses Lib/site-packages
     # (python.exe at root); unix uses lib/python<X.Y>/site-packages. Resolve the real
     # path so uv --target installs where the interpreter will actually look (a literal
