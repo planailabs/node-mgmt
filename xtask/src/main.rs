@@ -114,10 +114,63 @@ fn main() -> Result<()> {
     }
 }
 
-const TARGETS: &[&str] = &["linux-x64", "win-x64", "mac-arm64"];
+/// Every platform the pipeline knows how to build. The active set for a given
+/// build is a subset of this (see `resolve_targets`); nixos-x64 is not separate —
+/// the linux-x64 bundle ships the FHS helper and runs on NixOS too.
+const KNOWN_TARGETS: &[&str] = &["linux-x64", "win-x64", "mac-arm64"];
 /// ollama flavours the loader may ship (one per CPU arch / GPU); a flavour whose
-/// archive isn't vendored is simply omitted from the components manifest.
-const OLLAMA_KEYS: &[&str] = &["linux-amd64", "linux-arm64", "linux-amd64-rocm", "darwin", "windows-amd64"];
+/// archive isn't vendored is simply omitted from the components manifest. The
+/// active set is filtered to the OSes of the built platforms (see `ollama_keys_for`).
+const KNOWN_OLLAMA: &[&str] = &["linux-amd64", "linux-arm64", "linux-amd64-rocm", "darwin", "windows-amd64"];
+
+/// The OS family of a build target / ollama flavour, used to match flavours to the
+/// platforms being built (a linux build packs the linux ollama flavours, etc.).
+fn target_os(t: &str) -> &'static str {
+    if t.starts_with("win") { "win" } else if t.starts_with("mac") { "mac" } else { "linux" }
+}
+fn flavour_os(k: &str) -> &'static str {
+    if k.starts_with("windows") { "win" } else if k.starts_with("darwin") { "mac" } else { "linux" }
+}
+
+/// The platforms to build this run. Priority: PLANAI_PLATFORMS env (comma/space
+/// separated, for one-off subset builds like `make image PLATFORMS=linux-x64`) >
+/// usb.lock `.targets` > KNOWN_TARGETS. `nixos-x64` is folded into `linux-x64`
+/// (same artifact); the result is deduped and validated against KNOWN_TARGETS.
+fn resolve_targets() -> Result<Vec<String>> {
+    let raw: Vec<String> = match std::env::var("PLANAI_PLATFORMS") {
+        Ok(s) if !s.trim().is_empty() => s.split([',', ' ']).filter(|x| !x.is_empty()).map(str::to_string).collect(),
+        _ => read_lock_array("targets").unwrap_or_else(|| KNOWN_TARGETS.iter().map(|s| s.to_string()).collect()),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for t in raw {
+        let t = if t == "nixos-x64" { "linux-x64".to_string() } else { t };
+        if !KNOWN_TARGETS.contains(&t.as_str()) {
+            bail!("unknown platform `{t}` (known: {})", KNOWN_TARGETS.join(", "));
+        }
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    if out.is_empty() {
+        bail!("no platforms selected (PLANAI_PLATFORMS / usb.lock .targets are empty)");
+    }
+    Ok(out)
+}
+
+/// The ollama flavours to pack for a set of built platforms: the KNOWN_OLLAMA
+/// catalog filtered to the OS families present in `targets`.
+fn ollama_keys_for(targets: &[String]) -> Vec<String> {
+    let oses: std::collections::HashSet<&str> = targets.iter().map(|t| target_os(t)).collect();
+    KNOWN_OLLAMA.iter().filter(|k| oses.contains(flavour_os(k))).map(|s| s.to_string()).collect()
+}
+
+/// Read a top-level string array from usb.lock (e.g. `.targets`); None if the file
+/// or key is absent (lets the test render from defaults without a usb.lock in cwd).
+fn read_lock_array(key: &str) -> Option<Vec<String>> {
+    let lock = std::fs::read_to_string("usb.lock").ok()?;
+    let v: serde_json::Value = serde_json::from_str(&lock).ok()?;
+    v.get(key)?.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+}
 
 /// Regenerate build.ninja, then run ninja for `targets` (default: image).
 fn build(mut targets: Vec<String>) -> Result<()> {
@@ -128,9 +181,12 @@ fn build(mut targets: Vec<String>) -> Result<()> {
     run(Command::new("ninja").arg("-f").arg("build.ninja").args(&targets)).context("ninja build")
 }
 
-/// Write the rendered ninja graph to build.ninja.
+/// Write the rendered ninja graph to build.ninja for the resolved platform set.
 fn write_ninja() -> Result<()> {
-    std::fs::write("build.ninja", render_ninja()).context("writing build.ninja")
+    let targets = resolve_targets()?;
+    let ollama = ollama_keys_for(&targets);
+    eprintln!("==> graph platforms: {} | ollama: {}", targets.join(" "), ollama.join(" "));
+    std::fs::write("build.ninja", render_ninja(&targets, &ollama)).context("writing build.ninja")
 }
 
 /// Emit a ninja graph for the whole pipeline so EVERY sub-step is dependency-tracked
@@ -140,8 +196,9 @@ fn write_ninja() -> Result<()> {
 ///
 /// Pure render (returns the file text, the only IO being the source-tree reads for
 /// input lists) so `ninja_graph_is_structurally_sound` can validate the graph
-/// without writing build.ninja or invoking ninja.
-fn render_ninja() -> String {
+/// without writing build.ninja or invoking ninja. `targets` / `ollama_keys` are the
+/// resolved active set (see `resolve_targets` / `ollama_keys_for`).
+fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     let mut n = String::new();
     n.push_str("# Generated by `xtask gen-ninja` — do not edit by hand.\n");
     n.push_str("# Make is the entrypoint; it calls `nix run .#xtask -- build <target>`.\n\n");
@@ -168,7 +225,7 @@ fn render_ninja() -> String {
 
     // runtimes per target (need the downloaded interpreter + the wheel)
     let mut runtime_stamps = Vec::new();
-    for t in TARGETS {
+    for t in targets {
         let s = stamp(&format!("runtime-{t}"));
         stamp_edge(&format!("runtime-{t}"), &[stamp("download"), stamp("wheel")], &format!("./scripts/make-runtime.sh {t}"), &format!("runtime {t}"));
         runtime_stamps.push(s);
@@ -186,10 +243,10 @@ fn render_ninja() -> String {
     // sentence-transformers + nltk offline assets) is produced by the WHEEL step
     // (build-openwebui.sh), not download — depend on wheel so the pack waits for it.
     let mut comp_jobs: Vec<(String, String)> = vec![("ow-assets".into(), stamp("wheel"))];
-    for t in TARGETS {
+    for t in targets {
         comp_jobs.push((format!("runtime-{t}"), stamp(&format!("runtime-{t}"))));
     }
-    for k in OLLAMA_KEYS {
+    for k in ollama_keys {
         comp_jobs.push((format!("ollama-{k}"), stamp("download")));
     }
     for (name, src_stamp) in &comp_jobs {
@@ -207,7 +264,7 @@ fn render_ninja() -> String {
     bundle_src.extend(src_tree("crates"));
     bundle_src.extend(srcs(&["launcher/Cargo.toml", "launcher/Cargo.lock", "spinner/Cargo.toml", "spinner/Cargo.lock", "scripts/bundle.sh", "scripts/lib.sh", "flake.nix"]));
     let mut bundle_stamps = Vec::new();
-    for t in TARGETS {
+    for t in targets {
         let mut deps = vec![stamp("components"), stamp("spa"), stamp("app")];
         deps.extend(bundle_src.iter().cloned());
         stamp_edge(&format!("bundle-{t}"), &deps, &format!("./scripts/bundle.sh {t}"), &format!("bundle {t}"));
@@ -244,13 +301,13 @@ fn render_ninja() -> String {
     }
     // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)
     edges.push_str(&format!("build comp-ow-assets: phony {}\n", stamp("comp-ow-assets")));
-    for t in TARGETS {
+    for t in targets {
         edges.push_str(&format!("build comp-runtime-{t}: phony {}\n", stamp(&format!("comp-runtime-{t}"))));
     }
-    for k in OLLAMA_KEYS {
+    for k in ollama_keys {
         edges.push_str(&format!("build comp-ollama-{k}: phony {}\n", stamp(&format!("comp-ollama-{k}"))));
     }
-    for t in TARGETS {
+    for t in targets {
         edges.push_str(&format!("build runtime-{t}: phony {}\n", stamp(&format!("runtime-{t}"))));
         edges.push_str(&format!("build bundle-{t}: phony {}\n", stamp(&format!("bundle-{t}"))));
     }
@@ -311,8 +368,10 @@ fn components_manifest(a: ComponentsManifestArgs) -> Result<()> {
         ["squashfs", "dmg", "tar.gz"].iter().any(|e| dir.join(format!("{base}.{e}")).is_file())
             || dir.join(base).is_dir()
     };
-    let runtimes: Vec<&str> = TARGETS.iter().copied().filter(|t| present(&format!("runtime-{t}"))).collect();
-    let ollama: Vec<&str> = OLLAMA_KEYS.iter().copied().filter(|k| present(&format!("ollama-{k}"))).collect();
+    // scan the full catalogs and report whatever's actually on disk, so the manifest
+    // is honest regardless of which platform subset this build targeted.
+    let runtimes: Vec<&str> = KNOWN_TARGETS.iter().copied().filter(|t| present(&format!("runtime-{t}"))).collect();
+    let ollama: Vec<&str> = KNOWN_OLLAMA.iter().copied().filter(|k| present(&format!("ollama-{k}"))).collect();
 
     let manifest = serde_json::json!({
         "ollama_tag": ollama_tag()?,
@@ -613,7 +672,10 @@ mod tests {
     /// before a build would surface it as a cryptic ninja error.
     #[test]
     fn ninja_graph_is_structurally_sound() {
-        let ninja = render_ninja();
+        // validate the full graph (every known platform + ollama flavour)
+        let targets: Vec<String> = KNOWN_TARGETS.iter().map(|s| s.to_string()).collect();
+        let ollama_keys: Vec<String> = KNOWN_OLLAMA.iter().map(|s| s.to_string()).collect();
+        let ninja = render_ninja(&targets, &ollama_keys);
         let edges = parse_edges(&ninja);
         assert!(!edges.is_empty(), "no build edges parsed");
 
@@ -649,12 +711,12 @@ mod tests {
         let mut expected: Vec<String> = ["image", "update-tarball", "components", "models",
             "runtimes", "bundles", "download", "wheel", "app", "spa", "comp-ow-assets"]
             .iter().map(|s| s.to_string()).collect();
-        for t in TARGETS {
+        for t in &targets {
             expected.push(format!("comp-runtime-{t}"));
             expected.push(format!("bundle-{t}"));
             expected.push(format!("runtime-{t}"));
         }
-        for k in OLLAMA_KEYS {
+        for k in &ollama_keys {
             expected.push(format!("comp-ollama-{k}"));
         }
         for t in &expected {

@@ -2,6 +2,13 @@
 # Run inside `nix develop` (Linux build leg). TARGET defaults to the host.
 TARGET ?=
 
+# Subset the whole build (runtimes, components, bundles, image) to specific
+# platforms instead of usb.lock's full .targets. Space/comma separated, e.g.
+#   make image PLATFORMS=linux-x64
+# xtask reads PLANAI_PLATFORMS when (re)generating the ninja graph.
+PLATFORMS ?=
+export PLANAI_PLATFORMS = $(PLATFORMS)
+
 # --- nix develop guard ------------------------------------------------------
 # Every target except clean/help needs the devshell toolchain (node, python,
 # uv, electron, rcodesign, mtools, …). The devshell sets PLANAI_DEVSHELL=1.
