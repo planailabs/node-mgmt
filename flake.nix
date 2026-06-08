@@ -158,6 +158,8 @@
             })
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
+              # path deps (../crates/*): copied as a sibling of src/ so Cargo resolves them.
+              cp -r ${./crates} crates && chmod -R u+w crates
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
               # the SPA source isn't part of the launcher crate build; the built
               # web assets come from the `spa` derivation, embedded below.

@@ -1,0 +1,16 @@
+[package]
+name = "plan-ai-mock-server"
+version = "0.1.0"
+edition = "2021"
+description = "Dev-only mock of the launcher's /api/* control plane with cycling/random fake state, so the Dioxus SPA can be developed standalone (`make ui`) without ollama/Electron."
+
+[[bin]]
+name = "plan-ai-mock-server"
+path = "src/main.rs"
+
+[dependencies]
+plan-ai-control-api = { path = "../crates/control-api" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+serde_json = "1"
+rand = "0.8"

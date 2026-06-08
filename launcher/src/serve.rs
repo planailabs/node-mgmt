@@ -1,29 +1,24 @@
-//! Localhost HTTP server (phase 3): serves the rust-embedded Dioxus SPA + a
-//! control API the SPA calls (status, logs SSE, start/stop/restart, llmfit model
-//! browser). Electron (thin webview, phase 5) loads the returned URL.
+//! Localhost HTTP server: serves the rust-embedded Dioxus SPA + the control API the
+//! SPA calls. The API routes + JSON shapes live in the shared `plan-ai-control-api`
+//! crate (the `ControlApi` trait + `router`); this module is the REAL implementor
+//! (the mock-server is the other), so the two can't drift. The launcher adds the
+//! embedded-SPA static fallback on top of the shared /api/* router.
 
-use crate::{config, control, paths, proxy};
-use axum::{
-    extract::{Path as AxPath, Query, State},
-    http::{header, StatusCode, Uri},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse, Json,
-    },
-    routing::{get, post},
-    Router,
-};
-use mac_mgmt_services::{
-    protocol::{Notification, ServiceStatus},
-    Client,
-};
-use serde_json::json;
-use std::collections::HashMap;
-use std::convert::Infallible;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+
+use axum::{
+    http::{header, StatusCode, Uri},
+    response::IntoResponse,
+    Router,
+};
+use mac_mgmt_services::{protocol::Notification, Client};
+use plan_ai_control_api::{router, ControlApi, Platforms, ProxyReply, ServiceStatus, UpdateStatus};
+use serde_json::{json, Value};
 use tokio::sync::{broadcast, Mutex};
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+
+use crate::{config, control, paths, proxy};
 
 /// The Dioxus SPA, embedded at compile time (built into spa/ by scripts/build-spa.sh
 /// or the flake before the launcher compiles).
@@ -31,38 +26,39 @@ use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 #[folder = "spa/"]
 struct Spa;
 
-#[derive(Clone)]
-struct AppState {
+/// The real control-plane backend: the supervised stack + the splash spinner.
+/// (Update + platform state are stubbed here; Part C/D fill them in.)
+struct RealApi {
     client: Arc<Mutex<Client>>,
     logs: broadcast::Sender<String>,
     gpu_json: Option<String>,
     llmfit_url: Option<String>,
     webui_url: String,
-    // The splash spinner child; /api/ready kills it once Electron's window paints.
     spinner: crate::SpinnerHandle,
 }
 
 /// Start the control server. Returns the base URL; the server runs on a task.
 pub async fn run_server(client: Client, port: u16, spinner: crate::SpinnerHandle) -> anyhow::Result<String> {
     let (logs_tx, _) = broadcast::channel::<String>(512);
-    let state = AppState {
+    let api = Arc::new(RealApi {
         client: Arc::new(Mutex::new(client)),
         logs: logs_tx,
         gpu_json: std::env::var("PLANAI_GPU_JSON").ok(),
         llmfit_url: std::env::var("PLANAI_LLMFIT_URL").ok(),
         webui_url: config::webui_url(),
         spinner,
-    };
+    });
 
-    // Drain supervisor notifications → fan out to SSE subscribers.
+    // Drain supervisor notifications → fan out to the SSE log subscribers.
     {
-        let st = state.clone();
+        let client = api.client.clone();
+        let logs = api.logs.clone();
         tokio::spawn(async move {
             loop {
                 {
-                    let mut c = st.client.lock().await;
+                    let mut c = client.lock().await;
                     while let Some(n) = c.try_recv_notification() {
-                        let _ = st.logs.send(fmt_notif(&n));
+                        let _ = logs.send(fmt_notif(&n));
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -70,21 +66,8 @@ pub async fn run_server(client: Client, port: u16, spinner: crate::SpinnerHandle
         });
     }
 
-    let app = Router::new()
-        .route("/api/info", get(info))
-        .route("/api/status", get(status))
-        .route("/api/logs", get(logs_sse))
-        // Electron POSTs here on ready-to-show → close the native splash spinner.
-        .route("/api/ready", post(ready))
-        .route("/api/services/{name}/{action}", post(control))
-        // llmfit model browser (proxied to `llmfit serve`, same-origin for the SPA)
-        .route("/api/llmfit/models", get(llmfit_models))
-        .route("/api/llmfit/installed", get(llmfit_installed))
-        .route("/api/llmfit/download", post(llmfit_download))
-        .route("/api/llmfit/download/{id}/status", get(llmfit_download_status))
-        .fallback(static_handler)
-        .with_state(state);
-
+    // Shared /api/* router + the embedded SPA as the fallback.
+    let app: Router = router(api).fallback(static_handler);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let url = format!("http://127.0.0.1:{port}");
     tokio::spawn(async move {
@@ -114,26 +97,8 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         .unwrap_or_else(|| (StatusCode::NOT_FOUND, "not found").into_response())
 }
 
-async fn info(State(s): State<AppState>) -> Json<serde_json::Value> {
-    Json(json!({
-        "webui_url": s.webui_url,
-        "llmfit_url": s.llmfit_url,
-        "ollama_port": config::ollama_port(),
-        "webui_port": config::webui_port(),
-        "models_dir": paths::models_dir().to_string_lossy(),
-        "data_dir": paths::data_dir().to_string_lossy(),
-        "accel": {
-            "flavour": std::env::var("PLANAI_OLLAMA_FLAVOUR").ok(),
-            "reason": std::env::var("PLANAI_OLLAMA_REASON").ok(),
-            "llmfit_url": s.llmfit_url,
-        },
-        "gpu": s.gpu_json.as_deref().and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok()),
-    }))
-}
-
-/// Map a supervisor ServiceStatus + an OS-level health probe to the dashboard's
-/// {ready, starting, stopped} states.
-async fn service_state(st: Option<&ServiceStatus>, health_url: &str) -> &'static str {
+/// Map a supervisor status + an OS-level health probe to {ready, starting, stopped}.
+async fn service_state(st: Option<&mac_mgmt_services::protocol::ServiceStatus>, health_url: &str) -> &'static str {
     match st {
         None => "stopped",
         Some(s) if s.stopped => "stopped",
@@ -148,109 +113,129 @@ async fn service_state(st: Option<&ServiceStatus>, health_url: &str) -> &'static
     }
 }
 
-async fn status(State(s): State<AppState>) -> Json<serde_json::Value> {
-    let list = { s.client.lock().await.list().await.unwrap_or_default() };
-    let by = |name: &str| list.iter().find(|x| x.name == name);
-    let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
-    let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
-    Json(json!([
-        { "id": "ollama", "name": "Ollama", "state": ollama },
-        { "id": "webui", "name": "Open-WebUI", "state": webui },
-    ]))
-}
-
-async fn control(State(s): State<AppState>, AxPath((name, action)): AxPath<(String, String)>) -> impl IntoResponse {
-    // The dashboard speaks ids (ollama/webui); the supervisor registered
-    // "ollama"/"open-webui". start/stop with no name act on all services.
-    let svc = match name.as_str() {
-        "webui" => "open-webui",
-        other => other,
-    };
-    let mut c = s.client.lock().await;
-    let names: Vec<String> = if svc == "all" {
-        c.list().await.map(|l| l.into_iter().map(|x| x.name).collect()).unwrap_or_default()
+/// The platform this launcher runs on, in manifest terms.
+fn current_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "win"
+    } else if cfg!(target_os = "macos") {
+        "mac"
     } else {
-        vec![svc.to_string()]
+        "linux"
+    }
+}
+
+impl ControlApi for RealApi {
+    fn info(&self) -> impl Future<Output = Value> + Send {
+        let gpu_json = self.gpu_json.clone();
+        let llmfit_url = self.llmfit_url.clone();
+        let webui_url = self.webui_url.clone();
+        async move {
+            json!({
+                "webui_url": webui_url,
+                "llmfit_url": llmfit_url,
+                "ollama_port": config::ollama_port(),
+                "webui_port": config::webui_port(),
+                "models_dir": paths::models_dir().to_string_lossy(),
+                "data_dir": paths::data_dir().to_string_lossy(),
+                "accel": {
+                    "flavour": std::env::var("PLANAI_OLLAMA_FLAVOUR").ok(),
+                    "reason": std::env::var("PLANAI_OLLAMA_REASON").ok(),
+                    "llmfit_url": llmfit_url,
+                },
+                "gpu": gpu_json.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()),
+            })
+        }
+    }
+
+    fn status(&self) -> impl Future<Output = Vec<ServiceStatus>> + Send {
+        let client = self.client.clone();
+        async move {
+            let list = { client.lock().await.list().await.unwrap_or_default() };
+            let by = |name: &str| list.iter().find(|x| x.name == name);
+            let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
+            let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
+            vec![
+                ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama.into() },
+                ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui.into() },
+            ]
+        }
+    }
+
+    fn subscribe_logs(&self) -> broadcast::Receiver<String> {
+        self.logs.subscribe()
+    }
+
+    fn ready(&self) -> impl Future<Output = ()> + Send {
+        crate::kill_spinner(&self.spinner);
+        async {}
+    }
+
+    fn service_action(&self, svc: String, action: String) -> impl Future<Output = Result<(), String>> + Send {
+        let client = self.client.clone();
+        async move {
+            let svc = if svc == "webui" { "open-webui".to_string() } else { svc };
+            let mut c = client.lock().await;
+            let names: Vec<String> = if svc == "all" {
+                c.list().await.map(|l| l.into_iter().map(|x| x.name).collect()).unwrap_or_default()
+            } else {
+                vec![svc]
+            };
+            for n in &names {
+                let r = match action.as_str() {
+                    "start" => c.start_service(n).await,
+                    "stop" => c.stop_service(n).await,
+                    "restart" => c.restart_service(n).await,
+                    _ => return Err("unknown action".into()),
+                };
+                r.map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+    }
+
+    // --- update + platforms: stubbed here; wired in Part C/D ----------------
+    fn update_status(&self) -> impl Future<Output = UpdateStatus> + Send {
+        async { UpdateStatus::idle() }
+    }
+    fn update_check(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn update_apply(&self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn platforms(&self) -> impl Future<Output = Platforms> + Send {
+        async {
+            Platforms {
+                kept: vec![current_platform().into()],
+                available: vec!["linux".into(), "mac".into(), "win".into()],
+            }
+        }
+    }
+    fn set_platforms(&self, _kept: Vec<String>) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
+    fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send {
+        let base = self.llmfit_url.clone();
+        async move { proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await }
+    }
+    fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
+        let base = self.llmfit_url.clone();
+        async move { proxy_or_unavailable(base, |b| async move { proxy::post(&b, &path, &body).await }).await }
+    }
+}
+
+/// Run a proxy call against the llmfit base, or a 503 if llmfit isn't running.
+async fn proxy_or_unavailable<F, Fut>(base: Option<String>, call: F) -> ProxyReply
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = anyhow::Result<proxy::ProxyResponse>>,
+{
+    let Some(b) = base else {
+        return ProxyReply { status: 503, body: b"model browser unavailable (llmfit not running)".to_vec() };
     };
-    for n in &names {
-        let r = match action.as_str() {
-            "start" => c.start_service(n).await,
-            "stop" => c.stop_service(n).await,
-            "restart" => c.restart_service(n).await,
-            _ => return (StatusCode::BAD_REQUEST, "unknown action").into_response(),
-        };
-        if let Err(e) = r {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+    match call(b).await {
+        Ok(r) => ProxyReply { status: r.status, body: r.body },
+        Err(e) => ProxyReply { status: 502, body: format!("llmfit proxy: {e}").into_bytes() },
     }
-    (StatusCode::OK, "ok").into_response()
-}
-
-/// Electron hit ready-to-show: the real window is up, so close the splash spinner.
-async fn ready(State(s): State<AppState>) -> impl IntoResponse {
-    crate::kill_spinner(&s.spinner);
-    (StatusCode::OK, "ok")
-}
-
-async fn logs_sse(State(s): State<AppState>) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(s.logs.subscribe())
-        .filter_map(|r| r.ok().map(|line| Ok(Event::default().data(line))));
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-// ── llmfit model-browser proxy ─────────────────────────────────────────────
-
-fn llmfit_base(s: &AppState) -> Result<String, axum::response::Response> {
-    s.llmfit_url
-        .clone()
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "model browser unavailable (llmfit not running)").into_response())
-}
-
-fn proxy_json(r: anyhow::Result<proxy::ProxyResponse>) -> axum::response::Response {
-    match r {
-        Ok(resp) => {
-            let code = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
-            ([(header::CONTENT_TYPE, "application/json")], (code, resp.body)).into_response()
-        }
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("llmfit proxy: {e}")).into_response(),
-    }
-}
-
-async fn llmfit_models(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> axum::response::Response {
-    let base = match llmfit_base(&s) { Ok(b) => b, Err(r) => return r };
-    let limit = q.get("limit").map(String::as_str).unwrap_or("12");
-    let use_case = q.get("use_case").map(String::as_str).unwrap_or("general");
-    let mut path = format!("/api/v1/models/top?limit={limit}&use_case={use_case}");
-    if let Some(mf) = q.get("min_fit").filter(|v| !v.is_empty()) {
-        path.push_str(&format!("&min_fit={mf}"));
-    }
-    proxy_json(proxy::get(&base, &path).await)
-}
-
-async fn llmfit_installed(State(s): State<AppState>) -> axum::response::Response {
-    let base = match llmfit_base(&s) { Ok(b) => b, Err(r) => return r };
-    proxy_json(proxy::get(&base, "/api/v1/installed").await)
-}
-
-async fn llmfit_download(State(s): State<AppState>, Json(body): Json<serde_json::Value>) -> axum::response::Response {
-    let base = match llmfit_base(&s) { Ok(b) => b, Err(r) => return r };
-    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or_default();
-    let payload = json!({ "model": model, "runtime": "ollama" }).to_string();
-    proxy_json(proxy::post(&base, "/api/v1/download", &payload).await)
-}
-
-async fn llmfit_download_status(State(s): State<AppState>, AxPath(id): AxPath<String>) -> axum::response::Response {
-    let base = match llmfit_base(&s) { Ok(b) => b, Err(r) => return r };
-    let enc = urlencode(&id);
-    proxy_json(proxy::get(&base, &format!("/api/v1/download/{enc}/status")).await)
-}
-
-/// Minimal percent-encoding for a path segment (download ids are short tokens).
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }

@@ -1,0 +1,12 @@
+[package]
+name = "plan-ai-control-api"
+version = "0.1.0"
+edition = "2021"
+description = "Shared control-plane HTTP surface for the plan.ai SPA: the ControlApi trait, request/response DTOs, and the axum router that wires /api/* to it. The launcher (real) and the mock-server are two implementors, so the routes + JSON shapes can't drift."
+
+[dependencies]
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }

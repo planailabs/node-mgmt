@@ -4,3 +4,9 @@ asset_dir = "assets"
 
 [web.app]
 title = "plan.ai"
+
+# Dev only (`make ui` / `dx serve`): proxy the control API to the mock server so
+# the whole UI is previewable without ollama/Electron. Ignored by `dx build`
+# (the real launcher serves /api itself). See mock-server/ + `make ui`.
+[[web.proxy]]
+backend = "http://127.0.0.1:9999/api/"

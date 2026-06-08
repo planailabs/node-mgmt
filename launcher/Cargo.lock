@@ -1209,6 +1209,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "plan-ai-control-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "plan-ai-launcher"
 version = "0.1.0"
 dependencies = [
@@ -1221,6 +1232,7 @@ dependencies = [
  "mac-mgmt-services",
  "mime_guess",
  "notify-rust",
+ "plan-ai-control-api",
  "reqwest",
  "rust-embed",
  "rustls",

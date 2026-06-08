@@ -29,7 +29,7 @@ ALLTGTS := $(TARGETS)
 # built offline by nix so this works in CI too.
 XTASK := nix run .#xtask --
 
-.PHONY: all dev download download-curl vendor-lock update ollama openwebui wheel \
+.PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
         runtime runtimes app spa components bundle bundles image update-tarball ninja seed test \
         test-usb test-vm test-nixos test-clean test-all clean help
 
@@ -53,6 +53,14 @@ update-tarball: ## update-server tarball (manifest.json + files/) for the update
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
+
+ui: ## preview the SPA against the mock backend (dx serve + mock API on :9999)
+	@echo "==> tailwind + mock API (:9999) + dx serve (hot reload)"
+	( cd launcher/spa-src && tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \
+	    -o assets/tailwind.css --config tailwind.config.js ) ; \
+	  cargo run --manifest-path mock-server/Cargo.toml & \
+	  trap 'kill %1 2>/dev/null' EXIT INT TERM ; \
+	  ( cd launcher/spa-src && dx serve )
 
 download: ## materialise vendored downloads from Nix FODs (cached) into vendor/
 	$(XTASK) build download
