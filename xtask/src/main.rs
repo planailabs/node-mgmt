@@ -203,8 +203,20 @@ fn write_ninja() -> Result<()> {
         bundle_stamps.push(stamp(&format!("bundle-{t}")));
     }
 
-    // image + tarball: real-file outputs, depend on every bundle + their scripts
+    // models: pre-pull the usb.lock models into ./models (a persistent cache like
+    // vendor/ — survives `make clean`, idempotent re-pulls) so the image ships them
+    // for offline use. Needs the vendored ollama binary (download); re-seeds when the
+    // model list in usb.lock changes. The image depends on it, so `make image` always
+    // bakes the models in (no more manual `make seed` step).
+    let mut models_deps = vec![stamp("download")];
+    models_deps.extend(srcs(&["usb.lock", "scripts/seed-models.sh", "scripts/lib.sh"]));
+    stamp_edge("models", &models_deps, "./scripts/seed-models.sh", "seed models");
+
+    // image + tarball: real-file outputs, depend on every bundle + their scripts.
+    // The image also depends on models/ (baked into the drive); the update tarball
+    // does NOT — models are excluded from the update manifest.
     let mut img_deps = bundle_stamps.clone();
+    img_deps.push(stamp("models"));
     img_deps.extend(srcs(&["scripts/make-usb-image.sh"]));
     img_deps.extend(src_tree("xtask/src"));
     img_deps.extend(src_tree("crates"));
@@ -216,7 +228,7 @@ fn write_ninja() -> Result<()> {
     edges.push_str(&format!("build dist/plan-ai-update.tar.gz: gen {}\n  cmd = ./scripts/make-update-tarball.sh\n  desc = update tarball\n\n", tar_deps.join(" ")));
 
     // phony aliases so `ninja <name>` (and the Makefile) read naturally
-    for s in ["download", "wheel", "app", "spa", "components"] {
+    for s in ["download", "wheel", "app", "spa", "components", "models"] {
         edges.push_str(&format!("build {s}: phony {}\n", stamp(s)));
     }
     // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)

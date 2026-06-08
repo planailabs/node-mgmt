@@ -35,20 +35,29 @@ fi
 
 log "seeding ${#MODELS[@]} model(s) into $MODELS_DIR using $OLLAMA_BIN"
 export OLLAMA_MODELS="$MODELS_DIR"
-export OLLAMA_HOST="127.0.0.1:11434"
+# Run a PRIVATE ollama server on a dedicated port — NOT the default 11434. If the
+# host already has an ollama running there (common on a dev box), serving on 11434
+# would lose the bind race and our `ollama pull` would talk to THAT server instead,
+# writing into its models dir rather than OLLAMA_MODELS. A separate port guarantees
+# the pull hits our server and lands in $MODELS_DIR. Override with PLANAI_SEED_PORT.
+PORT="${PLANAI_SEED_PORT:-11435}"
+export OLLAMA_HOST="127.0.0.1:$PORT"
 
 "$OLLAMA_BIN" serve >/tmp/ollama-seed.log 2>&1 &
 SERVE_PID=$!
 trap 'kill "$SERVE_PID" 2>/dev/null || true' EXIT
 
-# wait for readiness
+# wait for OUR server (and fail fast if it exited early — e.g. the port was taken)
+ready=no
 for _ in $(seq 1 30); do
-  curl -sf "http://$OLLAMA_HOST/api/version" >/dev/null 2>&1 && break
+  if curl -sf "http://$OLLAMA_HOST/api/version" >/dev/null 2>&1; then ready=yes; break; fi
+  kill -0 "$SERVE_PID" 2>/dev/null || die "ollama serve exited early (port $PORT taken? see /tmp/ollama-seed.log)"
   sleep 1
 done
+[ "$ready" = yes ] || die "ollama serve not ready on $OLLAMA_HOST after 30s (see /tmp/ollama-seed.log)"
 
 for m in "${MODELS[@]}"; do
-  log "pull $m"
+  log "pull $m -> $MODELS_DIR"
   "$OLLAMA_BIN" pull "$m"
 done
 

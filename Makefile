@@ -31,7 +31,7 @@ ALLTGTS := $(TARGETS)
 XTASK := nix run .\#xtask --
 
 .PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
-        runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed test \
+        runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed models test \
         test-usb test-vm test-nixos test-clean test-mac test-win test-all clean help
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
@@ -101,8 +101,8 @@ image: ## ready-to-burn FAT32 USB image (all artifacts < 4 GiB; reads everywhere
 	$(XTASK) build image
 
 
-seed: ## pre-pull models from usb.lock into ./models
-	./scripts/seed-models.sh
+seed models: ## pre-pull usb.lock models into ./models (cached; also auto-run by `make image`)
+	$(XTASK) build models
 
 test: ## lint + runtime import + live ollama/open-webui health
 	./scripts/test-build.sh
