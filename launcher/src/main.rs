@@ -97,38 +97,37 @@ fn is_nixos() -> bool {
 
 // On NixOS the generic glibc Electron/ollama can't run (bare nix-ld stub). We ship
 // a buildFHSEnv wrapper's closure as a NAR (its /nix/store paths don't exist on the
-// target); import it, then re-exec OURSELF inside the wrapper so the Electron we
-// later spawn inherits the FHS mount namespace (/lib64/ld-linux + GUI libs) and
-// runs. Guarded by PLANAI_FHS_REEXEC so the in-FHS copy proceeds normally.
+// target); import it, then run OURSELF inside the wrapper as a CHILD (not exec) so
+// the components we already FUSE-mounted on the host stay mounted — the sandbox
+// sees them through the wrapper's recursive bind — and THIS process survives to
+// unmount them after the sandboxed app exits. Returns the child's exit code, or
+// None when the FHS path doesn't apply (non-NixOS / dev / already inside / setup
+// failed → the caller runs the app bare on the host). Guarded by PLANAI_FHS_REEXEC.
 #[cfg(target_os = "linux")]
-fn maybe_reexec_in_fhs(comp: Option<&Path>) {
-    use std::os::unix::process::CommandExt;
+fn maybe_run_in_fhs(comp: Option<&Path>) -> Option<i32> {
     // Skip in dev (nixpkgs Electron + staged dist/, no generic binaries to sandbox)
-    // and once already re-exec'd; only the prod NixOS path needs the FHS.
+    // and once already inside; only the prod NixOS path needs the FHS.
     if std::env::var_os("PLANAI_FHS_REEXEC").is_some()
         || std::env::var_os("PLANAI_DEV").is_some()
         || !is_nixos()
     {
-        return;
+        return None;
     }
-    let comp = match comp { Some(c) => c, None => return };
-    let wrapper = match fs::read_to_string(comp.join("nixos-fhs.path")) {
-        Ok(s) => s.trim().to_string(),
-        Err(_) => return, // no FHS helper shipped — best-effort, run bare
-    };
+    let comp = comp?;
+    let wrapper = fs::read_to_string(comp.join("nixos-fhs.path")).ok()?.trim().to_string();
     if wrapper.is_empty() {
-        return;
+        return None; // no FHS helper shipped — best-effort, run bare
     }
     if !Path::new(&wrapper).exists() {
         let closure = comp.join("nixos-fhs.closure");
         if !closure.exists() {
             log("NixOS FHS: helper closure missing — generic binaries may not run");
-            return;
+            return None;
         }
         log("NixOS FHS: importing helper closure into the nix store (first run)");
         let f = match fs::File::open(&closure) {
             Ok(f) => f,
-            Err(e) => { log(&format!("NixOS FHS: open closure: {e}")); return; }
+            Err(e) => { log(&format!("NixOS FHS: open closure: {e}")); return None; }
         };
         let ok = Command::new("nix-store")
             .arg("--import")
@@ -138,17 +137,20 @@ fn maybe_reexec_in_fhs(comp: Option<&Path>) {
             .unwrap_or(false);
         if !ok || !Path::new(&wrapper).exists() {
             log("NixOS FHS: import failed (untrusted nix user? nix missing?) — running bare");
-            return;
+            return None;
         }
     }
-    log("NixOS FHS: re-executing launcher inside the FHS sandbox");
+    log("NixOS FHS: running launcher inside the FHS sandbox (components mounted on host)");
     let self_exe = std::env::current_exe().unwrap_or_default();
-    let err = Command::new(&wrapper)
+    match Command::new(&wrapper)
         .arg(&self_exe)
         .args(std::env::args_os().skip(1))
         .env("PLANAI_FHS_REEXEC", "1")
-        .exec(); // returns only on failure
-    log(&format!("NixOS FHS: exec {wrapper} failed: {err} — running bare"));
+        .status()
+    {
+        Ok(s) => Some(s.code().unwrap_or(0)),
+        Err(e) => { log(&format!("NixOS FHS: spawn {wrapper} failed: {e} — running bare")); None }
+    }
 }
 
 /// Single-instance guard: take an exclusive advisory lock on a file in the cache
@@ -418,7 +420,13 @@ fn teardown(mounts: &[Mount]) {
         match m.kind {
             MountKind::Fuse => {
                 let fm = find_fusermount().unwrap_or_else(|| "fusermount".into());
-                let _ = Command::new(fm).arg("-u").arg(&m.dest).status();
+                let ok = Command::new(&fm).arg("-u").arg(&m.dest).status().map(|s| s.success()).unwrap_or(false);
+                if !ok {
+                    // A child may still be releasing the mount (mmap'd binary mid-exit).
+                    // Lazy-detach: drops now, frees when the last reference closes —
+                    // avoids leaking the squashfuse_ll mount on a teardown race.
+                    let _ = Command::new(&fm).arg("-uz").arg(&m.dest).status();
+                }
             }
             MountKind::Dmg => {
                 let _ = Command::new("hdiutil").arg("detach").arg(&m.dest).status();
@@ -624,6 +632,10 @@ fn main() {
     let exe = std::env::current_exe().expect("current_exe");
     let here = exe.parent().expect("exe parent").to_path_buf();
 
+    // Are we the re-executed copy running inside the NixOS FHS sandbox? If so the
+    // host parent already took the lock and mounted the components — we just run.
+    let in_fhs = std::env::var_os("PLANAI_FHS_REEXEC").is_some();
+
     let mut mounts: Vec<Mount> = Vec::new();
     // If something upstream already prepared the resources, don't touch them.
     let mut resources = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from);
@@ -631,41 +643,43 @@ fn main() {
     let mut app_dir: Option<PathBuf> = None;
     let comp_dir = components_dir(&here);
 
-    // On NixOS, re-exec inside the shipped FHS sandbox so the generic Electron/
-    // ollama can run (this replaces the process when it succeeds).
-    #[cfg(target_os = "linux")]
-    maybe_reexec_in_fhs(comp_dir.as_deref());
-
-    // Single-instance guard (after any FHS re-exec, so only the final process
-    // takes the lock). A second launch would fight over the supervisor socket and
-    // the ollama/open-webui/UI ports — so bail out instead. Held for the whole run.
-    let _instance_lock = match acquire_instance_lock() {
-        Ok(f) => Some(f),
-        Err(true) => {
-            log("another plan.ai instance is already running — exiting");
-            notify("plan.ai", "plan.ai is already running.");
-            std::process::exit(0);
+    // Single-instance guard — taken by the host process only (the FHS child is
+    // part of the same run). A second launch would fight over the supervisor
+    // socket + ports, so bail out. Held for the whole run (OS frees it on exit).
+    let _instance_lock = if in_fhs {
+        None
+    } else {
+        match acquire_instance_lock() {
+            Ok(f) => Some(f),
+            Err(true) => {
+                log("another plan.ai instance is already running — exiting");
+                notify("plan.ai", "plan.ai is already running.");
+                std::process::exit(0);
+            }
+            Err(false) => None, // couldn't create the lock file — proceed unguarded
         }
-        Err(false) => None, // couldn't create the lock file — proceed unguarded
     };
 
-    if resources.is_none() {
+    // Prepare components on the HOST (the FHS child skips this — it inherits
+    // PLANAI_RESOURCES). Mounting here means FUSE uses the host's fusermount +
+    // /dev/fuse; the FHS sandbox then sees the mounts through its recursive bind,
+    // so NixOS gets a real mount instead of a slow extraction.
+    if !in_fhs && resources.is_none() {
         if let Some(comp) = comp_dir.as_ref() {
             let root = cache_root().join("root");
             let dist = root.join("dist");
             let tools = root.join("tools");
             let _ = fs::create_dir_all(&dist);
-            // Try a FUSE mount FIRST on every platform — incl. NixOS: the bundled
-            // squashfuse_ll is static (runs under the bare nix-ld stub) and the
-            // FHS re-exec lets the mounted generic binaries run, so the old
-            // "NixOS must extract" rule no longer holds. provide() falls back to
-            // unsquashfs extraction automatically if the mount fails (e.g. no
-            // /dev/fuse in the sandbox). PLANAI_FORCE_EXTRACT forces extraction.
+            // FUSE-mount first on every platform — incl. NixOS. We're on the host
+            // here (before the FHS sandbox), so the static squashfuse_ll has the
+            // host's fusermount + /dev/fuse and the mount succeeds; the FHS child
+            // sees it via the recursive bind. provide() still falls back to
+            // unsquashfs extraction if the mount fails. PLANAI_FORCE_EXTRACT forces it.
             let force_extract = std::env::var_os("PLANAI_FORCE_EXTRACT").is_some();
             if force_extract {
                 log("PLANAI_FORCE_EXTRACT set — extracting components (no FUSE mount)");
             } else if is_nixos() {
-                log("NixOS — attempting FUSE mount (squashfuse_ll), extract fallback");
+                log("NixOS — FUSE-mounting components on the host (extract fallback)");
             }
 
             let rt = pick_base(comp, "runtime-").unwrap_or_else(|| {
@@ -706,7 +720,29 @@ fn main() {
             resources = Some(dist);
         }
     }
+    // Inside the FHS child the host already mounted everything; locate the app
+    // tree under the inherited PLANAI_RESOURCES so we can find Electron.
+    if in_fhs {
+        if let Some(res) = resources.as_ref() {
+            let a = res.join("app");
+            if a.exists() {
+                app_dir = Some(a);
+            }
+        }
+    }
     let _ = resources;
+
+    // NixOS prod: now that the components are mounted on the host, run the stack
+    // inside the FHS sandbox as a child (it sees the mounts via the recursive
+    // bind), wait for it, then unmount on the host. No-op on non-NixOS / dev /
+    // when already inside the sandbox.
+    #[cfg(target_os = "linux")]
+    if !in_fhs {
+        if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref()) {
+            teardown(&mounts);
+            std::process::exit(code);
+        }
+    }
 
     // llmfit: GPU detection (→ PLANAI_GPU_JSON for Electron) + the model-browser
     // serve API (→ PLANAI_LLMFIT_URL, proxied by the dashboard). The binary comes
