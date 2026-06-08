@@ -2,11 +2,13 @@
 
 use dioxus::prelude::*;
 use dioxus_i18n::prelude::*;
+use dioxus_i18n::t;
 use futures_util::StreamExt;
 use gloo_net::eventsource::futures::EventSource;
 use serde_json::Value;
 use unic_langid::langid;
 
+use plan_ai_design::language_picker::LanguagePicker;
 use plan_ai_design::theme_toggle::{
     ThemeToggle, THEME_INIT_SCRIPT, WASM_LOADING_INNER, WASM_LOADING_STYLE,
 };
@@ -50,12 +52,29 @@ impl AppState {
 
 #[allow(non_snake_case)]
 pub fn App() -> Element {
-    use_init_i18n(|| {
-        let en: &'static str = plan_ai_design::i18n::EN_US;
-        let de: &'static str = plan_ai_design::i18n::DE_DE;
+    let mut i18n = use_init_i18n(|| {
+        // Concatenate the shared plan-ai-design FTL (theme toggle, language
+        // picker, data table) with this app's own FTL so `t!` resolves both.
+        let en: &'static str = Box::leak(
+            format!("{}\n{}", plan_ai_design::i18n::EN_US, include_str!("../i18n/en-US.ftl")).into_boxed_str(),
+        );
+        let de: &'static str = Box::leak(
+            format!("{}\n{}", plan_ai_design::i18n::DE_DE, include_str!("../i18n/de-DE.ftl")).into_boxed_str(),
+        );
         I18nConfig::new(langid!("en-US"))
             .with_locale(Locale::new_static(langid!("en-US"), en))
             .with_locale(Locale::new_static(langid!("de-DE"), de))
+    });
+
+    // Restore the saved language (localStorage['lang'], set by the LanguagePicker).
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(v) = document::eval("try { return localStorage.getItem('lang') || ''; } catch(e) { return ''; }").await {
+                if v.as_str() == Some("de-DE") {
+                    let _ = i18n.set_language(langid!("de-DE"));
+                }
+            }
+        });
     });
 
     let state = AppState {
@@ -139,12 +158,13 @@ pub fn App() -> Element {
                         "plan"
                         span { class: "text-brand", ".ai" }
                     }
-                    span { class: "kicker", "usb · offline" }
+                    span { class: "kicker", {t!("chrome-tagline")} }
                 }
                 div { class: "topbar-controls flex items-center gap-2",
-                    TabButton { tab: Tab::Dashboard, current: tab, label: "Dashboard", enabled: true }
-                    TabButton { tab: Tab::Models, current: tab, label: "Models", enabled: models_ready }
-                    TabButton { tab: Tab::WebUi, current: tab, label: "Open WebUI", enabled: webui_ready }
+                    TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
+                    TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
+                    TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
+                    LanguagePicker {}
                     ThemeToggle {}
                 }
             }
@@ -158,7 +178,7 @@ pub fn App() -> Element {
                         if let Some(url) = webui_url {
                             iframe { class: "w-full h-full border-0", src: "{url}" }
                         } else {
-                            div { class: "card-pad td-muted text-sm", "Open-WebUI is not ready yet." }
+                            div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
                         }
                     }
                 },
@@ -168,7 +188,7 @@ pub fn App() -> Element {
 }
 
 #[component]
-fn TabButton(tab: Tab, current: Tab, label: &'static str, enabled: bool) -> Element {
+fn TabButton(tab: Tab, current: Tab, label: String, enabled: bool) -> Element {
     let state = use_context::<AppState>();
     let active = tab == current;
     let variant = if active { ButtonVariant::Secondary } else { ButtonVariant::Ghost };

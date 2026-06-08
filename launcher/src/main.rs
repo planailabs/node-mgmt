@@ -15,6 +15,7 @@ use std::process::Command;
 
 mod config;
 mod control;
+mod i18n;
 mod paths;
 mod proxy;
 mod serve;
@@ -440,7 +441,7 @@ fn flush_drive() {
                 .status();
         }
     }
-    notify("plan.ai", "Drive flushed — safe to unplug.");
+    notify("plan.ai", &i18n::t("safe-to-unplug"));
 }
 
 fn teardown(mounts: &[Mount]) {
@@ -688,7 +689,7 @@ fn main() {
             Ok(f) => Some(f),
             Err(true) => {
                 log("another plan.ai instance is already running — exiting");
-                notify("plan.ai", "plan.ai is already running.");
+                notify("plan.ai", &i18n::t("already-running"));
                 std::process::exit(0);
             }
             Err(false) => None, // couldn't create the lock file — proceed unguarded

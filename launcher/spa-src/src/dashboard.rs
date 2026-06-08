@@ -2,6 +2,7 @@
 //! controls, and the live log tail.
 
 use dioxus::prelude::*;
+use dioxus_i18n::t;
 
 use plan_ai_design::{
     Button, ButtonSize, ButtonVariant, Card, Dot, HelpText, Kicker, PageHero, Pill, PillVariant,
@@ -16,6 +17,17 @@ fn pill_variant(state: &str) -> PillVariant {
         "starting" => PillVariant::Warn,
         "error" => PillVariant::Bad,
         _ => PillVariant::Muted,
+    }
+}
+
+/// Localised label for a service state (the wire value stays english).
+fn state_label(state: &str) -> String {
+    match state {
+        "ready" => t!("state-ready"),
+        "starting" => t!("state-starting"),
+        "stopped" => t!("state-stopped"),
+        "error" => t!("state-error"),
+        other => other.to_string(),
     }
 }
 
@@ -49,8 +61,9 @@ pub fn Dashboard() -> Element {
         main { class: "h-page flex-1 overflow-auto p-6 space-y-6",
             PageHero {
                 title: rsx! {
-                    "Local AI "
-                    span { class: "text-fg-muted", "stack" }
+                    {t!("dash-title-lead")}
+                    " "
+                    span { class: "text-fg-muted", {t!("dash-title-tail")} }
                 },
             }
 
@@ -63,12 +76,12 @@ pub fn Dashboard() -> Element {
                             div {
                                 div { class: "h-card", "{s.name}" }
                                 div { class: "help-xs",
-                                    {if s.id == "ollama" { "LLM runtime" } else { "chat UI" }}
+                                    {if s.id == "ollama" { t!("svc-ollama-sub") } else { t!("svc-webui-sub") }}
                                 }
                             }
                         }
                         div { class: "flex items-center gap-2",
-                            Pill { variant: pill_variant(&s.state), "{s.state}" }
+                            Pill { variant: pill_variant(&s.state), {state_label(&s.state)} }
                             Button {
                                 size: ButtonSize::Xs,
                                 variant: ButtonVariant::Secondary,
@@ -76,7 +89,7 @@ pub fn Dashboard() -> Element {
                                     let id = s.id.clone();
                                     move |_| control(format!("/api/services/{id}/restart"))
                                 },
-                                "restart"
+                                {t!("btn-restart")}
                             }
                         }
                     }
@@ -87,16 +100,16 @@ pub fn Dashboard() -> Element {
             if let Some(info) = info.as_ref() {
                 Card { class: "card-pad",
                     div { class: "grid grid-cols-2 md:grid-cols-4 gap-4 text-sm",
-                        Fact { label: "Ollama port", value: fact(info, "ollama_port") }
-                        Fact { label: "WebUI port", value: fact(info, "webui_port") }
-                        Fact { label: "Models", value: fact(info, "models_dir"), mono_muted: true }
-                        Fact { label: "Data", value: fact(info, "data_dir"), mono_muted: true }
+                        Fact { label: t!("fact-ollama-port"), value: fact(info, "ollama_port") }
+                        Fact { label: t!("fact-webui-port"), value: fact(info, "webui_port") }
+                        Fact { label: t!("fact-models"), value: fact(info, "models_dir"), mono_muted: true }
+                        Fact { label: t!("fact-data"), value: fact(info, "data_dir"), mono_muted: true }
                     }
                     div { class: "mt-4 pt-3 border-t border-line",
-                        div { class: "label", "Acceleration" }
+                        div { class: "label", {t!("accel-label")} }
                         div { class: "flex items-baseline gap-2",
                             span { class: "font-mono text-fg-strong",
-                                {info.get("accel").and_then(|a| a.get("flavour")).and_then(|v| v.as_str()).unwrap_or("bundled runtime")}
+                                {info.get("accel").and_then(|a| a.get("flavour")).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| t!("accel-bundled"))}
                             }
                             span { class: "help-xs td-muted",
                                 {info.get("accel").and_then(|a| a.get("reason")).and_then(|v| v.as_str()).map(|r| format!("— {r}")).unwrap_or_default()}
@@ -112,13 +125,13 @@ pub fn Dashboard() -> Element {
                     size: ButtonSize::Md,
                     variant: ButtonVariant::Primary,
                     onclick: move |_| control("/api/services/all/start".into()),
-                    "Start all"
+                    {t!("btn-start-all")}
                 }
                 Button {
                     size: ButtonSize::Md,
                     variant: ButtonVariant::Secondary,
                     onclick: move |_| control("/api/services/all/stop".into()),
-                    "Stop all"
+                    {t!("btn-stop-all")}
                 }
                 Button {
                     size: ButtonSize::Md,
@@ -128,14 +141,14 @@ pub fn Dashboard() -> Element {
                         let mut t = state.tab;
                         t.set(Tab::WebUi);
                     },
-                    "Open WebUI →"
+                    {t!("btn-open-webui")}
                 }
             }
 
             // logs
             Card { class: "",
                 div { class: "card-pad pb-2 flex items-center justify-between",
-                    Kicker { "logs" }
+                    Kicker { {t!("logs-kicker")} }
                     Button {
                         size: ButtonSize::Xs,
                         variant: ButtonVariant::Ghost,
@@ -143,21 +156,21 @@ pub fn Dashboard() -> Element {
                             let mut l = state.logs;
                             l.set(String::new());
                         },
-                        "clear"
+                        {t!("btn-clear")}
                     }
                 }
                 pre { id: "logs", class: "log-output", "{logs}" }
             }
 
             if services.is_empty() {
-                HelpText { xs: true, "waiting for the supervisor…" }
+                HelpText { xs: true, {t!("waiting-supervisor")} }
             }
         }
     }
 }
 
 #[component]
-fn Fact(label: &'static str, value: String, #[props(default)] mono_muted: bool) -> Element {
+fn Fact(label: String, value: String, #[props(default)] mono_muted: bool) -> Element {
     let cls = if mono_muted { "font-mono td-muted truncate" } else { "font-mono text-fg-strong" };
     rsx! {
         div {

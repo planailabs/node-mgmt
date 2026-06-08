@@ -5,9 +5,23 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use dioxus_i18n::t;
 use serde_json::{json, Value};
 
 use plan_ai_design::{Button, ButtonSize, ButtonVariant, Card, PageHero, Pill, PillVariant};
+
+/// Localised label for a use-case option (the wire value stays english).
+fn use_case_label(uc: &str) -> String {
+    match uc {
+        "general" => t!("uc-general"),
+        "coding" => t!("uc-coding"),
+        "reasoning" => t!("uc-reasoning"),
+        "chat" => t!("uc-chat"),
+        "multimodal" => t!("uc-multimodal"),
+        "embedding" => t!("uc-embedding"),
+        other => other.to_string(),
+    }
+}
 
 use crate::api;
 
@@ -79,8 +93,9 @@ pub fn Models() -> Element {
         main { class: "h-page flex-1 overflow-auto p-6 space-y-6",
             PageHero {
                 title: rsx! {
-                    "Models for your "
-                    span { class: "text-fg-muted", "hardware" }
+                    {t!("models-title-lead")}
+                    " "
+                    span { class: "text-fg-muted", {t!("models-title-tail")} }
                 },
             }
 
@@ -88,7 +103,7 @@ pub fn Models() -> Element {
             if let Some(Ok(data)) = res.as_ref() {
                 if let Some(sys) = data.get("system") {
                     Card { class: "card-pad",
-                        div { class: "label", "Detected hardware ", span { class: "help-xs td-muted", "(llmfit)" } }
+                        div { class: "label", {t!("detected-hardware")} " " span { class: "help-xs td-muted", {t!("llmfit-tag")} } }
                         div { class: "font-mono text-sm text-fg-strong mt-1", "{hardware_line(sys)}" }
                     }
                 }
@@ -97,52 +112,54 @@ pub fn Models() -> Element {
             // controls
             section { class: "flex items-end gap-3 flex-wrap",
                 label { class: "text-sm",
-                    div { class: "label", "Use case" }
+                    div { class: "label", {t!("use-case")} }
                     select {
                         class: "font-mono text-sm",
                         value: "{use_case}",
                         oninput: move |e| use_case.set(e.value()),
                         for opt in ["general", "coding", "reasoning", "chat", "multimodal", "embedding"] {
-                            option { value: "{opt}", "{opt}" }
+                            option { value: "{opt}", {use_case_label(opt)} }
                         }
                     }
                 }
                 label { class: "text-sm",
-                    div { class: "label", "Min fit" }
+                    div { class: "label", {t!("min-fit")} }
                     select {
                         class: "font-mono text-sm",
                         value: "{min_fit}",
                         oninput: move |e| min_fit.set(e.value()),
-                        option { value: "", "any" }
-                        option { value: "marginal", "marginal+" }
-                        option { value: "good", "good+" }
-                        option { value: "perfect", "perfect" }
+                        option { value: "", {t!("fit-any")} }
+                        option { value: "marginal", {t!("fit-marginal")} }
+                        option { value: "good", {t!("fit-good")} }
+                        option { value: "perfect", {t!("fit-perfect")} }
                     }
                 }
                 Button {
                     size: ButtonSize::Sm,
                     variant: ButtonVariant::Secondary,
                     onclick: move |_| refresh += 1,
-                    "Refresh"
+                    {t!("btn-refresh")}
                 }
                 span { class: "help-xs td-muted",
                     match res.as_ref() {
-                        Some(Ok(d)) => format!("{}/{} shown", d.get("returned_models").and_then(|v| v.as_u64()).unwrap_or(0), d.get("total_models").and_then(|v| v.as_u64()).unwrap_or(0)),
+                        Some(Ok(d)) => t!("models-shown",
+                            returned: d.get("returned_models").and_then(|v| v.as_u64()).unwrap_or(0),
+                            total: d.get("total_models").and_then(|v| v.as_u64()).unwrap_or(0)),
                         Some(Err(e)) => e.clone(),
-                        None => "loading…".to_string(),
+                        None => t!("loading"),
                     }
                 }
             }
 
             // compatible models
             Card { class: "",
-                div { class: "card-pad pb-2 kicker", "compatible models" }
+                div { class: "card-pad pb-2 kicker", {t!("compatible-models")} }
                 div { class: "divide-y divide-line",
                     match res.as_ref() {
                         Some(Ok(d)) => {
                             let models = d.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                             if models.is_empty() {
-                                rsx! { div { class: "card-pad td-muted text-sm", "no compatible models for this filter" } }
+                                rsx! { div { class: "card-pad td-muted text-sm", {t!("no-compatible-models")} } }
                             } else {
                                 rsx! {
                                     for m in models {
@@ -152,19 +169,19 @@ pub fn Models() -> Element {
                             }
                         }
                         Some(Err(e)) => rsx! { div { class: "card-pad td-muted text-sm", "{e}" } },
-                        None => rsx! { div { class: "card-pad td-muted text-sm", "loading…" } },
+                        None => rsx! { div { class: "card-pad td-muted text-sm", {t!("loading")} } },
                     }
                 }
             }
 
             // installed
             Card { class: "",
-                div { class: "card-pad pb-2 kicker", "installed (ollama)" }
+                div { class: "card-pad pb-2 kicker", {t!("installed-ollama")} }
                 div { class: "card-pad pt-0 font-mono text-sm td-muted",
                     match installed.as_ref() {
                         Some(Ok(d)) => {
                             let names = installed_names(d);
-                            if names.is_empty() { "none yet".to_string() } else { names.join("   ·   ") }
+                            if names.is_empty() { t!("none-yet") } else { names.join("   ·   ") }
                         }
                         Some(Err(e)) => e.clone(),
                         None => "—".to_string(),
@@ -265,7 +282,7 @@ fn ModelRow(model: Value, progress: Signal<HashMap<String, String>>, installed_r
                     variant: ButtonVariant::Accent,
                     disabled: busy,
                     onclick: start_download,
-                    "Download"
+                    {t!("btn-download")}
                 }
                 span { class: "help-xs td-muted", "{prog_text}" }
             }
