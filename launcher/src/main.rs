@@ -16,6 +16,7 @@ use std::process::Command;
 mod config;
 mod control;
 mod i18n;
+mod net;
 mod paths;
 mod proxy;
 mod serve;

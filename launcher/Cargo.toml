@@ -35,6 +35,16 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # cross-compile time — the flake feeds them in via SDKROOT (see flake.nix
 # `macosx-sdk`); zig handles Linux + Windows directly.
 notify-rust = "4"
+# All launcher HTTP (llmfit proxy, health checks, update downloads). rustls TLS
+# with the RING provider (NOT aws-lc-rs — its C/asm won't cross-compile cleanly
+# under zig); the `-no-provider` reqwest feature avoids pulling aws-lc-rs, and we
+# install ring as the process default in net.rs. No OpenSSL → static-musl intact.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots-no-provider", "stream", "gzip", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# sha256 for update manifest verification (pure Rust; cross-compiles trivially)
+sha2 = "0.10"
+# bytes-stream helpers for reqwest streamed downloads
+futures-util = "0.3"
 
 [profile.release]
 opt-level = "z"

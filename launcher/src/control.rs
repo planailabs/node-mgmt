@@ -55,22 +55,12 @@ pub async fn start_stack(self_exe: &Path, socket: &Path) -> Result<Client> {
     Ok(client)
 }
 
-/// Poll an HTTP health URL (GET, expect any 2xx–4xx) without an http-client dep.
+/// Poll an HTTP health URL (GET): up if it answers with any 2xx/3xx/4xx.
 pub async fn http_ok(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix("http://") else { return false };
-    let (authority, path) = rest.split_once('/').map(|(a, p)| (a, format!("/{p}"))).unwrap_or((rest, "/".into()));
-    let Ok(mut stream) = tokio::net::TcpStream::connect(authority).await else { return false };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let host = authority.split(':').next().unwrap_or(authority);
-    let req = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(req.as_bytes()).await.is_err() {
-        return false;
+    match crate::net::client().get(url).timeout(Duration::from_secs(5)).send().await {
+        Ok(r) => (200..500).contains(&r.status().as_u16()),
+        Err(_) => false,
     }
-    let mut buf = [0u8; 16];
-    let Ok(n) = stream.read(&mut buf).await else { return false };
-    // "HTTP/1.x NNN" — accept 2xx/3xx/4xx (service is up + answering)
-    let head = String::from_utf8_lossy(&buf[..n]);
-    head.split(' ').nth(1).and_then(|c| c.parse::<u16>().ok()).map(|c| (200..500).contains(&c)).unwrap_or(false)
 }
 
 /// Wait until both services answer their health endpoint (or `timeout`).
