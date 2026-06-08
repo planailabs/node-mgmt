@@ -182,8 +182,10 @@ fn render_ninja() -> String {
     let mut comp_stamps = Vec::new();
     // the packer + its shared primitives are inputs too, so editing them re-packs.
     let pack_srcs = srcs(&["scripts/pack-component.sh", "scripts/lib.sh"]);
-    // <component-name> -> the stamp it depends on (its built source).
-    let mut comp_jobs: Vec<(String, String)> = vec![("ow-assets".into(), stamp("download"))];
+    // <component-name> -> the stamp it depends on (its built source). ow-assets (the
+    // sentence-transformers + nltk offline assets) is produced by the WHEEL step
+    // (build-openwebui.sh), not download — depend on wheel so the pack waits for it.
+    let mut comp_jobs: Vec<(String, String)> = vec![("ow-assets".into(), stamp("wheel"))];
     for t in TARGETS {
         comp_jobs.push((format!("runtime-{t}"), stamp(&format!("runtime-{t}"))));
     }
