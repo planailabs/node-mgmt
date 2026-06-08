@@ -100,7 +100,7 @@ RT="$DIST_DIR/runtime/$TARGET"; PYDIR="$RT/python"
 rm -rf "$RT"; mkdir -p "$RT"
 trap '[ -f "$RT/runtime.json" ] || rm -rf "$RT"' EXIT
 # copy out of the store into a writable, self-contained tree under python/ (the
-# layout paths.js/build-components expect). -a (not -L) keeps the tree's internal
+# layout paths.js/pack-component expect). -a (not -L) keeps the tree's internal
 # relative symlinks intact; the derivation output references no other store path,
 # so the copy is store-free. PRESERVE mode (the interpreter + .so files must keep
 # their +x bit — only drop ownership, since we copy out of the store as a user)

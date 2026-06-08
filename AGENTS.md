@@ -154,7 +154,7 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
   `bundle.sh` runs `npm ci` if needed and uses `npx --no-install` so it can never
   fetch a different builder. Keep `app/package-lock.json` committed + in sync.
 - **Never ship a partial runtime.** `make-runtime` removes `dist/runtime/<t>` on
-  failure; `build-components` skips runtimes without `open_webui`.
+  failure; `pack-component` skips runtimes without `open_webui`.
 - **llmfit (GPU detection + model browser).** [`llmfit`](https://github.com/AlexsJones/llmfit)
   (MIT, rust) is bundled beside the launcher. The launcher runs `llmfit system
   --json` to detect the GPU/VRAM/backend (passed to Electron) and `llmfit serve`

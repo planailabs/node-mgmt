@@ -3,7 +3,7 @@
 # component archives (dist/components/) for its OS; the in-app loader
 # (main/loader.js) extracts only what the machine needs on first launch (its
 # runtime + the ollama flavour matching the CPU arch). Build components first
-# with scripts/build-components.sh (or `make components`).
+# with `make components` (ninja packs each one via scripts/pack-component.sh).
 #
 # All targets build from a NixOS/Linux host:
 #   linux  -> electron-builder AppImage
@@ -54,7 +54,7 @@ COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BA
 comp_present() { local base="$1" e; for e in $FMTS; do
   case "$e" in dir) [ -d "$COMP_SRC/$base" ] && return 0 ;; *) [ -f "$COMP_SRC/$base.$e" ] && return 0 ;; esac
 done; return 1; }
-comp_present "runtime-$TARGET" || die "missing runtime component for $TARGET ($FMTS) in $COMP_SRC — run: make runtime TARGET=$TARGET && scripts/build-components.sh"
+comp_present "runtime-$TARGET" || die "missing runtime component for $TARGET ($FMTS) in $COMP_SRC — run: make components"
 
 # Components ship OUTSIDE the launcher as a SHARED pool beside it (not embedded),
 # so each launcher stays small and all platforms share one copy on the USB. The
@@ -166,7 +166,7 @@ emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding p
 }
 
 # raw HFS+ image macOS mounts via hdiutil. Needs mkfs.hfsplus (hfsprogs) + sudo
-# loop mount (the dev box has both — same path build-components.sh uses for dmgs).
+# loop mount (the dev box has both — the shared pack_dmg primitive in lib.sh).
 emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
   need mkfs.hfsplus
   local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw

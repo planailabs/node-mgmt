@@ -21,6 +21,8 @@ struct Cli {
 enum Cmd {
     /// Generate an update manifest (JSON) for a drive-layout root directory.
     GenManifest(ManifestArgs),
+    /// Write dist/components/manifest.json by scanning the packed components.
+    ComponentsManifest(ComponentsManifestArgs),
     /// Assemble the update-server tarball: manifest.json + files/<path>.
     Tarball(TarballArgs),
     /// (Re)write build.ninja describing the whole artifact graph.
@@ -54,6 +56,13 @@ struct UploadArgs {
     /// Don't wait for the deployment to finish.
     #[arg(long)]
     no_wait: bool,
+}
+
+#[derive(clap::Args)]
+struct ComponentsManifestArgs {
+    /// The packed components directory to scan (default: dist/components).
+    #[arg(default_value = "dist/components")]
+    dir: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -93,6 +102,7 @@ struct TarballArgs {
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::GenManifest(a) => gen_manifest(a),
+        Cmd::ComponentsManifest(a) => components_manifest(a),
         Cmd::Tarball(a) => tarball(a),
         Cmd::GenNinja => {
             write_ninja()?;
@@ -105,6 +115,9 @@ fn main() -> Result<()> {
 }
 
 const TARGETS: &[&str] = &["linux-x64", "win-x64", "mac-arm64"];
+/// ollama flavours the loader may ship (one per CPU arch / GPU); a flavour whose
+/// archive isn't vendored is simply omitted from the components manifest.
+const OLLAMA_KEYS: &[&str] = &["linux-amd64", "linux-arm64", "linux-amd64-rocm", "darwin", "windows-amd64"];
 
 /// Regenerate build.ninja, then run ninja for `targets` (default: image).
 fn build(mut targets: Vec<String>) -> Result<()> {
@@ -152,10 +165,27 @@ fn write_ninja() -> Result<()> {
         runtime_stamps.push(s);
     }
 
-    // components: pack runtimes + ollama flavours + ow-assets
-    let mut comp_deps = runtime_stamps.clone();
-    comp_deps.push(stamp("wheel"));
-    stamp_edge("components", &comp_deps, "./scripts/build-components.sh", "components");
+    // components: ONE pack edge per component, so ninja runs the independent
+    // squashfs/dmg/dir packs in parallel and tracks each on its own (replacing
+    // build-components.sh + its hand-rolled job pool). Then a manifest edge scans
+    // what actually got packed. `components` stays the manifest's stamp name so the
+    // bundle deps below are unchanged, and `make components` still builds the lot.
+    let mut comp_stamps = Vec::new();
+    // ow-assets: shared offline assets, from the vendored download.
+    stamp_edge("comp-ow-assets", &[stamp("download")], "./scripts/pack-component.sh ow-assets", "pack ow-assets");
+    comp_stamps.push(stamp("comp-ow-assets"));
+    // runtimes: each needs its built runtime (which already pulls in the wheel).
+    for t in TARGETS {
+        stamp_edge(&format!("comp-runtime-{t}"), &[stamp(&format!("runtime-{t}"))], &format!("./scripts/pack-component.sh runtime-{t}"), &format!("pack runtime-{t}"));
+        comp_stamps.push(stamp(&format!("comp-runtime-{t}")));
+    }
+    // ollama flavours: each extracts from the nix repack / vendored archive.
+    for k in OLLAMA_KEYS {
+        stamp_edge(&format!("comp-ollama-{k}"), &[stamp("download")], &format!("./scripts/pack-component.sh ollama-{k}"), &format!("pack ollama-{k}"));
+        comp_stamps.push(stamp(&format!("comp-ollama-{k}")));
+    }
+    // manifest: scans dist/components after every pack (xtask, not bash/jq).
+    stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
 
     // bundle per target: depends on components + spa + app + launcher/spinner/crate sources
     let mut bundle_src = src_tree("launcher/src");
@@ -185,6 +215,14 @@ fn write_ninja() -> Result<()> {
     // phony aliases so `ninja <name>` (and the Makefile) read naturally
     for s in ["download", "wheel", "app", "spa", "components"] {
         edges.push_str(&format!("build {s}: phony {}\n", stamp(s)));
+    }
+    // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)
+    edges.push_str(&format!("build comp-ow-assets: phony {}\n", stamp("comp-ow-assets")));
+    for t in TARGETS {
+        edges.push_str(&format!("build comp-runtime-{t}: phony {}\n", stamp(&format!("comp-runtime-{t}"))));
+    }
+    for k in OLLAMA_KEYS {
+        edges.push_str(&format!("build comp-ollama-{k}: phony {}\n", stamp(&format!("comp-ollama-{k}"))));
     }
     for t in TARGETS {
         edges.push_str(&format!("build runtime-{t}: phony {}\n", stamp(&format!("runtime-{t}"))));
@@ -230,6 +268,47 @@ fn src_tree(root: &str) -> Vec<String> {
     walk(&PathBuf::from(root), &mut out);
     out.sort();
     out
+}
+
+/// Write `<dir>/manifest.json` describing which components actually got packed.
+/// Replaces the old jq tail of build-components.sh: scanning the directory keeps
+/// this honest (it reports only what's really on disk) and the JSON shaping is
+/// cleaner here than in bash. The loader reads this to pick its runtime + ollama
+/// flavour at first launch.
+fn components_manifest(a: ComponentsManifestArgs) -> Result<()> {
+    let dir = &a.dir;
+    if !dir.is_dir() {
+        bail!("{} is not a directory — pack the components first", dir.display());
+    }
+    // A component is "present" in this OS-neutral pool as a file (base.squashfs /
+    // base.dmg / base.tar.gz) OR a pre-extracted dir (base/).
+    let present = |base: &str| -> bool {
+        ["squashfs", "dmg", "tar.gz"].iter().any(|e| dir.join(format!("{base}.{e}")).is_file())
+            || dir.join(base).is_dir()
+    };
+    let runtimes: Vec<&str> = TARGETS.iter().copied().filter(|t| present(&format!("runtime-{t}"))).collect();
+    let ollama: Vec<&str> = OLLAMA_KEYS.iter().copied().filter(|k| present(&format!("ollama-{k}"))).collect();
+
+    let manifest = serde_json::json!({
+        "ollama_tag": ollama_tag()?,
+        "ow_assets": "ow-assets",
+        "runtimes": runtimes,
+        "ollama": ollama,
+        "note": "loader picks runtime-<this bundles OS> + ollama by CPU arch (rocm if /dev/kfd); mounts .squashfs (else extracts), extracts .tar.gz",
+    });
+    let out = dir.join("manifest.json");
+    std::fs::write(&out, serde_json::to_string_pretty(&manifest)?).with_context(|| format!("writing {}", out.display()))?;
+    eprintln!("==> components manifest -> {} ({} runtimes, {} ollama)", out.display(), runtimes.len(), ollama.len());
+    Ok(())
+}
+
+/// The ollama release tag from usb.lock (`.ollama.version`) — the single source
+/// of truth lib.sh's `ollama_version` also reads.
+fn ollama_tag() -> Result<String> {
+    let lock = std::fs::read_to_string("usb.lock").context("reading usb.lock")?;
+    let v: serde_json::Value = serde_json::from_str(&lock).context("parsing usb.lock")?;
+    v.get("ollama").and_then(|o| o.get("version")).and_then(|s| s.as_str()).map(str::to_string)
+        .context("usb.lock: missing .ollama.version")
 }
 
 fn gen_manifest(a: ManifestArgs) -> Result<()> {

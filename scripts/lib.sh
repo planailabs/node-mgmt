@@ -124,3 +124,66 @@ download_verified() {
     verify_sha256 "$dest" "$want" || die "checksum verification failed: $dest"
   fi
 }
+
+# --- component packing primitives -------------------------------------------
+# Shared by scripts/pack-component.sh (one component per ninja edge) and
+# scripts/bundle.sh (the app-<os> component). Each writes to a temp path and
+# atomically mv's it into place, so an interrupted pack never leaves a partial
+# file for a later step — even though each component is now its own ninja edge.
+ncpu() { nproc 2>/dev/null || echo 1; }
+# parallel gzip when available (output is plain gzip — the node loader's tar reads it)
+gzip_cmd() { if command -v pigz >/dev/null 2>&1; then echo "pigz -p $(ncpu)"; else echo gzip; fi; }
+
+pack_gz() {  # <srcdir> <out.tar.gz>
+  local src="$1" out="$2" gz tmp="$2.tmp.$$"; gz="$(gzip_cmd)"
+  tar -C "$src" -cf - . | $gz > "$tmp" && mv -f "$tmp" "$out"
+}
+pack_squashfs() {  # <srcdir> <out.squashfs>
+  need mksquashfs; local src="$1" out="$2" tmp="$2.tmp.$$"; rm -f "$tmp"
+  mksquashfs "$src" "$tmp" -comp zstd -processors "$(ncpu)" -all-root -no-xattrs -noappend -quiet
+  mv -f "$tmp" "$out"
+}
+pack_dir() {  # <srcdir> <out-dir>   (pre-extracted; used in place on windows/FAT32)
+  local src="$1" out="$2" tmp="$2.tmp.$$"
+  rm -rf "$tmp"; mkdir -p "$tmp"; cp -a "$src/." "$tmp/"; rm -rf "$out"; mv -f "$tmp" "$out"
+}
+# raw HFS+ image macOS mounts via hdiutil, compressed to a UDIF dmg (Finder-
+# mountable, ~3x smaller) via libdmg-hfsplus. Needs mkfs.hfsplus (hfsprogs) + a
+# sudo loop-mount. Returns non-zero ONLY when no dmg could be produced (no
+# mkfs.hfsplus / mount failed) so the caller can fall back; a bare-HFS+ result
+# (libdmg unavailable) still counts as success.
+pack_dmg() {  # <srcdir> <out.dmg> [volume-label]
+  command -v mkfs.hfsplus >/dev/null 2>&1 || { warn "no mkfs.hfsplus — skip $(basename "$2")"; return 1; }
+  local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw
+  raw="$(mktemp -u).rawhfs"
+  sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB HFS+ overhead
+  truncate -s "$sz" "$raw"
+  mkfs.hfsplus -v "$vol" "$raw" >/dev/null 2>&1 || { warn "mkfs.hfsplus failed: $(basename "$img")"; rm -f "$raw"; return 1; }
+  mnt="$(mktemp -d)"
+  if ! sudo mount -o loop,umask=0000 "$raw" "$mnt" 2>/dev/null; then
+    warn "loop-mount failed for $(basename "$img") (sudo?)"; rmdir "$mnt"; rm -f "$raw"; return 1; fi
+  if ! sudo cp -a "$src/." "$mnt/"; then
+    warn "cp into dmg failed: $(basename "$img")"; sudo umount "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true; rm -f "$raw"; return 1; fi
+  sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
+  rm -f "$img"
+  local DMGTOOL; DMGTOOL="$(cd "$REPO_ROOT" && nix build .#libdmg-hfsplus --no-link --print-out-paths 2>/dev/null)/bin/dmg"
+  if [ -x "$DMGTOOL" ] && "$DMGTOOL" dmg "$raw" "$img" >/dev/null 2>&1; then
+    rm -f "$raw"; return 0
+  fi
+  warn "libdmg-hfsplus unavailable — bare HFS+ dmg for $(basename "$img")"; mv "$raw" "$img"; return 0
+}
+
+# True if a glob matches at least one existing path. Portable substitute for
+# `compgen -G` (unavailable in the non-interactive bash `nix develop` provides):
+# relies on an unmatched glob staying literal (no nullglob).
+glob_exists() { local m; for m in $1; do [ -e "$m" ] && return 0; done; return 1; }
+
+extract_to() {  # <archive> <destdir>
+  local src="$1" d="$2"; mkdir -p "$d"
+  case "$src" in
+    *.tar.zst) need zstd; zstd -dc "$src" | tar -x -C "$d" ;;
+    *.tar.gz|*.tgz) tar -xzf "$src" -C "$d" ;;
+    *.zip) need unzip; unzip -qo "$src" -d "$d" ;;
+    *) return 1 ;;
+  esac
+}
