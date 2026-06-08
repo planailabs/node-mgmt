@@ -43,10 +43,10 @@ esac
 #   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
 #   macOS = dmg (hdiutil mount)  ;  windows = dir (pre-extracted, used in place)
 case "$TARGET" in
-  linux-*|nixos-*) FMTS="squashfs"; MOUNTABLE=1 ;;
-  win-*)           FMTS="dir";      MOUNTABLE=0 ;;
-  mac-*)           FMTS="dmg";      MOUNTABLE=0 ;;
-  *)               FMTS="tar.gz";   MOUNTABLE=0 ;;
+  linux-*|nixos-*) FMTS="squashfs"; ;;
+  win-*)           FMTS="dir";      ;;
+  mac-*)           FMTS="dmg";      ;;
+  *)               FMTS="tar.gz";   ;;
 esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
@@ -58,10 +58,11 @@ comp_present "runtime-$TARGET" || die "missing runtime component for $TARGET ($F
 
 # Components ship OUTSIDE the launcher as a SHARED pool beside it (not embedded),
 # so each launcher stays small and all platforms share one copy on the USB. The
-# loader (main/loader.js) finds components/ + tools/ next to the AppImage/exe/.app
-# (or via PLANAI_COMPONENTS). Copy this target's format(s) + static mount tools in.
-copy_comps_into() {  # <components-dir> <tools-parent-dir>
-  local cdst="$1" tdst="$2" base ext; mkdir -p "$cdst"
+# rust launcher finds components/ next to the AppImage/exe/.app (or via
+# PLANAI_COMPONENTS). The squashfs mount tools (squashfuse_ll/unsquashfs) are
+# EMBEDDED in the launcher binary (build.rs), so no external tools/ dir is shipped.
+copy_comps_into() {  # <components-dir>
+  local cdst="$1" base ext; mkdir -p "$cdst"
   for base in $COMP_BASES; do for ext in $FMTS; do
     case "$ext" in
       dir) [ -d "$COMP_SRC/$base" ] && { rm -rf "$cdst/$base"; cp -a "$COMP_SRC/$base" "$cdst/"; } || true ;;
@@ -70,11 +71,6 @@ copy_comps_into() {  # <components-dir> <tools-parent-dir>
   done; done
   [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
   copy_llmfit_into "$cdst"
-  if [ "$MOUNTABLE" = 1 ]; then
-    local T; T="$(cd "$REPO_ROOT" && nix build .#linuxMountTools --no-link --print-out-paths 2>/dev/null || true)"
-    if [ -n "$T" ] && [ -d "$T/bin" ]; then mkdir -p "$tdst/bin"; cp -L "$T/bin/"* "$tdst/bin/"; chmod -R u+w "$tdst"
-    else warn "linuxMountTools unavailable — loader will extract"; fi
-  fi
   log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
 }
 
@@ -130,7 +126,7 @@ package_electron_builder() {  # linux AppImage / windows zip
   log "electron-builder $EB_OS -> $OUT"
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
-  copy_comps_into "$OUT/components" "$OUT/tools"   # shared pool beside the launcher
+  copy_comps_into "$OUT/components"   # shared pool beside the launcher
   if [ "$EB_OS" = "--linux" ]; then
     local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
     emit_app_component "$UNPACK"          # -> components/app-linux-x64.squashfs
@@ -252,7 +248,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$APPDIR"
   else rcodesign sign "$APPDIR"; warn "MAC_P12 unset — ad-hoc signature (not notarizable)"; fi
   rcodesign verify "$APPDIR/Contents/MacOS/plan.ai" 2>&1 | tail -1 || true
-  copy_comps_into "$OUT/components" "$OUT/tools"   # shared dmg pool beside the launcher
+  copy_comps_into "$OUT/components"   # shared dmg pool beside the launcher
   # The Electron .app ships as the app-mac component (a dmg holding plan.ai.app);
   # the launcher mounts it and runs Electron from it.
   local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"

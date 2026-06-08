@@ -181,6 +181,45 @@
           let p = lib.findFirst (x: x.target == target) (throw "no pbs ${target}") vendorLock.pbs.files;
           in pkgs.fetchurl { inherit (p) url sha256; };
 
+        # libdmg-hfsplus (fanquake fork — the one Bitcoin Core uses for
+        # deterministic macOS dmgs). Its `dmg` tool wraps a raw HFS+ image into a
+        # COMPRESSED UDIF (UDZO) .dmg on Linux — a proper, Finder-mountable dmg
+        # without macOS/hdiutil (electron-builder's dmg is hdiutil-only). Pairs
+        # with hfsprogs' mkfs.hfsplus. (fanquake's pure-Rust `libdmg` port was
+        # tried but panics in libflate during compression — unusable.)
+        # BUILD_SHARED_LIBS=OFF so the dmg/hfsplus tools statically link the
+        # internal libs (no leftover /build rpath that nix rejects).
+        libdmg-hfsplus = pkgs.stdenv.mkDerivation {
+          pname = "libdmg-hfsplus";
+          version = "unstable-2018-02-05";
+          src = pkgs.fetchFromGitHub {
+            owner = "fanquake";
+            repo = "libdmg-hfsplus";
+            rev = "7ac55ec64c96f7800d9818ce64c79670e7f02b67";
+            hash = "sha256-5HHb08GEPzgLQC8y9YyhGoin1Oxy2UtOCx/4Xmb4ATQ=";
+          };
+          nativeBuildInputs = [ pkgs.cmake ];
+          buildInputs = [ pkgs.zlib pkgs.bzip2 ];
+          cmakeFlags = [
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"   # 2018 CMakeLists predates the cutoff
+            "-DBUILD_SHARED_LIBS=OFF"
+          ];
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            cp dmg/dmg "$out/bin/dmg"
+            cp hfs/hfsplus "$out/bin/hfsplus" 2>/dev/null || true
+            runHook postInstall
+          '';
+          # cmake bakes a build-tree rpath; replace it with the real lib paths
+          # BEFORE the fixup hooks audit for /build references (preFixup, not post).
+          preFixup = ''
+            for b in "$out/bin/dmg" "$out/bin/hfsplus"; do
+              [ -f "$b" ] && patchelf --force-rpath --set-rpath "${lib.makeLibraryPath [ pkgs.zlib pkgs.bzip2 ]}" "$b"
+            done
+          '';
+        };
+
         # portable runtime per target (wheels-FOD + vanilla install into pbs)
         runtimeFor = { target, triple, lockFile }:
           import ./nix/runtime.nix {
@@ -249,7 +288,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk;
+          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk libdmg-hfsplus;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
