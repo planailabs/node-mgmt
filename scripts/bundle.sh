@@ -81,13 +81,26 @@ copy_comps_into() {  # <components-dir>
       *)   [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true ;;
     esac
   done; done
-  [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
+  # manifest.json is the one file every target writes to the SHARED pool (identical
+  # content) — copy it atomically (temp + mv) so concurrent target bundles can't read
+  # a half-written file. Everything else copied here is per-OS-distinct (no overlap).
+  [ -f "$COMP_SRC/manifest.json" ] && { cp -f "$COMP_SRC/manifest.json" "$cdst/.manifest.$$.json" && mv -f "$cdst/.manifest.$$.json" "$cdst/manifest.json"; }
   copy_llmfit_into "$cdst"
   log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
 }
 
-exec 9>"$APP/.stage.lock"; flock 9 || die "could not acquire bundle lock"
-[ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci )
+# ninja launches bundle-linux/win/mac concurrently. The ONLY part of a bundle that
+# two targets can't run at once is the Electron packaging step: it reads/writes the
+# shared app/ dir (node_modules) and electron-builder's global ~/.cache. So serialize
+# JUST that with a lock — everything after it (component copy, dmg packing, per-OS
+# launcher nix builds) writes per-target / distinctly-named outputs and runs fully in
+# parallel across the three targets. (Releasing on success lets the next target start
+# its electron step while this one does its parallel post-work; on failure the process
+# exits and the OS drops the lock.)
+APP_LOCK="$APP/.stage.lock"
+app_pkg_lock()    { exec 9>"$APP_LOCK"; flock 9 || die "could not acquire app packaging lock"; }
+app_pkg_unlock()  { flock -u 9 2>/dev/null || true; exec 9>&- 2>/dev/null || true; }
+ensure_app_deps() { [ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci ); }
 mkdir -p "$OUT"
 
 # ---------------------------------------------------------------------------
@@ -139,8 +152,13 @@ package_electron_builder() {  # linux AppImage / windows zip
   }
   build_once() { ( cd "$APP" && npx --no-install electron-builder $EB_OS --config electron-builder.yml ); }
   log "electron-builder $EB_OS -> $OUT"
+  # serialized vs the other targets (shared app/ + electron-builder cache); released
+  # right after so the post-electron work below overlaps across targets.
+  app_pkg_lock
+  ensure_app_deps
   patch_eb_build_tools
   build_once || { warn "package failed; patching helpers + retrying"; patch_eb_build_tools; build_once; }
+  app_pkg_unlock
   # Everything after electron-builder is independent (distinct output files), so run
   # it concurrently: the component copy (+ llmfit nix build), the app-component pack,
   # the launcher nix build, and (linux) the NixOS FHS export overlap instead of
@@ -271,8 +289,13 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   log "@electron/packager mac/$ARCH"
   # bare .app — components ship OUTSIDE it (shared pool beside the .app). --ignore
   # keeps the (now absent) .stage and any local build cruft out of the bundle.
+  # Locked vs other targets (reads shared app/); released before the rcodesign +
+  # dmg work so it overlaps a concurrent linux/win bundle's post-electron steps.
+  app_pkg_lock
+  ensure_app_deps
   ( cd "$APP" && npx --no-install @electron/packager . "plan.ai" --platform=darwin --arch="$ARCH" \
       --out="$APPROOT" --overwrite --app-bundle-id=ai.plan.usb --ignore="(^/\.stage)" )
+  app_pkg_unlock
   local APPDIR; APPDIR="$(ls -d "$APPROOT"/plan.ai-darwin-*/plan.ai.app 2>/dev/null | head -1)"
   [ -d "$APPDIR" ] || die "packager produced no .app"
   log "rcodesign sign"
