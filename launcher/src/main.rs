@@ -44,6 +44,22 @@ fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new().summary(title).body(body).show();
 }
 
+/// Shared handle to the splash-spinner child (spawned during the slow first-run
+/// mount phase, before Electron's window exists; killed when Electron signals
+/// readiness via /api/ready, or on a timeout / on exit). Shared with the HTTP
+/// server so the /api/ready handler can reap it.
+pub type SpinnerHandle = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
+
+/// Kill + reap the splash spinner if it's still running. Idempotent (Option::take).
+pub fn kill_spinner(h: &SpinnerHandle) {
+    if let Ok(mut g) = h.lock() {
+        if let Some(mut child) = g.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 /// Roots beside the launcher where the shared components/ pool lives.
 fn external_roots(here: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
@@ -120,7 +136,7 @@ fn is_nixos() -> bool {
 // None when the FHS path doesn't apply (non-NixOS / dev / already inside / setup
 // failed → the caller runs the app bare on the host). Guarded by PLANAI_FHS_REEXEC.
 #[cfg(target_os = "linux")]
-fn maybe_run_in_fhs(comp: Option<&Path>) -> Option<i32> {
+fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32> {
     // Skip in dev (nixpkgs Electron + staged dist/, no generic binaries to sandbox)
     // and once already inside; only the prod NixOS path needs the FHS.
     if std::env::var_os("PLANAI_FHS_REEXEC").is_some()
@@ -157,6 +173,12 @@ fn maybe_run_in_fhs(comp: Option<&Path>) -> Option<i32> {
         }
     }
     log("NixOS FHS: running launcher inside the FHS sandbox (components mounted on host)");
+    // The slow host-side work (extract + first-run closure import) is done and the
+    // sandboxed Electron is about to start — close the NixOS progress dialog now.
+    // It can't be killed later: the FHS child runs in a separate PID namespace, and
+    // this host process blocks here until Electron exits. The sliver until Electron
+    // paints is covered by the SPA's pre-hydration loading banner.
+    kill_spinner(spinner);
     let self_exe = std::env::current_exe().unwrap_or_default();
     match Command::new(&wrapper)
         .arg(&self_exe)
@@ -560,6 +582,124 @@ fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
     Some(dst)
 }
 
+/// The splash-spinner binary for THIS OS in the shared pool (OS-distinct names,
+/// one pool holds every platform's copy — like llmfit).
+fn pool_spinner(comp: &Path) -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &["spinner-windows.exe", "plan-ai-spinner.exe"]
+    } else if cfg!(target_os = "macos") {
+        &["spinner-darwin", "plan-ai-spinner"]
+    } else {
+        &["spinner-linux", "plan-ai-spinner"]
+    };
+    names.iter().map(|n| comp.join(n)).find(|p| p.exists())
+}
+
+/// Is `bin` an executable on $PATH? (`which`, no spawning.)
+#[cfg(target_os = "linux")]
+fn in_path(bin: &str) -> bool {
+    which::which(bin).is_ok()
+}
+
+/// NixOS fallback splash: an indeterminate "preparing…" progress dialog via the
+/// desktop's own dialog tool (no GL/glibc deps to ship). zenity (GTK), kdialog
+/// (KDE) and yad all keep the window for the life of the process, so killing the
+/// child closes it — same contract as the eframe spinner. None if none installed.
+#[cfg(target_os = "linux")]
+fn spawn_system_progress_dialog() -> Option<std::process::Child> {
+    use std::process::Stdio;
+    let title = "plan.ai";
+    let text = i18n::t("starting-preparing");
+    let null = || (Stdio::null(), Stdio::null());
+    // zenity / yad: a pulsating bar; stdin stays piped so they wait until we kill.
+    if in_path("zenity") {
+        let (o, e) = null();
+        return Command::new("zenity")
+            .args(["--progress", "--pulsate", "--no-cancel", "--auto-close", "--width=360"])
+            .arg(format!("--title={title}"))
+            .arg(format!("--text={text}"))
+            .stdin(Stdio::piped())
+            .stdout(o)
+            .stderr(e)
+            .spawn()
+            .ok();
+    }
+    if in_path("kdialog") {
+        let (o, e) = null();
+        return Command::new("kdialog")
+            .arg(format!("--title={title}"))
+            .args(["--progressbar", &text, "0"]) // 0 steps → indeterminate; kill to close
+            .stdout(o)
+            .stderr(e)
+            .spawn()
+            .ok();
+    }
+    if in_path("yad") {
+        let (o, e) = null();
+        return Command::new("yad")
+            .args(["--progress", "--pulsate", "--no-buttons", "--auto-close"])
+            .arg(format!("--title={title}"))
+            .arg(format!("--text={text}"))
+            .stdin(Stdio::piped())
+            .stdout(o)
+            .stderr(e)
+            .spawn()
+            .ok();
+    }
+    log("no system dialog (zenity/kdialog/yad) found — no splash on NixOS");
+    None
+}
+
+/// Spawn the splash spinner — a borderless native window shown while we mount the
+/// runtime (before Electron's window appears). Copied to a writable tools dir +
+/// chmod +x first so it runs off a FAT32 USB (no exec bit), like llmfit. Skipped
+/// when there's no display (headless/CI). Best-effort; failure is non-fatal.
+fn spawn_spinner(comp: Option<&Path>, tools: &Path) -> Option<std::process::Child> {
+    // Need a display to show anything; skip in headless CI (don't spawn a doomed
+    // process that just errors out).
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return None;
+    }
+    // NixOS can't run our dynamically-linked glibc/GL eframe binary (bare nix-ld
+    // stub: no /lib64/ld-linux, no system libGL/X11). Fall back to whatever native
+    // progress dialog the desktop already ships (zenity/kdialog/yad) — it's closed
+    // the same way (kill the child), so the SpinnerHandle machinery is unchanged.
+    #[cfg(target_os = "linux")]
+    if is_nixos() {
+        return spawn_system_progress_dialog();
+    }
+    let src = std::env::var_os("PLANAI_SPINNER")
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .or_else(|| comp.and_then(pool_spinner))?;
+    let name = if cfg!(target_os = "windows") { "plan-ai-spinner.exe" } else { "plan-ai-spinner" };
+    let _ = fs::create_dir_all(tools);
+    let bin = {
+        let dst = tools.join(name);
+        if fs::copy(&src, &dst).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
+            }
+            dst
+        } else {
+            src
+        }
+    };
+    match Command::new(&bin).spawn() {
+        Ok(child) => {
+            log("splash spinner shown");
+            Some(child)
+        }
+        Err(e) => {
+            log(&format!("spinner: {e}"));
+            None
+        }
+    }
+}
+
 const LLMFIT_PORT: &str = "8787";
 
 /// Run `llmfit system --json` (GPU/VRAM/backend) → pass the raw JSON to Electron via
@@ -652,7 +792,9 @@ fn run_serve() -> ! {
             Err(e) => { log(&format!("control: {e}")); return 1; }
         };
         let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
-        match serve::run_server(client, port).await {
+        // Standalone serve mode owns no spinner (an empty handle → /api/ready no-ops).
+        let no_spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
+        match serve::run_server(client, port, no_spinner).await {
             Ok(url) => {
                 std::env::set_var("PLANAI_UI_URL", &url);
                 log(&format!("UI server on {url}"));
@@ -715,6 +857,18 @@ fn main() {
     // child inherit via env). Falls back off 11434/8080 when a host service holds
     // them, so the bundled ollama never crash-loops on "address in use".
     config::init_ports();
+
+    // Show the splash spinner ASAP (host only) — it covers the slow first-run mount/
+    // extract below, when no window exists yet. Killed when Electron signals ready
+    // (POST /api/ready), on a timeout, or on exit. The FHS child never spawns one
+    // (its PID namespace can't reach the host's; the host closes it before reexec).
+    let spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
+    if !in_fhs {
+        let tools = cache_root().join("root").join("tools");
+        if let Some(child) = spawn_spinner(comp_dir.as_deref(), &tools) {
+            *spinner.lock().unwrap() = Some(child);
+        }
+    }
 
     // Prepare components on the HOST (the FHS child skips this — it inherits
     // PLANAI_RESOURCES). Mounting here means FUSE uses the host's fusermount +
@@ -803,7 +957,9 @@ fn main() {
     // when already inside the sandbox.
     #[cfg(target_os = "linux")]
     if !in_fhs {
-        if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref()) {
+        // maybe_run_in_fhs closes the NixOS progress dialog itself, right before it
+        // launches the sandboxed Electron (the FHS child can't reach it afterwards).
+        if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref(), &spinner) {
             teardown(&mounts);
             flush_drive(); // after unmount: persist the USB + "safe to unplug"
             std::process::exit(code);
@@ -856,7 +1012,7 @@ fn main() {
         match control::start_stack(&self_exe, &socket).await {
             Ok(client) => {
                 let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
-                match serve::run_server(client, port).await {
+                match serve::run_server(client, port, spinner.clone()).await {
                     Ok(url) => { std::env::set_var("PLANAI_UI_URL", &url); log(&format!("UI server on {url}")); }
                     Err(e) => log(&format!("serve: {e} — UI may be unavailable")),
                 }
@@ -878,6 +1034,17 @@ fn main() {
     cmd.arg("--no-sandbox"); // read-only AppImage mount can't setuid chrome-sandbox
     cmd.args(std::env::args_os().skip(1));
 
+    // Safety net: the mount is done and the control plane is up, so Electron should
+    // paint within seconds and POST /api/ready. If that signal never lands (renderer
+    // error, old build), close the spinner anyway so it can't sit over the session.
+    {
+        let h = spinner.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            kill_spinner(&h);
+        });
+    }
+
     let code = match cmd.status() {
         Ok(st) => st.code().unwrap_or(0),
         Err(e) => {
@@ -886,8 +1053,10 @@ fn main() {
         }
     };
 
-    // Stop the supervisor (it stops its managed children on shutdown), then the
-    // llmfit serve, then release the component mounts.
+    // Final cleanup: close the splash spinner if it somehow outlived the session
+    // (e.g. Electron exited before signalling), then stop the supervisor (it stops
+    // its managed children on shutdown), the llmfit serve, and the component mounts.
+    kill_spinner(&spinner);
     rt.block_on(async {
         if let Ok(mut c) = mac_mgmt_services::Client::connect(&socket, std::time::Duration::from_secs(5)).await {
             let _ = c.shutdown().await;

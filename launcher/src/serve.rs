@@ -38,10 +38,12 @@ struct AppState {
     gpu_json: Option<String>,
     llmfit_url: Option<String>,
     webui_url: String,
+    // The splash spinner child; /api/ready kills it once Electron's window paints.
+    spinner: crate::SpinnerHandle,
 }
 
 /// Start the control server. Returns the base URL; the server runs on a task.
-pub async fn run_server(client: Client, port: u16) -> anyhow::Result<String> {
+pub async fn run_server(client: Client, port: u16, spinner: crate::SpinnerHandle) -> anyhow::Result<String> {
     let (logs_tx, _) = broadcast::channel::<String>(512);
     let state = AppState {
         client: Arc::new(Mutex::new(client)),
@@ -49,6 +51,7 @@ pub async fn run_server(client: Client, port: u16) -> anyhow::Result<String> {
         gpu_json: std::env::var("PLANAI_GPU_JSON").ok(),
         llmfit_url: std::env::var("PLANAI_LLMFIT_URL").ok(),
         webui_url: config::webui_url(),
+        spinner,
     };
 
     // Drain supervisor notifications → fan out to SSE subscribers.
@@ -71,6 +74,8 @@ pub async fn run_server(client: Client, port: u16) -> anyhow::Result<String> {
         .route("/api/info", get(info))
         .route("/api/status", get(status))
         .route("/api/logs", get(logs_sse))
+        // Electron POSTs here on ready-to-show → close the native splash spinner.
+        .route("/api/ready", post(ready))
         .route("/api/services/{name}/{action}", post(control))
         // llmfit model browser (proxied to `llmfit serve`, same-origin for the SPA)
         .route("/api/llmfit/models", get(llmfit_models))
@@ -179,6 +184,12 @@ async fn control(State(s): State<AppState>, AxPath((name, action)): AxPath<(Stri
         }
     }
     (StatusCode::OK, "ok").into_response()
+}
+
+/// Electron hit ready-to-show: the real window is up, so close the splash spinner.
+async fn ready(State(s): State<AppState>) -> impl IntoResponse {
+    crate::kill_spinner(&s.spinner);
+    (StatusCode::OK, "ok")
 }
 
 async fn logs_sse(State(s): State<AppState>) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {

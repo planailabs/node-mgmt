@@ -1001,6 +1001,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "unic-langid",
+ "which",
 ]
 
 [[package]]
