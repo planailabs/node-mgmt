@@ -421,7 +421,8 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// Flush filesystem write buffers to disk on exit, so data the stack wrote to the
 /// (USB) drive — Open-WebUI's DATA_DIR, ollama models under the portable root — is
-/// persisted before the user pulls it. Best-effort.
+/// persisted before the user pulls it, then tell the user it's safe to unplug.
+/// Best-effort; call AFTER tearing the component mounts down for maximum safety.
 fn flush_drive() {
     #[cfg(unix)]
     {
@@ -439,6 +440,7 @@ fn flush_drive() {
                 .status();
         }
     }
+    notify("plan.ai", "Drive flushed — safe to unplug.");
 }
 
 fn teardown(mounts: &[Mount]) {
@@ -777,8 +779,8 @@ fn main() {
     #[cfg(target_os = "linux")]
     if !in_fhs {
         if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref()) {
-            flush_drive(); // persist the USB before unmounting/exit
             teardown(&mounts);
+            flush_drive(); // after unmount: persist the USB + "safe to unplug"
             std::process::exit(code);
         }
     }
@@ -870,7 +872,11 @@ fn main() {
         let _ = c.kill();
         let _ = c.wait();
     }
-    flush_drive(); // services have stopped writing — persist the USB before exit
     teardown(&mounts);
+    // Flush + "safe to unplug" after unmount. Skip in the in-FHS child — its host
+    // parent does the teardown+flush after we exit (avoids a double notification).
+    if !in_fhs {
+        flush_drive();
+    }
     std::process::exit(code);
 }
