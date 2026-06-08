@@ -36,3 +36,6 @@ __pycache__/
 /.ninja_log
 /.ninja_lock
 /launcher/spa/
+# store-import build layer: machine-specific store paths + indirect GC roots
+/nix/stores.nix
+/.nix-gcroots/
