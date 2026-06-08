@@ -80,6 +80,21 @@ fn components_dir(here: &Path) -> Option<PathBuf> {
             return Some(c);
         }
     }
+    // macOS: the launcher .app ships inside a dmg (so its exec bit + signature
+    // survive the FAT32 USB), so it runs from the read-only dmg volume — the
+    // shared pool isn't beside it, it sits at the root of the USB the dmg was
+    // opened from. Scan mounted volumes for it.
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(entries) = fs::read_dir("/Volumes") {
+            for e in entries.flatten() {
+                let c = e.path().join("components");
+                if c.join("manifest.json").exists() {
+                    return Some(c);
+                }
+            }
+        }
+    }
     None
 }
 
@@ -707,6 +722,15 @@ fn main() {
     // so NixOS gets a real mount instead of a slow extraction.
     if !in_fhs && resources.is_none() {
         if let Some(comp) = comp_dir.as_ref() {
+            // models/ + data/ live on the USB beside the components/ pool. Pin the
+            // portable root to the pool's parent so they resolve to the USB even
+            // when the launcher runs from a mounted dmg (where current_exe's parent
+            // is the read-only dmg volume, not the USB). Honour an explicit override.
+            if std::env::var_os("PLANAI_PORTABLE_ROOT").is_none() {
+                if let Some(usb_root) = comp.parent() {
+                    std::env::set_var("PLANAI_PORTABLE_ROOT", usb_root);
+                }
+            }
             let root = cache_root().join("root");
             let dist = root.join("dist");
             let tools = root.join("tools");

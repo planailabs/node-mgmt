@@ -12,7 +12,7 @@
 # launcher mounts/links it + the runtime/ollama/ow-assets and runs Electron:
 #   /plan-ai.linux.exe linux launcher (static musl ELF; chmod +x)
 #   /plan-ai.exe       windows launcher
-#   /plan.ai.app/      macOS launcher (.app; double-clickable)
+#   /plan-ai.dmg       macOS launcher (dmg holding plan.ai.app; FAT32-safe)
 #   /components/   shared component pool incl. app-<os> (one copy for all platforms)
 #   /tools/        static squashfuse/unsquashfs (linux mount)
 #   /models/   /data/   /README.txt
@@ -40,7 +40,7 @@ declare -a FILES=()
 add_if() { [ -e "$1" ] || return 0; FILES+=("$1"); log "include $(basename "$1")"; }
 shopt -s nullglob
 # the standalone launchers (the app itself rides inside components/ as app-<os>)
-for f in "$BUNDLE"/plan-ai.linux.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan.ai.app; do add_if "$f"; done
+for f in "$BUNDLE"/plan-ai.linux.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do add_if "$f"; done
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || die "no launchers in $BUNDLE — run scripts/bundle.sh <target> first"
 
@@ -81,7 +81,7 @@ plan.ai — portable offline AI (Ollama + Open-WebUI), v$VERSION
 Run on (each launcher mounts the matching app + runtime from /components):
   Linux    : chmod +x ./plan-ai.linux.exe   then  ./plan-ai.linux.exe
   Windows  : run plan-ai.exe
-  macOS    : open plan.ai.app  (or ./plan.ai.app/Contents/MacOS/plan-ai)
+  macOS    : open plan-ai.dmg, then double-click plan.ai.app inside it
 
 First launch unpacks/mounts the runtime for your machine into a local cache;
 models and your data live in /models and /data on this drive. Everything runs

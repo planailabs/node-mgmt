@@ -164,13 +164,13 @@ emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding p
 
 # raw HFS+ image macOS mounts via hdiutil. Needs mkfs.hfsplus (hfsprogs) + sudo
 # loop mount (the dev box has both — same path build-components.sh uses for dmgs).
-emit_hfsplus_dmg() {  # <src-dir> <out.dmg>
+emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
   need mkfs.hfsplus
-  local src="$1" img="$2" mnt sz raw
+  local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw
   raw="$(mktemp -u).rawhfs"
   sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB overhead
   truncate -s "$sz" "$raw"
-  mkfs.hfsplus -v PlanAI "$raw" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $raw"
+  mkfs.hfsplus -v "$vol" "$raw" >/dev/null 2>&1 || die "mkfs.hfsplus failed: $raw"
   mnt="$(mktemp -d)"
   sudo mount -o loop,umask=0000 "$raw" "$mnt" || die "loop-mount failed (sudo?) for $raw"
   sudo cp -a "$src/." "$mnt/"; sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
@@ -206,9 +206,16 @@ emit_nixos_fhs() {
 # Wrap the mac launcher binary in a tiny .app so Finder double-click works. Its
 # MacOS executable IS the rust launcher; it mounts app-mac-*.dmg from the pool and
 # runs the real Electron app from it. Signed (ad-hoc unless MAC_P12 is set).
+#
+# The .app ships INSIDE a dmg (plan-ai.dmg), not as a bare folder: the USB image is
+# FAT32, which stores no unix exec bit and no resource-fork/xattr — a bare .app
+# copied there loses its executable bit and code signature, so Gatekeeper refuses
+# it. An HFS+ dmg preserves the bundle intact; the user double-clicks plan-ai.dmg,
+# then plan.ai.app. The launcher then finds the shared components/ pool on the USB
+# (it scans /Volumes/* — see components_dir() in launcher/src/main.rs).
 build_mac_launcher_app() {
   local L; L="$(nix_launcher launcher-mac-arm64 plan-ai)"
-  local LAPP="$OUT/plan.ai.app"; rm -rf "$LAPP"
+  local STAGE; STAGE="$(mktemp -d)"; local LAPP="$STAGE/plan.ai.app"
   mkdir -p "$LAPP/Contents/MacOS" "$LAPP/Contents/Resources"
   # nix store binaries are read-only; rcodesign signs in place → needs u+w.
   cp -f "$L" "$LAPP/Contents/MacOS/plan-ai"; chmod 0755 "$LAPP/Contents/MacOS/plan-ai"
@@ -232,7 +239,13 @@ EOF
     rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$LAPP"
   else rcodesign sign "$LAPP"; warn "MAC_P12 unset — launcher .app ad-hoc signed"; fi
   rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
-  log "mac launcher .app -> $LAPP (double-clickable; runs the app-mac component)"
+  # Wrap the signed .app in a dmg (volume "plan.ai") so it survives the FAT32 USB
+  # with exec bit + signature intact. emit_hfsplus_dmg copies the staging dir's
+  # contents, so the dmg volume holds plan.ai.app at its root.
+  local DMG="$OUT/plan-ai.dmg"; rm -f "$DMG"
+  emit_hfsplus_dmg "$STAGE" "$DMG" "plan.ai"
+  rm -rf "$STAGE"
+  log "mac launcher -> $DMG (mount it, then double-click plan.ai.app)"
 }
 
 sign_windows() {  # optional Authenticode signing via osslsigncode
@@ -266,9 +279,10 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   # the launcher mounts it and runs Electron from it.
   local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"
   emit_app_component "$STAGE"; rm -rf "$STAGE"
-  # standalone, Finder-double-clickable launcher .app sitting beside the pool.
+  # standalone launcher, shipped as plan-ai.dmg (mount → double-click plan.ai.app);
+  # it finds the shared pool on the USB.
   build_mac_launcher_app
-  log "mac bundle -> $OUT/plan.ai.app (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"
+  log "mac bundle -> $OUT/plan-ai.dmg (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"
 }
 
 # NixOS has no separate bundle: the linux-x64 artifact ships the FHS helper
