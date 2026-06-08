@@ -191,6 +191,9 @@ glob_exists() { local m; for m in $1; do [ -e "$m" ] && return 0; done; return 1
 
 extract_to() {  # <archive> <destdir>
   local src="$1" d="$2"; mkdir -p "$d"
+  # Resolve symlinks (vendored archives point into /nix/store): zstd refuses to
+  # read a symlink input, and following it is harmless for a real file too.
+  src="$(readlink -f "$src")"
   case "$src" in
     *.tar.zst) need zstd; zstd -dc "$src" | tar -x -C "$d" ;;
     *.tar.gz|*.tgz) tar -xzf "$src" -C "$d" ;;

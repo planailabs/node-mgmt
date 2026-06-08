@@ -25,10 +25,18 @@ OLLAMA_TAG="$(ollama_version)"
 EXTRACT="$VENDOR_DIR/ollama/$OLLAMA_TAG/.host-bin"
 SRC="$VENDOR_DIR/ollama/$OLLAMA_TAG/ollama-linux-amd64.tar.zst"
 [ -f "$SRC" ] || die "vendored ollama missing: $SRC — run scripts/fetch-vendor.sh (make download)"
+# Vendored archives are symlinks into /nix/store; zstd refuses symlink input
+# ("is a symbolic link, ignoring" -> empty stream), so resolve to the real path.
+SRC="$(readlink -f "$SRC")"
 need zstd; need tar
 rm -rf "$EXTRACT"; mkdir -p "$EXTRACT"
 zstd -dc "$SRC" | tar -x -C "$EXTRACT"
-OLLAMA_BIN="$(ls "$EXTRACT"/bin/ollama "$EXTRACT"/ollama 2>/dev/null | head -1)"
+# Find the binary (archive layout is bin/ollama; some are top-level). Avoid
+# `ls a b | head` — with one path missing, ls exits 2 and pipefail+set -e abort.
+OLLAMA_BIN=""
+for cand in "$EXTRACT/bin/ollama" "$EXTRACT/ollama"; do
+  [ -x "$cand" ] && { OLLAMA_BIN="$cand"; break; }
+done
 [ -n "$OLLAMA_BIN" ] || die "could not find ollama in extracted archive"
 
 # The vendored ollama is a generic glibc binary. On NixOS there's no
