@@ -7,6 +7,9 @@ tab-models = Modelle
 tab-webui = Open WebUI
 btn-report-issue = Problem melden
 webui-not-ready = Open-WebUI ist noch nicht bereit.
+webui-starting = Open WebUI startet…
+webui-ready = Open WebUI bereit
+btn-open = öffnen
 
 # dashboard hero + services
 dash-title-lead = Lokaler KI-

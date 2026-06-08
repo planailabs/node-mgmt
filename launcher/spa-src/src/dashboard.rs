@@ -96,6 +96,25 @@ pub fn Dashboard() -> Element {
                 }
             }
 
+            // Open-WebUI readiness: orange while it starts, green + "open" (jumps to
+            // the WebUI tab) once ready.
+            Card { class: "card-pad flex items-center justify-center gap-3 text-center",
+                if webui_ready {
+                    span { class: "text-success font-medium", {t!("webui-ready")} }
+                    Button {
+                        size: ButtonSize::Sm,
+                        variant: ButtonVariant::Accent,
+                        onclick: move |_| {
+                            let mut t = state.tab;
+                            t.set(Tab::WebUi);
+                        },
+                        {t!("btn-open")}
+                    }
+                } else {
+                    span { class: "text-warn-strong font-medium", {t!("webui-starting")} }
+                }
+            }
+
             // runtime facts
             if let Some(info) = info.as_ref() {
                 Card { class: "card-pad",

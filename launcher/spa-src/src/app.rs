@@ -143,6 +143,8 @@ pub fn App() -> Element {
         .read()
         .as_ref()
         .and_then(|i| i.get("webui_url").and_then(|v| v.as_str()).map(String::from));
+    // Keep the iframe pane in the tree always; only its visibility tracks the tab.
+    let webui_view_cls = if tab == Tab::WebUi { "flex-1 min-h-0" } else { "hidden" };
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -179,19 +181,17 @@ pub fn App() -> Element {
                 }
             }
 
-            // views
-            match tab {
-                Tab::Dashboard => rsx! { Dashboard {} },
-                Tab::Models => rsx! { Models {} },
-                Tab::WebUi => rsx! {
-                    div { class: "flex-1 min-h-0",
-                        if let Some(url) = webui_url {
-                            iframe { class: "w-full h-full border-0", src: "{url}" }
-                        } else {
-                            div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
-                        }
-                    }
-                },
+            // views — Dashboard/Models mount per tab; the Open-WebUI iframe stays
+            // mounted across switches (just hidden when inactive) so its session +
+            // scroll survive and it's never torn out of the DOM.
+            if tab == Tab::Dashboard { Dashboard {} }
+            if tab == Tab::Models { Models {} }
+            div { class: "{webui_view_cls}",
+                if let Some(url) = webui_url {
+                    iframe { class: "w-full h-full border-0", src: "{url}" }
+                } else {
+                    div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                }
             }
         }
     }
