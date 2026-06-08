@@ -32,7 +32,7 @@ XTASK := nix run .\#xtask --
 
 .PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
         runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed test \
-        test-usb test-vm test-nixos test-clean test-all clean help
+        test-usb test-vm test-nixos test-clean test-mac test-win test-all clean help
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
 	$(XTASK) build all
@@ -119,11 +119,19 @@ test-nixos: ## launch the built nixos bundle under xvfb + screenshot
 test-clean: ## wipe build outputs and rebuild from scratch (TARGET=linux-x64)
 	./scripts/test-clean-build.sh $(TARGET)
 
-test-all: ## run every test (build/health, nixos bundle, FAT32 image, ubuntu VM)
+test-mac: ## run the mac launcher on a remote mac (set MAC_TARGET=<ssh host>)
+	./scripts/test-mac.sh
+
+test-win: ## run the win launcher on a remote windows box (set WIN_TARGET=<ssh host>)
+	./scripts/test-win.sh
+
+test-all: ## every test (build/health, nixos, FAT32, ubuntu VM; +mac/win if MAC_TARGET/WIN_TARGET set)
 	./scripts/test-build.sh
 	./scripts/test-nixos.sh
 	./scripts/test-usb-image.sh
 	./scripts/test-ubuntu-vm.sh
+	@if [ -n "$(MAC_TARGET)" ]; then ./scripts/test-mac.sh; else echo "== skip test-mac (MAC_TARGET unset) =="; fi
+	@if [ -n "$(WIN_TARGET)" ]; then ./scripts/test-win.sh; else echo "== skip test-win (WIN_TARGET unset) =="; fi
 
 clean: ## remove all build outputs (ninja graph + dist + every crate's target/)
 	@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then \
