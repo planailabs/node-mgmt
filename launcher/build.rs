@@ -22,5 +22,22 @@ fn main() {
         fs::write(&dst, bytes).unwrap();
         println!("cargo:rerun-if-env-changed={var}");
     }
+
+    // Embed the splash spinner for THIS target (ALL OSes — unlike squashfuse), fed
+    // by the flake (PLANAI_SPINNER_BIN = the cross-built spinnerFor output). Empty
+    // when unset (dev / bare cargo): the launcher then falls back to the
+    // PLANAI_SPINNER dev path, or a system dialog on linux.
+    {
+        let dst = Path::new(&out).join("spinner");
+        let bytes = match env::var("PLANAI_SPINNER_BIN") {
+            Ok(p) if !p.is_empty() => {
+                fs::read(&p).unwrap_or_else(|e| panic!("read PLANAI_SPINNER_BIN={p}: {e}"))
+            }
+            _ => Vec::new(),
+        };
+        fs::write(&dst, bytes).unwrap();
+        println!("cargo:rerun-if-env-changed=PLANAI_SPINNER_BIN");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
 }

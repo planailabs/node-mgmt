@@ -24,6 +24,8 @@ mod serve;
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
 const UNSQUASHFS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unsquashfs"));
+// Embedded splash spinner for THIS target (all OSes; empty in dev — see build.rs).
+const SPINNER_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/spinner"));
 
 struct Mount {
     dest: PathBuf,
@@ -45,18 +47,46 @@ fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new().summary(title).body(body).show();
 }
 
-/// Shared handle to the splash-spinner child (spawned during the slow first-run
-/// mount phase, before Electron's window exists; killed when Electron signals
-/// readiness via /api/ready, or on a timeout / on exit). Shared with the HTTP
-/// server so the /api/ready handler can reap it.
-pub type SpinnerHandle = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
+/// A running splash: either the embedded eframe spinner or a system progress
+/// dialog (zenity/kdialog/yad). Both are child processes closed by killing them;
+/// progress/text updates are fed over stdin (zenity-compatible protocol).
+pub struct Splash {
+    child: std::process::Child,
+}
 
-/// Kill + reap the splash spinner if it's still running. Idempotent (Option::take).
+impl Splash {
+    fn write_line(&mut self, line: &str) {
+        if let Some(stdin) = self.child.stdin.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(stdin, "{line}");
+            let _ = stdin.flush();
+        }
+    }
+    /// Update the label (determinate/progress splashes; no-op if stdin isn't piped).
+    pub fn set_text(&mut self, text: &str) {
+        self.write_line(&format!("#{text}"));
+    }
+    /// Update the percentage 0..=100 (determinate/progress splashes).
+    pub fn set_progress(&mut self, pct: u8) {
+        self.write_line(&pct.min(100).to_string());
+    }
+    /// Close + reap the splash window.
+    pub fn close(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Shared handle to the launch-time splash (closed when Electron signals readiness
+/// via /api/ready, or on a timeout / on exit). Shared with the HTTP server so the
+/// /api/ready handler can reap it.
+pub type SpinnerHandle = std::sync::Arc<std::sync::Mutex<Option<Splash>>>;
+
+/// Close the splash if it's still up. Idempotent (Option::take).
 pub fn kill_spinner(h: &SpinnerHandle) {
     if let Ok(mut g) = h.lock() {
-        if let Some(mut child) = g.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(splash) = g.take() {
+            splash.close();
         }
     }
 }
@@ -583,122 +613,135 @@ fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
     Some(dst)
 }
 
-/// The splash-spinner binary for THIS OS in the shared pool (OS-distinct names,
-/// one pool holds every platform's copy — like llmfit).
-fn pool_spinner(comp: &Path) -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(target_os = "windows") {
-        &["spinner-windows.exe", "plan-ai-spinner.exe"]
-    } else if cfg!(target_os = "macos") {
-        &["spinner-darwin", "plan-ai-spinner"]
-    } else {
-        &["spinner-linux", "plan-ai-spinner"]
-    };
-    names.iter().map(|n| comp.join(n)).find(|p| p.exists())
-}
-
 /// Is `bin` an executable on $PATH? (`which`, no spawning.)
 #[cfg(target_os = "linux")]
 fn in_path(bin: &str) -> bool {
     which::which(bin).is_ok()
 }
 
-/// NixOS fallback splash: an indeterminate "preparing…" progress dialog via the
-/// desktop's own dialog tool (no GL/glibc deps to ship). zenity (GTK), kdialog
-/// (KDE) and yad all keep the window for the life of the process, so killing the
-/// child closes it — same contract as the eframe spinner. None if none installed.
+/// Options for the splash window.
+#[derive(Clone, Copy)]
+pub struct SplashOpts<'a> {
+    pub text: &'a str,
+    /// Determinate progress-bar mode (fed percentages over stdin); else a spinner.
+    pub progress: bool,
+}
+
+/// NixOS / no-GL fallback splash: a progress dialog via the desktop's own tool
+/// (no GL/glibc deps to ship). zenity (GTK), kdialog (KDE) and yad keep the window
+/// for the life of the process, so killing the child closes it — same contract as
+/// the eframe spinner. Determinate mode reads 0..100 percentages on stdin (zenity/
+/// yad natively; kdialog stays indeterminate). None if no tool is installed.
 #[cfg(target_os = "linux")]
-fn spawn_system_progress_dialog() -> Option<std::process::Child> {
+fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child> {
     use std::process::Stdio;
     let title = "plan.ai";
-    let text = i18n::t("starting-preparing");
-    let null = || (Stdio::null(), Stdio::null());
-    // zenity / yad: a pulsating bar; stdin stays piped so they wait until we kill.
+    let text = if opts.text.is_empty() { i18n::t("starting-preparing") } else { opts.text.to_string() };
     if in_path("zenity") {
-        let (o, e) = null();
-        return Command::new("zenity")
-            .args(["--progress", "--pulsate", "--no-cancel", "--auto-close", "--width=360"])
+        let mut c = Command::new("zenity");
+        c.args(["--progress", "--no-cancel", "--auto-close", "--width=360"]);
+        if !opts.progress {
+            c.arg("--pulsate"); // indeterminate
+        }
+        return c
             .arg(format!("--title={title}"))
             .arg(format!("--text={text}"))
             .stdin(Stdio::piped())
-            .stdout(o)
-            .stderr(e)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .ok();
     }
     if in_path("kdialog") {
-        let (o, e) = null();
+        // kdialog progress is driven over D-Bus; keep it indeterminate (kill to close).
         return Command::new("kdialog")
             .arg(format!("--title={title}"))
-            .args(["--progressbar", &text, "0"]) // 0 steps → indeterminate; kill to close
-            .stdout(o)
-            .stderr(e)
+            .args(["--progressbar", &text, "0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .ok();
     }
     if in_path("yad") {
-        let (o, e) = null();
-        return Command::new("yad")
-            .args(["--progress", "--pulsate", "--no-buttons", "--auto-close"])
+        let mut c = Command::new("yad");
+        c.args(["--progress", "--no-buttons", "--auto-close"]);
+        if !opts.progress {
+            c.arg("--pulsate");
+        }
+        return c
             .arg(format!("--title={title}"))
             .arg(format!("--text={text}"))
             .stdin(Stdio::piped())
-            .stdout(o)
-            .stderr(e)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .ok();
     }
-    log("no system dialog (zenity/kdialog/yad) found — no splash on NixOS");
+    log("no system dialog (zenity/kdialog/yad) found — no splash");
     None
 }
 
-/// Spawn the splash spinner — a borderless native window shown while we mount the
-/// runtime (before Electron's window appears). Copied to a writable tools dir +
-/// chmod +x first so it runs off a FAT32 USB (no exec bit), like llmfit. Skipped
-/// when there's no display (headless/CI). Best-effort; failure is non-fatal.
-fn spawn_spinner(comp: Option<&Path>, tools: &Path) -> Option<std::process::Child> {
-    // Need a display to show anything; skip in headless CI (don't spawn a doomed
-    // process that just errors out).
+/// Spawn the embedded eframe spinner: write it (or a PLANAI_SPINNER dev override)
+/// to the writable tools dir + chmod +x (FAT32 has no exec bit), then run it in the
+/// chosen mode. None if there's no embedded binary (dev) or spawn fails.
+fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
+    use std::process::Stdio;
+    let tools = cache_root().join("root").join("tools");
+    let _ = fs::create_dir_all(&tools);
+    let name = if cfg!(target_os = "windows") { "plan-ai-spinner.exe" } else { "plan-ai-spinner" };
+    let bin = tools.join(name);
+    let written = if !SPINNER_BIN.is_empty() {
+        fs::write(&bin, SPINNER_BIN).is_ok()
+    } else if let Some(dev) = std::env::var_os("PLANAI_SPINNER").map(PathBuf::from).filter(|p| p.exists()) {
+        fs::copy(&dev, &bin).is_ok()
+    } else {
+        false
+    };
+    if !written {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&bin, fs::Permissions::from_mode(0o755));
+    }
+    let mut cmd = Command::new(&bin);
+    cmd.arg("--text").arg(opts.text);
+    if opts.progress {
+        cmd.arg("--progress").stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.spawn().ok()
+}
+
+/// Show the splash: the embedded eframe spinner where it can run; the desktop's
+/// progress dialog on NixOS (can't run the dynamic GL binary) or if eframe won't
+/// spawn on linux. Skipped with no display (headless/CI). Best-effort.
+fn show_splash(opts: SplashOpts) -> Option<Splash> {
+    // Need a display; skip in headless CI.
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
         return None;
     }
-    // NixOS can't run our dynamically-linked glibc/GL eframe binary (bare nix-ld
-    // stub: no /lib64/ld-linux, no system libGL/X11). Fall back to whatever native
-    // progress dialog the desktop already ships (zenity/kdialog/yad) — it's closed
-    // the same way (kill the child), so the SpinnerHandle machinery is unchanged.
+    // NixOS: the dynamic glibc/GL eframe binary can't run (bare nix-ld stub) — use
+    // the system dialog directly.
     #[cfg(target_os = "linux")]
     if is_nixos() {
-        return spawn_system_progress_dialog();
+        return spawn_system_progress_dialog(opts).map(|child| Splash { child });
     }
-    let src = std::env::var_os("PLANAI_SPINNER")
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
-        .or_else(|| comp.and_then(pool_spinner))?;
-    let name = if cfg!(target_os = "windows") { "plan-ai-spinner.exe" } else { "plan-ai-spinner" };
-    let _ = fs::create_dir_all(tools);
-    let bin = {
-        let dst = tools.join(name);
-        if fs::copy(&src, &dst).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
-            }
-            dst
-        } else {
-            src
-        }
-    };
-    match Command::new(&bin).spawn() {
-        Ok(child) => {
-            log("splash spinner shown");
-            Some(child)
-        }
-        Err(e) => {
-            log(&format!("spinner: {e}"));
-            None
-        }
+    if let Some(child) = spawn_eframe_spinner(opts) {
+        log("splash spinner shown");
+        return Some(Splash { child });
     }
+    // Linux fallback if the eframe binary is absent / won't spawn.
+    #[cfg(target_os = "linux")]
+    if let Some(child) = spawn_system_progress_dialog(opts) {
+        return Some(Splash { child });
+    }
+    None
 }
 
 const LLMFIT_PORT: &str = "8787";
@@ -865,9 +908,8 @@ fn main() {
     // (its PID namespace can't reach the host's; the host closes it before reexec).
     let spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
     if !in_fhs {
-        let tools = cache_root().join("root").join("tools");
-        if let Some(child) = spawn_spinner(comp_dir.as_deref(), &tools) {
-            *spinner.lock().unwrap() = Some(child);
+        if let Some(splash) = show_splash(SplashOpts { text: &i18n::t("starting-preparing"), progress: false }) {
+            *spinner.lock().unwrap() = Some(splash);
         }
     }
 

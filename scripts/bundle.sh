@@ -71,7 +71,6 @@ copy_comps_into() {  # <components-dir>
   done; done
   [ -f "$COMP_SRC/manifest.json" ] && cp -u "$COMP_SRC/manifest.json" "$cdst/"
   copy_llmfit_into "$cdst"
-  copy_spinner_into "$cdst"
   log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
 }
 
@@ -112,24 +111,8 @@ copy_llmfit_into() {  # <pool-dir>
   log "llmfit -> components/$name ($(du -h "$pool/$name" | cut -f1))"
 }
 
-# Copy the native splash spinner for THIS target into the shared pool (OS-distinct
-# name, like llmfit). The launcher runs it during the runtime mount, before
-# Electron's window appears, and kills it on /api/ready. Best-effort.
-copy_spinner_into() {  # <pool-dir>
-  local pool="$1" attr name out bin
-  case "$TARGET" in
-    linux-*|nixos-*) attr=spinner-linux-x64; name=spinner-linux ;;
-    win-*)           attr=spinner-win-x64;   name=spinner-windows.exe ;;
-    mac-*)           attr=spinner-mac-arm64; name=spinner-darwin ;;
-    *) return 0 ;;
-  esac
-  out="$(cd "$REPO_ROOT" && nix build ".#$attr" --no-link --print-out-paths 2>/dev/null || true)"
-  [ -n "$out" ] || { warn "spinner build failed for $TARGET — no splash shown"; return 0; }
-  bin="$(find "$out" -maxdepth 1 -type f | head -1)"
-  [ -n "$bin" ] || { warn "no spinner binary in $out"; return 0; }
-  cp -f "$bin" "$pool/$name"; chmod +x "$pool/$name" 2>/dev/null || true
-  log "spinner -> components/$name ($(du -h "$pool/$name" | cut -f1))"
-}
+# (The splash spinner is no longer shipped in the pool — it's embedded directly in
+# the launcher via build.rs/PLANAI_SPINNER_BIN, fed by the flake; see flake.nix.)
 
 package_electron_builder() {  # linux AppImage / windows zip
   local EB_OS; case "$TARGET" in linux-*) EB_OS="--linux";; win-*) EB_OS="--win";; esac

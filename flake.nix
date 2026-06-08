@@ -115,6 +115,20 @@
         # (the control plane), so the build vendors crates.io (launcherVendor) and
         # copies mac-mgmt-services from the mac-mgmt input into vendor/.
         launcherFor = { zigTarget, outDir }:
+          let
+            # The splash spinner for the MATCHING target, embedded into the launcher
+            # via build.rs (PLANAI_SPINNER_BIN) — the launcher carries it instead of
+            # shipping it in the pool. Linux launcher is musl but the spinner is gnu
+            # (a GUI needs a dynamic loader); embedding raw bytes is target-agnostic.
+            spinnerPkg =
+              if lib.hasInfix "windows" zigTarget then
+                spinnerFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; }
+              else if lib.hasInfix "apple-darwin" zigTarget then
+                spinnerFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; }
+              else
+                spinnerFor { zigTarget = "x86_64-unknown-linux-gnu"; outDir = "x86_64-unknown-linux-gnu"; };
+            spinnerBin = "${spinnerPkg}/${if lib.hasInfix "windows" zigTarget then "plan-ai-spinner.exe" else "plan-ai-spinner"}";
+          in
           pkgs.runCommand "plan-ai-launcher-${outDir}"
             ({
               nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
@@ -122,6 +136,8 @@
               # like the AppImage runtime); ignored for win/mac targets.
               PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
+              # the splash spinner, embedded into the launcher for every target.
+              PLANAI_SPINNER_BIN = spinnerBin;
             } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
               # Cocoa headers/frameworks for notify-rust's mac-notification-sys.
               SDKROOT = macosx-sdk;

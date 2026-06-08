@@ -14,6 +14,8 @@ path = "src/main.rs"
 # cross-built from NixOS still resolves the target machine's system libs. accesskit
 # is dropped (a splash needs no screen-reader, and it's a cross-compile pain point).
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+# CLI args (--text / --progress / --title)
+clap = { version = "4", features = ["derive"] }
 
 [profile.release]
 opt-level = "z"
