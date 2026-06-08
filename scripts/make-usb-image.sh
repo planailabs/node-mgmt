@@ -85,8 +85,10 @@ Run on (each launcher mounts the matching app + runtime from /components):
 
 First launch unpacks/mounts the runtime for your machine into a local cache;
 models and your data live in /models and /data on this drive. Everything runs
-offline. (On FAT32 the unix exec bit is not stored — Linux/macOS may need a
-chmod +x on the launcher; exFAT preserves it.)
+offline. (On FAT32 the unix exec bit is not stored — Linux may need a chmod +x
+on the launcher; macOS ships a .dmg so the .app keeps its bit + signature.)
+
+Report an issue / get help: https://git.plan.ai/plan-ai/usb
 EOF
 "${MC[@]}" "$README" ::/README.txt; rm -f "$README"
 for f in "${FILES[@]}"; do "${MC[@]}" "$f" ::/ ; done
