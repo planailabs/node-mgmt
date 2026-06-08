@@ -55,7 +55,9 @@ step "stage resources into dist/"
 if [ ! -e "$DIST_DIR/ollama/bin/ollama" ] && [ ! -e "$DIST_DIR/ollama/ollama" ]; then
   rm -rf "$DIST_DIR/ollama"; mkdir -p "$DIST_DIR/ollama"
   need zstd; need tar
-  zstd -dc "$VENDOR_DIR/ollama/$OLLAMA_TAG/ollama-linux-amd64.tar.zst" | tar -x -C "$DIST_DIR/ollama"
+  # -f: vendor files are symlinks into the nix store (FOD downloads); plain
+  # `zstd -dc` refuses symlinked input ("is a symbolic link, ignoring").
+  zstd -dcf "$VENDOR_DIR/ollama/$OLLAMA_TAG/ollama-linux-amd64.tar.zst" | tar -x -C "$DIST_DIR/ollama"
 fi
 mkdir -p "$DIST_DIR/runtime"
 ln -sfn "devvenv" "$DIST_DIR/runtime/venv"          # relative symlink within dist/runtime

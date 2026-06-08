@@ -655,10 +655,17 @@ fn main() {
             let dist = root.join("dist");
             let tools = root.join("tools");
             let _ = fs::create_dir_all(&dist);
-            // On NixOS the generic ollama needs patchelf (writable) → extract.
-            let force_extract = is_nixos();
+            // Try a FUSE mount FIRST on every platform — incl. NixOS: the bundled
+            // squashfuse_ll is static (runs under the bare nix-ld stub) and the
+            // FHS re-exec lets the mounted generic binaries run, so the old
+            // "NixOS must extract" rule no longer holds. provide() falls back to
+            // unsquashfs extraction automatically if the mount fails (e.g. no
+            // /dev/fuse in the sandbox). PLANAI_FORCE_EXTRACT forces extraction.
+            let force_extract = std::env::var_os("PLANAI_FORCE_EXTRACT").is_some();
             if force_extract {
-                log("NixOS detected — extracting components (no FUSE mount)");
+                log("PLANAI_FORCE_EXTRACT set — extracting components (no FUSE mount)");
+            } else if is_nixos() {
+                log("NixOS — attempting FUSE mount (squashfuse_ll), extract fallback");
             }
 
             let rt = pick_base(comp, "runtime-").unwrap_or_else(|| {
