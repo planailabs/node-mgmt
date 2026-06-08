@@ -3,6 +3,7 @@
 
 use dioxus::prelude::*;
 use dioxus_i18n::t;
+use serde_json::json;
 
 use plan_ai_design::{
     Button, ButtonSize, ButtonVariant, Card, Dot, HelpText, Kicker, PageHero, Pill, PillVariant,
@@ -115,6 +116,8 @@ pub fn Dashboard() -> Element {
                 }
             }
 
+            UpdatesCard {}
+
             // runtime facts
             if let Some(info) = info.as_ref() {
                 Card { class: "card-pad",
@@ -183,6 +186,113 @@ pub fn Dashboard() -> Element {
 
             if services.is_empty() {
                 HelpText { xs: true, {t!("waiting-supervisor")} }
+            }
+        }
+    }
+}
+
+/// Manual update check + apply + per-platform keep/prune (driven by /api/update/*
+/// and /api/platforms). Previewable against the mock server via `make ui`.
+#[allow(non_snake_case)]
+fn UpdatesCard() -> Element {
+    let mut status = use_signal(|| json!({ "state": "idle" }));
+    let mut kept = use_signal(Vec::<String>::new);
+    let mut available = use_signal(Vec::<String>::new);
+
+    use_future(move || async move {
+        loop {
+            if let Ok(v) = api::get_json("/api/update/status").await {
+                status.set(v);
+            }
+            gloo_timers::future::TimeoutFuture::new(2000).await;
+        }
+    });
+    use_future(move || async move {
+        if let Ok(v) = api::get_json("/api/platforms").await {
+            let arr = |k: &str| {
+                v.get(k)
+                    .and_then(|a| a.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            };
+            kept.set(arr("kept"));
+            available.set(arr("available"));
+        }
+    });
+
+    let s = status.read();
+    let state = s.get("state").and_then(|v| v.as_str()).unwrap_or("idle").to_string();
+    let done = s.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
+    let total = s.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+    let version = s.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    drop(s);
+    let pct: i64 = if total > 0 { (done * 100 / total) as i64 } else { 0 };
+    let busy = matches!(state.as_str(), "checking" | "downloading" | "applying");
+    let kept_now = kept.read().clone();
+    let avail = available.read().clone();
+
+    rsx! {
+        Card { class: "card-pad space-y-3",
+            div { class: "flex items-center justify-between",
+                Kicker { {t!("updates-title")} }
+                Button {
+                    size: ButtonSize::Xs,
+                    variant: ButtonVariant::Secondary,
+                    disabled: busy,
+                    onclick: move |_| { spawn(async move { let _ = api::post_json("/api/update/check", json!({})).await; }); },
+                    {t!("btn-check-updates")}
+                }
+            }
+            div { class: "text-sm",
+                {match state.as_str() {
+                    "downloading" => rsx! { span { class: "text-warn-strong", {t!("upd-downloading", pct: pct)} } },
+                    "checking" => rsx! { span { class: "td-muted", {t!("upd-checking")} } },
+                    "applying" => rsx! { span { class: "text-warn-strong", {t!("upd-applying")} } },
+                    "failed" => rsx! { span { class: "text-warn-strong", {t!("upd-failed")} } },
+                    "ready" => rsx! {
+                        div { class: "flex items-center gap-3",
+                            span { class: "text-success font-medium", {t!("upd-ready", version: version.clone())} }
+                            Button {
+                                size: ButtonSize::Sm,
+                                variant: ButtonVariant::Accent,
+                                onclick: move |_| { spawn(async move { let _ = api::post_json("/api/update/apply", json!({})).await; }); },
+                                {t!("btn-apply-update")}
+                            }
+                        }
+                    },
+                    _ => rsx! { span { class: "td-muted", {t!("upd-idle")} } },
+                }}
+            }
+            div { class: "pt-2 border-t border-line space-y-2",
+                div { class: "label", {t!("platforms-title")} }
+                div { class: "flex items-center gap-2",
+                    for p in avail.iter().cloned() {
+                        {
+                            let on = kept_now.contains(&p);
+                            let pc = p.clone();
+                            rsx! {
+                                Button {
+                                    size: ButtonSize::Xs,
+                                    variant: if on { ButtonVariant::Secondary } else { ButtonVariant::Ghost },
+                                    onclick: move |_| {
+                                        let mut k = kept.write();
+                                        if let Some(i) = k.iter().position(|x| x == &pc) { k.remove(i); } else { k.push(pc.clone()); }
+                                    },
+                                    "{p}"
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        size: ButtonSize::Xs,
+                        variant: ButtonVariant::Primary,
+                        onclick: move |_| {
+                            let k = kept.read().clone();
+                            spawn(async move { let _ = api::post_json("/api/platforms", json!({ "platforms": k })).await; });
+                        },
+                        {t!("btn-save")}
+                    }
+                }
             }
         }
     }

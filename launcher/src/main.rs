@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod config;
+mod apply;
 mod control;
 mod i18n;
 mod net;
 mod paths;
 mod proxy;
 mod serve;
+mod update;
 
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
@@ -37,7 +39,7 @@ enum MountKind {
     None,
 }
 
-fn log(msg: &str) {
+pub(crate) fn log(msg: &str) {
     eprintln!("[plan-ai] {msg}");
 }
 
@@ -82,12 +84,34 @@ impl Splash {
 /// /api/ready handler can reap it.
 pub type SpinnerHandle = std::sync::Arc<std::sync::Mutex<Option<Splash>>>;
 
+/// Shared handle to the Electron child so the update-apply endpoint can terminate
+/// it (→ main's wait returns → apply runs). Held by main (waits) + the server.
+pub type ElectronHandle = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
+
 /// Close the splash if it's still up. Idempotent (Option::take).
 pub fn kill_spinner(h: &SpinnerHandle) {
     if let Ok(mut g) = h.lock() {
         if let Some(splash) = g.take() {
             splash.close();
         }
+    }
+}
+
+/// After applying an update, land the user on the new version where we can: Linux/
+/// Windows spawn the updated launcher detached (same path, new bytes) + exit; macOS
+/// just notifies — the plan-ai.dmg was replaced, so the user reopens it.
+fn relaunch_after_update(exe: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = exe;
+        notify("plan.ai", &i18n::t("update-applied"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        notify("plan.ai", &i18n::t("update-applied"));
+        let mut cmd = Command::new(exe);
+        cmd.args(std::env::args_os().skip(1));
+        let _ = cmd.spawn();
     }
 }
 
@@ -247,7 +271,7 @@ fn acquire_instance_lock() -> Result<std::fs::File, bool> {
     }
 }
 
-fn cache_root() -> PathBuf {
+pub(crate) fn cache_root() -> PathBuf {
     if let Some(c) = std::env::var_os("PLANAI_CACHE") {
         return PathBuf::from(c);
     }
@@ -720,7 +744,7 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
 /// Show the splash: the embedded eframe spinner where it can run; the desktop's
 /// progress dialog on NixOS (can't run the dynamic GL binary) or if eframe won't
 /// spawn on linux. Skipped with no display (headless/CI). Best-effort.
-fn show_splash(opts: SplashOpts) -> Option<Splash> {
+pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
     // Need a display; skip in headless CI.
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
@@ -836,9 +860,12 @@ fn run_serve() -> ! {
             Err(e) => { log(&format!("control: {e}")); return 1; }
         };
         let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
-        // Standalone serve mode owns no spinner (an empty handle → /api/ready no-ops).
+        // Standalone serve mode owns no spinner/electron (empty handles → no-ops).
         let no_spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
-        match serve::run_server(client, port, no_spinner).await {
+        let updater = update::Updater::new();
+        let apply_req = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let no_electron: ElectronHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
+        match serve::run_server(client, port, no_spinner, updater, apply_req, no_electron).await {
             Ok(url) => {
                 std::env::set_var("PLANAI_UI_URL", &url);
                 log(&format!("UI server on {url}"));
@@ -913,6 +940,17 @@ fn main() {
         }
     }
 
+    // Auto-updater state (manual check from the SPA; bootstrap if the drive has no
+    // manifest/platforms). apply_requested + the Electron handle let /api/update/apply
+    // quit Electron so this process applies the staged update with the runtime down.
+    let updater = update::Updater::new();
+    let apply_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let electron: ElectronHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
+    // Whether to auto-run the download routine this launch (no manifest yet, or
+    // platforms.json absent → first-run bootstrap). Computed before read_platforms
+    // creates platforms.json.
+    let bootstrap_update = !in_fhs && (update::load_local().is_none() || !update::platforms_exists());
+
     // Prepare components on the HOST (the FHS child skips this — it inherits
     // PLANAI_RESOURCES). Mounting here means FUSE uses the host's fusermount +
     // /dev/fuse; the FHS sandbox then sees the mounts through its recursive bind,
@@ -928,6 +966,9 @@ fn main() {
                     std::env::set_var("PLANAI_PORTABLE_ROOT", usb_root);
                 }
             }
+            // Finish any update apply that a prior run was interrupted mid-way (before
+            // we mount the components it may be replacing).
+            apply::resume_if_interrupted();
             let root = cache_root().join("root");
             let dist = root.join("dist");
             let tools = root.join("tools");
@@ -1055,7 +1096,7 @@ fn main() {
         match control::start_stack(&self_exe, &socket).await {
             Ok(client) => {
                 let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
-                match serve::run_server(client, port, spinner.clone()).await {
+                match serve::run_server(client, port, spinner.clone(), updater.clone(), apply_requested.clone(), electron.clone()).await {
                     Ok(url) => { std::env::set_var("PLANAI_UI_URL", &url); log(&format!("UI server on {url}")); }
                     Err(e) => log(&format!("serve: {e} — UI may be unavailable")),
                 }
@@ -1063,6 +1104,14 @@ fn main() {
             Err(e) => log(&format!("control plane: {e} — services may be unavailable")),
         }
     });
+
+    // First-run bootstrap: no local manifest / no platforms.json → fetch the manifest
+    // from the default URL and pre-download the components in the background. Routine
+    // update checks are manual (the SPA's "Check for updates").
+    if bootstrap_update {
+        log("no update manifest on the drive — bootstrapping from the update server");
+        rt.spawn(update::check_and_predownload(updater.clone()));
+    }
 
     // Run Electron (thin webview). It inherits the environment (incl.
     // PLANAI_UI_URL) and user args; we tear the mounts down on exit.
@@ -1088,8 +1137,22 @@ fn main() {
         });
     }
 
-    let code = match cmd.status() {
-        Ok(st) => st.code().unwrap_or(0),
+    // Spawn Electron into the shared handle so /api/update/apply can terminate it
+    // (→ this wait returns → we apply the staged update). Then wait for it to exit
+    // (poll so the server task can take the lock to kill it).
+    let code = match cmd.spawn() {
+        Ok(child) => {
+            *electron.lock().unwrap() = Some(child);
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let mut g = electron.lock().unwrap();
+                match g.as_mut().map(|c| c.try_wait()) {
+                    Some(Ok(Some(st))) => break st.code().unwrap_or(0),
+                    Some(Ok(None)) => continue, // still running
+                    _ => break 0,
+                }
+            }
+        }
         Err(e) => {
             log(&format!("failed to start {}: {e}", program.display()));
             1
@@ -1110,10 +1173,22 @@ fn main() {
         let _ = c.wait();
     }
     teardown(&mounts);
+
+    // Apply a staged update now that the whole runtime is down (Electron + supervisor
+    // + mounts gone). Then relaunch the (updated) launcher where we can.
+    let applied = if !in_fhs && apply_requested.load(std::sync::atomic::Ordering::SeqCst) {
+        apply::run(&updater)
+    } else {
+        false
+    };
+
     // Flush + "safe to unplug" after unmount. Skip in the in-FHS child — its host
     // parent does the teardown+flush after we exit (avoids a double notification).
     if !in_fhs {
         flush_drive();
+    }
+    if applied {
+        relaunch_after_update(&exe);
     }
     std::process::exit(code);
 }

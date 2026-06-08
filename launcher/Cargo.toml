@@ -15,6 +15,9 @@ mac-mgmt-services = { path = "vendor/mac-mgmt-services" }
 # shared control-plane HTTP surface (ControlApi trait + router + DTOs), so the real
 # server and the dev mock-server can't drift. Path dep — the flake copies crates/.
 plan-ai-control-api = { path = "../crates/control-api" }
+# shared update-manifest schema + diff + platform classification (also used by the
+# build tool xtask) — the updater reads/writes these manifests.
+plan-ai-manifest = { path = "../crates/manifest" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "net", "io-util", "sync", "signal", "fs"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

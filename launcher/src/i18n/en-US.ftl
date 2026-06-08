@@ -2,3 +2,4 @@
 already-running = plan.ai is already running.
 safe-to-unplug = Data written — drive can now be removed.
 starting-preparing = Starting plan.ai — preparing the runtime…
+update-applied = Update applied — relaunching plan.ai.

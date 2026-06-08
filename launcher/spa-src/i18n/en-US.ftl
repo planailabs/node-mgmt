@@ -8,6 +8,19 @@ tab-models = Models
 tab-webui = Open WebUI
 btn-report-issue = Report issue
 webui-not-ready = Open-WebUI is not ready yet.
+
+# updates
+updates-title = Updates
+btn-check-updates = Check for updates
+upd-idle = Up to date
+upd-checking = Checking…
+upd-downloading = Downloading update… { $pct }%
+upd-ready = Update { $version } ready
+btn-apply-update = Apply update
+upd-applying = Applying update…
+upd-failed = Update check failed
+platforms-title = Platforms kept on this USB
+btn-save = Save
 webui-starting = Open WebUI starting…
 webui-ready = Open WebUI ready
 btn-open = open

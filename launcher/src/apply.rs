@@ -1,0 +1,216 @@
+//! Apply a staged update onto the USB, crash-safe. Runs AFTER the runtime is fully
+//! down (Electron + supervisor + mounts gone), with a determinate progress splash.
+//!
+//! Power-loss invariant: each managed file is always either the whole old or the
+//! whole new file (we copy to `<path>.new`, fsync, sha-verify, then same-dir
+//! rename), partial bytes only ever live in reclaimable `.new` temps, and the
+//! manifest (update.json) is committed LAST — so an interrupted apply boots the
+//! intact old version. A journal (.update-applying.json) lets a reboot resume.
+
+use std::path::{Path, PathBuf};
+
+use plan_ai_manifest::{self as manifest, Manifest};
+use serde_json::json;
+
+use crate::{paths, update};
+
+fn journal_path(root: &Path) -> PathBuf {
+    root.join(".update-applying.json")
+}
+
+/// Apply the pending staged update (from a `Check`). Returns true if it applied.
+pub fn run(up: &update::Updater) -> bool {
+    let Some(pending) = up.pending.lock().unwrap().take() else {
+        return false;
+    };
+    let root = paths::portable_root();
+    write_journal(&root, &pending.staging, &pending.remote.commit);
+    let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.kept, Some(up));
+    let _ = std::fs::remove_file(journal_path(&root));
+    ok
+}
+
+/// On startup: if a prior apply was interrupted, finish it (idempotent) when the
+/// staging is still present; otherwise drop the stale journal + orphan temps and
+/// keep running the intact old version.
+pub fn resume_if_interrupted() {
+    let root = paths::portable_root();
+    let jp = journal_path(&root);
+    let Ok(txt) = std::fs::read_to_string(&jp) else {
+        cleanup_orphans(&root);
+        return;
+    };
+    let staging = serde_json::from_str::<serde_json::Value>(&txt)
+        .ok()
+        .and_then(|v| v.get("staging").and_then(|s| s.as_str()).map(PathBuf::from));
+    let remote = staging
+        .as_ref()
+        .and_then(|s| std::fs::read_to_string(s.join("manifest.json")).ok())
+        .and_then(|s| Manifest::from_json(&s).ok());
+    match (staging, remote) {
+        (Some(staging), Some(remote)) if staging.exists() => {
+            crate::log("resuming interrupted update apply");
+            let kept = update::read_platforms();
+            apply_plan(&root, &staging, &remote, &kept, None);
+            let _ = std::fs::remove_file(&jp);
+        }
+        _ => {
+            crate::log("stale update journal — staging gone; keeping current version");
+            let _ = std::fs::remove_file(&jp);
+            cleanup_orphans(&root);
+        }
+    }
+}
+
+fn write_journal(root: &Path, staging: &Path, commit: &str) {
+    let _ = std::fs::write(
+        journal_path(root),
+        json!({ "commit": commit, "staging": staging.to_string_lossy() }).to_string(),
+    );
+}
+
+/// Copy staged files into place (verified, atomic per file), delete pruned files,
+/// then commit the manifest last. `up` (when present) drives the progress splash.
+fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], up: Option<&update::Updater>) -> bool {
+    let plan = manifest::diff(update::load_local().as_ref(), remote, kept);
+    let total = (plan.to_download.len() + plan.to_delete.len()) as u64;
+    let mut splash = crate::show_splash(crate::SplashOpts { text: "Updating plan.ai…", progress: true });
+    let mut done = 0u64;
+    let tick = |done: u64, splash: &mut Option<crate::Splash>, up: Option<&update::Updater>| {
+        let pct = if total == 0 { 100 } else { (done * 100 / total) as u8 };
+        if let Some(s) = splash.as_mut() {
+            s.set_progress(pct);
+        }
+        if let Some(u) = up {
+            u.set_applying(done, total);
+        }
+    };
+
+    for d in &plan.to_mkdir {
+        if manifest::is_safe_path(d) {
+            let _ = std::fs::create_dir_all(root.join(d));
+        }
+    }
+
+    let me = std::env::current_exe().ok();
+    for e in &plan.to_download {
+        if !manifest::is_safe_path(&e.path) {
+            continue;
+        }
+        let src = staging.join(&e.path);
+        let dest = root.join(&e.path);
+        if !src.exists() {
+            crate::log(&format!("apply: staged file missing, skipping {}", e.path));
+            continue;
+        }
+        if let Err(err) = place_file(&src, &dest, e.sha256.as_deref(), e.exec, me.as_deref()) {
+            crate::log(&format!("apply: {} failed: {err}", e.path));
+        }
+        done += 1;
+        tick(done, &mut splash, up);
+    }
+
+    for p in &plan.to_delete {
+        if manifest::is_safe_path(p) {
+            let _ = std::fs::remove_file(root.join(p));
+        }
+        done += 1;
+        tick(done, &mut splash, up);
+    }
+    prune_empty_dirs(root, &plan.to_delete);
+
+    // Commit: write the new manifest last (the "done" marker).
+    let _ = std::fs::write(root.join("update.json"), remote.to_json_pretty());
+    if let Some(s) = splash.take() {
+        s.close();
+    }
+    crate::log("update applied");
+    true
+}
+
+/// Place one file atomically: copy → fsync → sha-verify → same-dir rename. The
+/// launcher's OWN running binary needs the Windows rename-away dance; unix can
+/// replace a running file directly.
+fn place_file(src: &Path, dest: &Path, sha: Option<&str>, exec: bool, me: Option<&Path>) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let is_self = me.map(|m| m == dest).unwrap_or(false);
+
+    #[cfg(target_os = "windows")]
+    if is_self {
+        // Can't overwrite the running .exe; rename it away (allowed), then copy the
+        // new one in. The .old is reaped on next start (cleanup_orphans).
+        let old = with_ext(dest, "old");
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(dest, &old)?;
+        std::fs::copy(src, dest)?;
+        return Ok(());
+    }
+
+    let tmp = with_ext(dest, "new");
+    std::fs::copy(src, &tmp)?;
+    if let Some(want) = sha {
+        if !want.is_empty() {
+            let got = manifest::sha256_file(&tmp)?;
+            if got != want {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(std::io::Error::other(format!("sha mismatch on drive for {}", dest.display())));
+            }
+        }
+    }
+    // unix: replacing a running binary via rename is fine (inode kept by the process).
+    let _ = is_self;
+    std::fs::rename(&tmp, dest)?;
+    #[cfg(unix)]
+    if exec {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755));
+    }
+    #[cfg(not(unix))]
+    let _ = exec;
+    Ok(())
+}
+
+fn with_ext(p: &Path, ext: &str) -> PathBuf {
+    let mut s = p.as_os_str().to_owned();
+    s.push(".");
+    s.push(ext);
+    PathBuf::from(s)
+}
+
+/// Remove now-empty managed dirs left by deletions (deepest first). Never models/data.
+fn prune_empty_dirs(root: &Path, deleted: &[String]) {
+    let mut dirs: Vec<&str> = deleted.iter().filter_map(|p| p.rsplit_once('/').map(|(d, _)| d)).collect();
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.len()));
+    dirs.dedup();
+    for d in dirs {
+        if manifest::is_safe_path(d) {
+            let _ = std::fs::remove_dir(root.join(d)); // only succeeds if empty
+        }
+    }
+}
+
+/// Reap leftover `.new`/`.old` temps from an interrupted apply (best-effort, shallow).
+fn cleanup_orphans(root: &Path) {
+    fn walk(dir: &Path, depth: u32) {
+        if depth > 3 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if matches!(name.as_ref(), "models" | "data") {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, depth + 1);
+            } else if name.ends_with(".new") || name.ends_with(".old") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    walk(root, 0);
+}

@@ -1233,6 +1233,7 @@ dependencies = [
  "mime_guess",
  "notify-rust",
  "plan-ai-control-api",
+ "plan-ai-manifest",
  "reqwest",
  "rust-embed",
  "rustls",
@@ -1243,6 +1244,15 @@ dependencies = [
  "tokio-stream",
  "unic-langid",
  "which",
+]
+
+[[package]]
+name = "plan-ai-manifest"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

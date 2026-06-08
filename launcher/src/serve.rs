@@ -5,6 +5,7 @@
 //! embedded-SPA static fallback on top of the shared /api/* router.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,10 +36,20 @@ struct RealApi {
     llmfit_url: Option<String>,
     webui_url: String,
     spinner: crate::SpinnerHandle,
+    updater: crate::update::Handle,
+    apply_requested: Arc<AtomicBool>,
+    electron: crate::ElectronHandle,
 }
 
 /// Start the control server. Returns the base URL; the server runs on a task.
-pub async fn run_server(client: Client, port: u16, spinner: crate::SpinnerHandle) -> anyhow::Result<String> {
+pub async fn run_server(
+    client: Client,
+    port: u16,
+    spinner: crate::SpinnerHandle,
+    updater: crate::update::Handle,
+    apply_requested: Arc<AtomicBool>,
+    electron: crate::ElectronHandle,
+) -> anyhow::Result<String> {
     let (logs_tx, _) = broadcast::channel::<String>(512);
     let api = Arc::new(RealApi {
         client: Arc::new(Mutex::new(client)),
@@ -47,6 +58,9 @@ pub async fn run_server(client: Client, port: u16, spinner: crate::SpinnerHandle
         llmfit_url: std::env::var("PLANAI_LLMFIT_URL").ok(),
         webui_url: config::webui_url(),
         spinner,
+        updater,
+        apply_requested,
+        electron,
     });
 
     // Drain supervisor notifications → fan out to the SSE log subscribers.
@@ -110,17 +124,6 @@ async fn service_state(st: Option<&mac_mgmt_services::protocol::ServiceStatus>, 
                 "starting"
             }
         }
-    }
-}
-
-/// The platform this launcher runs on, in manifest terms.
-fn current_platform() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "win"
-    } else if cfg!(target_os = "macos") {
-        "mac"
-    } else {
-        "linux"
     }
 }
 
@@ -193,25 +196,36 @@ impl ControlApi for RealApi {
         }
     }
 
-    // --- update + platforms: stubbed here; wired in Part C/D ----------------
     fn update_status(&self) -> impl Future<Output = UpdateStatus> + Send {
-        async { UpdateStatus::idle() }
+        let s = self.updater.status();
+        async move { s }
     }
     fn update_check(&self) -> impl Future<Output = ()> + Send {
+        // Manual trigger: check the remote manifest + pre-download the delta.
+        tokio::spawn(crate::update::check_and_predownload(self.updater.clone()));
         async {}
     }
     fn update_apply(&self) -> impl Future<Output = ()> + Send {
+        // Only meaningful once Ready (a Pending is staged). Flag the apply + quit
+        // Electron so main's wait returns and runs apply with the runtime down.
+        if self.updater.status().state == "ready" {
+            self.apply_requested.store(true, Ordering::SeqCst);
+            if let Ok(mut g) = self.electron.lock() {
+                if let Some(child) = g.as_mut() {
+                    let _ = child.kill();
+                }
+            }
+        }
         async {}
     }
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
-        async {
-            Platforms {
-                kept: vec![current_platform().into()],
-                available: vec!["linux".into(), "mac".into(), "win".into()],
-            }
+        let kept = crate::update::read_platforms();
+        async move {
+            Platforms { kept, available: vec!["linux".into(), "mac".into(), "win".into()] }
         }
     }
-    fn set_platforms(&self, _kept: Vec<String>) -> impl Future<Output = ()> + Send {
+    fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send {
+        crate::update::write_platforms(&kept);
         async {}
     }
 
