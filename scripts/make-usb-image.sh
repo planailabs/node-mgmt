@@ -35,6 +35,10 @@ done
 need mkfs.vfat; need mcopy; need mmd; need truncate
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 BUNDLE="$DIST_DIR/bundle"
+# update manifest inputs (see scripts/gen-update-manifest via xtask)
+UPDATE_URL="${PLANAI_UPDATE_URL:-https://usb-update.plan.ai}"
+COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 declare -a FILES=()
 add_if() { [ -e "$1" ] || return 0; FILES+=("$1"); log "include $(basename "$1")"; }
@@ -90,13 +94,29 @@ on the launcher; macOS ships a .dmg so the .app keeps its bit + signature.)
 
 Report an issue / get help: https://git.plan.ai/plan-ai/usb
 EOF
-"${MC[@]}" "$README" ::/README.txt; rm -f "$README"
+"${MC[@]}" "$README" ::/README.txt
 for f in "${FILES[@]}"; do "${MC[@]}" "$f" ::/ ; done
 # shared component pool + mount tools (one copy, beside the launchers)
 mmd -i "$OUT" ::/components 2>/dev/null || true; "${MC[@]}" "$POOL"/* ::/components/
 [ -d "$TOOLSDIR" ] && { mmd -i "$OUT" ::/tools 2>/dev/null || true; "${MC[@]}" "$TOOLSDIR"/* ::/tools/ ; }
 if [ "$HAVE_MODELS" = yes ]; then mmd -i "$OUT" ::/models 2>/dev/null || true; "${MC[@]}" "$MODELS"/* ::/models/ ; fi
 mmd -i "$OUT" ::/data 2>/dev/null || true
+
+# update manifest: a symlink mirror of exactly the drive contents (NOT $BUNDLE
+# wholesale — that holds electron-builder's *-unpacked dirs), scanned by xtask
+# (shared schema + platform tagging with the launcher updater). models/+data/ are
+# excluded by the manifest. Shipped at the drive root as update.json.
+MIRROR="$DIST_DIR/.drive-mirror"; rm -rf "$MIRROR"; mkdir -p "$MIRROR"
+for f in "${FILES[@]}"; do ln -s "$f" "$MIRROR/$(basename "$f")"; done
+ln -s "$POOL" "$MIRROR/components"
+[ -d "$TOOLSDIR" ] && ln -s "$TOOLSDIR" "$MIRROR/tools"
+cp "$README" "$MIRROR/README.txt"
+( cd "$REPO_ROOT" && nix run .#xtask -- gen-manifest "$MIRROR" \
+    --version "$VERSION" --commit "$COMMIT" --url "$UPDATE_URL" --built-at "$BUILT_AT" \
+    --out "$MIRROR/update.json" )
+"${MC[@]}" "$MIRROR/update.json" ::/update.json
+log "update.json -> drive root (url=$UPDATE_URL commit=${COMMIT:0:8})"
+rm -rf "$MIRROR" "$README"
 
 log "contents:"; mdir -i "$OUT" :: 2>/dev/null | sed 's/^/    /' || true
 log "done — burn with:  sudo dd if=$OUT of=/dev/sdX bs=4M status=progress conv=fsync"

@@ -105,6 +105,20 @@
           '';
           doCheck = false;
         };
+        # The build orchestrator (host-native), built offline so the Makefile can
+        # call it in CI (`nix run .#xtask`). Owns update-manifest generation +
+        # tarball + (next) the ninja graph. Shares the plan-ai-manifest path dep
+        # with the launcher updater, so src is the whole flake (xtask + crates/).
+        xtask = pkgs.rustPlatform.buildRustPackage {
+          pname = "xtask";
+          version = "0.1.0";
+          src = ./.;
+          cargoRoot = "xtask";
+          buildAndTestSubdir = "xtask";
+          cargoLock.lockFile = ./xtask/Cargo.lock;
+          doCheck = false;
+          meta.mainProgram = "xtask";
+        };
         # registry deps for the launcher's Cargo.lock (tokio, interprocess, …),
         # vendored offline. The mac-mgmt-services path dep is supplied separately
         # (copied from the mac-mgmt input into vendor/ in the build).
@@ -333,7 +347,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk libdmg-hfsplus;
+          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk libdmg-hfsplus xtask;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on

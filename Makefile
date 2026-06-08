@@ -23,26 +23,39 @@ endif
 TARGETS := linux-x64 win-x64 mac-arm64
 ALLTGTS := $(TARGETS)
 
+# Artifact builds go through ninja (via the xtask orchestrator) so EVERY sub-step
+# is dependency-tracked — no stale "just there" outputs feeding a later step. The
+# Makefile stays the entrypoint; it just delegates to the ninja graph. xtask is
+# built offline by nix so this works in CI too.
+XTASK := nix run .#xtask --
+
 .PHONY: all dev download download-curl vendor-lock update ollama openwebui wheel \
-        runtime runtimes app spa components bundle bundles image seed test \
+        runtime runtimes app spa components bundle bundles image update-tarball ninja seed test \
         test-usb test-vm test-nixos test-clean test-all clean help
 
-all: download wheel app runtimes components bundles image ## build EVERY target (mac/win/linux/nixos) + image
+all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
+	$(XTASK) build all
+
+ninja: ## (re)generate build.ninja from the artifact graph
+	$(XTASK) gen-ninja
 
 runtimes: ## build the python runtime for every target
-	@for t in $(ALLTGTS); do $(MAKE) --no-print-directory runtime TARGET=$$t; done
+	$(XTASK) build runtimes
 
 components: ## pack modular component archives (runtimes + all ollama flavours + assets)
-	./scripts/build-components.sh
+	$(XTASK) build components
 
 bundles: ## package every target from the components
-	@for t in $(ALLTGTS); do $(MAKE) --no-print-directory bundle TARGET=$$t; done
+	$(XTASK) build bundles
+
+update-tarball: ## update-server tarball (manifest.json + files/) for the update URL
+	$(XTASK) build update-tarball
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
 
 download: ## materialise vendored downloads from Nix FODs (cached) into vendor/
-	./scripts/fetch-vendor.sh
+	$(XTASK) build download
 
 vendor-lock: ## regenerate vendor.lock.json (run when usb.lock bumps)
 	./scripts/gen-vendor-lock.sh
@@ -58,22 +71,22 @@ openwebui:
 	./scripts/download-openwebui.sh
 
 wheel: ## build open-webui frontend+wheel + prefetch offline assets
-	./scripts/build-openwebui.sh
+	$(XTASK) build wheel
 
 runtime: ## relocatable python runtime for TARGET
-	./scripts/make-runtime.sh $(TARGET)
+	$(XTASK) build runtime-$(TARGET)
 
 app: ## install the thin Electron shell deps
-	cd app && npm ci
+	$(XTASK) build app
 
 spa: ## build the Dioxus SPA dashboard into launcher/spa/ (nix build .#spa)
-	./scripts/build-spa.sh
+	$(XTASK) build spa
 
 bundle: ## package single-file artifact for TARGET
-	./scripts/bundle.sh $(TARGET)
+	$(XTASK) build bundle-$(TARGET)
 
 image: ## ready-to-burn FAT32 USB image (all artifacts < 4 GiB; reads everywhere)
-	./scripts/make-usb-image.sh
+	$(XTASK) build image
 
 
 seed: ## pre-pull models from usb.lock into ./models

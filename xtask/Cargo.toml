@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+description = "plan.ai USB build orchestrator: emits a ninja build graph + leaf commands (manifest generation, update-server tarball). Run from the Makefile via `nix run .#xtask`."
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+plan-ai-manifest = { path = "../crates/manifest" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

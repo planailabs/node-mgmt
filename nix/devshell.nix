@@ -26,6 +26,9 @@ let
     wineWowPackages.stable
     osslsigncode              # Authenticode signing for the windows .exe
     nsis                      # windows installer
+    # build graph: ninja runs every step with dependency tracking (xtask emits
+    # build.ninja; the Makefile drives it via `nix run .#xtask -- build`).
+    ninja
     # USB image: FAT32 only (mtools, no root) — artifacts stay < 4 GiB
     mtools dosfstools zip
     # component images: squashfs (linux, mounted via bundled squashfuse) and

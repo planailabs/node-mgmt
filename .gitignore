@@ -28,3 +28,6 @@ __pycache__/
 /launcher/spa-src/.cargo/
 /launcher/target/
 /spinner/target/
+/xtask/target/
+/crates/manifest/target/
+/build.ninja
