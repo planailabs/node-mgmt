@@ -419,6 +419,28 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Flush filesystem write buffers to disk on exit, so data the stack wrote to the
+/// (USB) drive — Open-WebUI's DATA_DIR, ollama models under the portable root — is
+/// persisted before the user pulls it. Best-effort.
+fn flush_drive() {
+    #[cfg(unix)]
+    {
+        // sync(1) flushes all mounted filesystems' buffers (incl. the USB).
+        let _ = Command::new("sync").status();
+    }
+    #[cfg(windows)]
+    {
+        // Flush the volume that holds the portable root (models/ + data/).
+        let root = paths::portable_root();
+        if let Some(drive) = root.to_str().map(|s| s.trim_start_matches(r"\\?\")).and_then(|s| s.chars().next()) {
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command",
+                       &format!("Write-VolumeCache -DriveLetter {drive}")])
+                .status();
+        }
+    }
+}
+
 fn teardown(mounts: &[Mount]) {
     for m in mounts {
         match m.kind {
@@ -755,6 +777,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     if !in_fhs {
         if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref()) {
+            flush_drive(); // persist the USB before unmounting/exit
             teardown(&mounts);
             std::process::exit(code);
         }
@@ -847,6 +870,7 @@ fn main() {
         let _ = c.kill();
         let _ = c.wait();
     }
+    flush_drive(); // services have stopped writing — persist the USB before exit
     teardown(&mounts);
     std::process::exit(code);
 }
