@@ -171,18 +171,21 @@ fn write_ninja() -> Result<()> {
     // what actually got packed. `components` stays the manifest's stamp name so the
     // bundle deps below are unchanged, and `make components` still builds the lot.
     let mut comp_stamps = Vec::new();
-    // ow-assets: shared offline assets, from the vendored download.
-    stamp_edge("comp-ow-assets", &[stamp("download")], "./scripts/pack-component.sh ow-assets", "pack ow-assets");
-    comp_stamps.push(stamp("comp-ow-assets"));
-    // runtimes: each needs its built runtime (which already pulls in the wheel).
+    // the packer + its shared primitives are inputs too, so editing them re-packs.
+    let pack_srcs = srcs(&["scripts/pack-component.sh", "scripts/lib.sh"]);
+    // <component-name> -> the stamp it depends on (its built source).
+    let mut comp_jobs: Vec<(String, String)> = vec![("ow-assets".into(), stamp("download"))];
     for t in TARGETS {
-        stamp_edge(&format!("comp-runtime-{t}"), &[stamp(&format!("runtime-{t}"))], &format!("./scripts/pack-component.sh runtime-{t}"), &format!("pack runtime-{t}"));
-        comp_stamps.push(stamp(&format!("comp-runtime-{t}")));
+        comp_jobs.push((format!("runtime-{t}"), stamp(&format!("runtime-{t}"))));
     }
-    // ollama flavours: each extracts from the nix repack / vendored archive.
     for k in OLLAMA_KEYS {
-        stamp_edge(&format!("comp-ollama-{k}"), &[stamp("download")], &format!("./scripts/pack-component.sh ollama-{k}"), &format!("pack ollama-{k}"));
-        comp_stamps.push(stamp(&format!("comp-ollama-{k}")));
+        comp_jobs.push((format!("ollama-{k}"), stamp("download")));
+    }
+    for (name, src_stamp) in &comp_jobs {
+        let mut deps = vec![src_stamp.clone()];
+        deps.extend(pack_srcs.iter().cloned());
+        stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));
+        comp_stamps.push(stamp(&format!("comp-{name}")));
     }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
@@ -191,7 +194,7 @@ fn write_ninja() -> Result<()> {
     let mut bundle_src = src_tree("launcher/src");
     bundle_src.extend(src_tree("spinner/src"));
     bundle_src.extend(src_tree("crates"));
-    bundle_src.extend(srcs(&["launcher/Cargo.toml", "launcher/Cargo.lock", "spinner/Cargo.toml", "spinner/Cargo.lock", "scripts/bundle.sh", "flake.nix"]));
+    bundle_src.extend(srcs(&["launcher/Cargo.toml", "launcher/Cargo.lock", "spinner/Cargo.toml", "spinner/Cargo.lock", "scripts/bundle.sh", "scripts/lib.sh", "flake.nix"]));
     let mut bundle_stamps = Vec::new();
     for t in TARGETS {
         let mut deps = vec![stamp("components"), stamp("spa"), stamp("app")];

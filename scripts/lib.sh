@@ -154,15 +154,26 @@ pack_dir() {  # <srcdir> <out-dir>   (pre-extracted; used in place on windows/FA
 # (libdmg unavailable) still counts as success.
 pack_dmg() {  # <srcdir> <out.dmg> [volume-label]
   command -v mkfs.hfsplus >/dev/null 2>&1 || { warn "no mkfs.hfsplus — skip $(basename "$2")"; return 1; }
-  local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw
+  local src="$1" img="$2" vol="${3:-PlanAI}" mnt sz raw kb nfiles
   raw="$(mktemp -u).rawhfs"
-  sz=$(du -sb "$src" | cut -f1); sz=$(( sz * 11 / 10 + 64*1024*1024 ))   # +10% +64MB HFS+ overhead
+  # Size with `du -l` so EACH hard-link name counts (the cp below breaks hard links
+  # into copies — see why there) plus a per-file pad for the catalog B-tree and a
+  # fixed slack. Apparent size (du -sb) badly under-counts overhead for a runtime's
+  # ~57k mostly-tiny files, so a tight estimate ENOSPCs the cp mid-copy. Over-
+  # provisioning costs nothing: libdmg compresses the empty space out of the UDIF.
+  kb=$(du -slk "$src" | cut -f1); nfiles=$(find "$src" | wc -l)
+  sz=$(( kb * 1024 + nfiles * 4096 + 256*1024*1024 ))
   truncate -s "$sz" "$raw"
   mkfs.hfsplus -v "$vol" "$raw" >/dev/null 2>&1 || { warn "mkfs.hfsplus failed: $(basename "$img")"; rm -f "$raw"; return 1; }
   mnt="$(mktemp -d)"
   if ! sudo mount -o loop,umask=0000 "$raw" "$mnt" 2>/dev/null; then
     warn "loop-mount failed for $(basename "$img") (sudo?)"; rmdir "$mnt"; rm -f "$raw"; return 1; fi
-  if ! sudo cp -a "$src/." "$mnt/"; then
+  # --no-preserve=links: copy hard-linked files as independent copies. The Linux
+  # HFS+ driver can't create hard links ("Operation not permitted"), and a runtime
+  # has thousands (uv/pip dedupes identical wheel metadata across packages). Symlinks
+  # are still preserved (cp -a's -d stays). The duplication is cheap (~60 MB) and the
+  # UDIF compresses it back out.
+  if ! sudo cp -a --no-preserve=links "$src/." "$mnt/"; then
     warn "cp into dmg failed: $(basename "$img")"; sudo umount "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true; rm -f "$raw"; return 1; fi
   sync; sudo umount "$mnt"; rmdir "$mnt" 2>/dev/null || true
   rm -f "$img"
