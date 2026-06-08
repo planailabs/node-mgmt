@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the Linux AppImage inside a stock Ubuntu instance (incus) under xvfb, to
-# prove the bundle runs on Ubuntu — not just NixOS. Asserts the stack SERVES
+# Run the Linux launcher (plan-ai.linux.exe — the real shipped artifact, static
+# musl) inside a stock Ubuntu instance (incus) under xvfb, to prove the bundle
+# runs on Ubuntu — not just NixOS. Asserts the stack SERVES
 # (ollama + Open-WebUI health); screenshot is best-effort (headless render is
 # flaky). Default Ubuntu 26.04 (override UBUNTU_VERSION).
 #
@@ -13,10 +14,10 @@ set -euo pipefail
 UBUNTU="${UBUNTU_VERSION:-26.04}"
 # unique per run so concurrent test runs don't collide on the instance name
 VM="${PLANAI_VM_NAME:-planai-test-$$-${RANDOM}}"
-APPIMAGE="$(ls -t "$DIST_DIR"/bundle/plan-ai-*-linux-*.AppImage 2>/dev/null | head -1 || true)"
+LAUNCHER="$DIST_DIR/bundle/plan-ai.linux.exe"
 SHOT="${1:-/tmp/ubuntu-dash.png}"
 
-[ -n "$APPIMAGE" ] || die "no AppImage — run scripts/bundle.sh linux-x64 first"
+[ -f "$LAUNCHER" ] || die "no plan-ai.linux.exe — run scripts/bundle.sh linux-x64 first"
 command -v incus >/dev/null 2>&1 || die "incus not available"
 
 # --ephemeral so the instance self-destructs if the run is killed before cleanup;
@@ -91,18 +92,18 @@ incus exec "$VM" -- bash -c '
   echo "deps install attempted"
 ' 2>&1 | sed 's/^/    /'
 
-log "push bare AppImage + shared components/ + tools/ into VM (siblings, as on the USB)"
-incus file push "$APPIMAGE" "$VM/root/plan-ai.AppImage"
-incus exec "$VM" -- chmod +x /root/plan-ai.AppImage
-# components ship OUTSIDE the launcher now; the loader finds them next to the
-# .AppImage (process.env.APPIMAGE dir). Push the shared pool built by bundle.sh.
+log "push the launcher + shared components/ + tools/ into VM (siblings, as on the USB)"
+incus file push "$LAUNCHER" "$VM/root/plan-ai.linux.exe"
+incus exec "$VM" -- chmod +x /root/plan-ai.linux.exe
+# components ship OUTSIDE the launcher; it finds them next to itself (here/parent).
+# Push the shared pool built by bundle.sh.
 POOL="$DIST_DIR/bundle/components"; TOOLS="$DIST_DIR/bundle/tools"
 [ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh linux-x64"
 incus file push -r "$POOL" "$VM/root/" 2>/dev/null
 [ -d "$TOOLS" ] && incus file push -r "$TOOLS" "$VM/root/" 2>/dev/null || true
-incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/*.squashfs >/dev/null 2>&1 && echo "components staged beside AppImage" || echo "WARN no components"'
+incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'
 
-log "run AppImage on stock Ubuntu; assert the stack serves (screenshot best-effort)"
+log "run the launcher on stock Ubuntu; assert the stack serves (screenshot best-effort)"
 # What proves "runs on Ubuntu": ollama + Open-WebUI actually serving. These are
 # child processes the Electron MAIN process spawns/supervises — independent of the
 # renderer, which can't reliably paint under headless xvfb (chromium renderer-IPC
@@ -122,7 +123,7 @@ incus exec "$VM" -- bash -c '
   # dbus-run-session gives a session bus. The renderer may still not paint under
   # headless xvfb, but the MAIN process spawns/supervises ollama + uvicorn anyway.
   xvfb-run -a -s "-screen 0 1400x900x24" \
-    dbus-run-session -- ./plan-ai.AppImage --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    dbus-run-session -- ./plan-ai.linux.exe --no-sandbox --disable-gpu --disable-dev-shm-usage \
     >/root/run.log 2>&1 &
   APP=$!
   ok=""
@@ -136,7 +137,7 @@ incus exec "$VM" -- bash -c '
   curl -s -m 3 http://127.0.0.1:11434/api/version 2>/dev/null | head -c 200; echo
   sleep 2   # give the capture hook a chance if the window did paint
   echo "--- run.log tail ---"; tail -30 /root/run.log
-  kill "$APP" 2>/dev/null; sleep 1; pkill -f plan-ai.AppImage 2>/dev/null || true
+  kill "$APP" 2>/dev/null; sleep 1; pkill -f plan-ai 2>/dev/null || true
   ls -l /root/shot.png 2>/dev/null || echo "no screenshot (best-effort)"
   true   # teardown kill must not propagate a non-zero exit
 ' 2>&1 | sed 's/^/    /' || true

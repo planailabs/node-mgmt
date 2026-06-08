@@ -118,5 +118,20 @@ cp "$README" "$MIRROR/README.txt"
 log "update.json -> drive root (url=$UPDATE_URL commit=${COMMIT:0:8})"
 rm -rf "$MIRROR" "$README"
 
+# platforms.json: which platforms this USB keeps. The image ships ALL the platforms
+# it was built with, so seed it with all of them — otherwise the launcher would
+# create it with only the CURRENT platform on first run and prune the others.
+PLATS=()
+for f in "${FILES[@]}"; do case "$(basename "$f")" in
+  plan-ai.linux.exe) PLATS+=(linux) ;;
+  plan-ai.exe)       PLATS+=(win) ;;
+  plan-ai.dmg)       PLATS+=(mac) ;;
+esac; done
+PJSON="$(mktemp)"
+printf '%s\n' "${PLATS[@]}" | jq -Rsc '{platforms: (split("\n") | map(select(length>0)))}' > "$PJSON"
+"${MC[@]}" "$PJSON" ::/platforms.json
+log "platforms.json -> drive root ($(jq -c .platforms "$PJSON"))"
+rm -f "$PJSON"
+
 log "contents:"; mdir -i "$OUT" :: 2>/dev/null | sed 's/^/    /' || true
 log "done — burn with:  sudo dd if=$OUT of=/dev/sdX bs=4M status=progress conv=fsync"
