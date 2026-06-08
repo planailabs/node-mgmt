@@ -17,11 +17,18 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.2"
+# cross-platform advisory file lock for the single-instance guard
+fs2 = "0.4"
 # serve the embedded Dioxus SPA + control API over localhost (phase 3)
 axum = "0.8"
 rust-embed = "8"
 mime_guess = "2"
 tokio-stream = { version = "0.1", features = ["sync"] }
+# Cross-platform desktop notification (e.g. "already running"): Linux D-Bus,
+# Windows winrt toast, macOS Cocoa. macOS needs the Apple SDK headers at
+# cross-compile time — the flake feeds them in via SDKROOT (see flake.nix
+# `macosx-sdk`); zig handles Linux + Windows directly.
+notify-rust = "4"
 
 [profile.release]
 opt-level = "z"

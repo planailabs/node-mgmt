@@ -46,6 +46,15 @@
         };
         wasmRustPlatform = pkgs.makeRustPlatform { cargo = wasmToolchain; rustc = wasmToolchain; };
 
+        # macOS SDK source (Cocoa headers + framework stubs) for cross-compiling
+        # crates with native Apple deps — notify-rust's mac-notification-sys
+        # #imports <Cocoa/Cocoa.h>. Fed to the mac launcher build via SDKROOT so
+        # zig cc finds the frameworks. Source-only (a fetch), so it builds on
+        # linux despite being from the darwin package set.
+        macosx-sdk = let
+          darwinPkgs = import nixpkgs { system = "aarch64-darwin"; };
+        in darwinPkgs.apple-sdk_26.src;
+
         # Dioxus `feat/embed` fork git-dep hashes (same rev mac-mgmt pins). dx is
         # nixpkgs' stock 0.7.9 — it prints a non-fatal "incompatible" notice for
         # 0.8-alpha but builds fine once the wasm-bindgen-cli version matches the
@@ -107,13 +116,16 @@
         # copies mac-mgmt-services from the mac-mgmt input into vendor/.
         launcherFor = { zigTarget, outDir }:
           pkgs.runCommand "plan-ai-launcher-${outDir}"
-            {
+            ({
               nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
               # build.rs embeds these into the linux launcher (mounts squashfs itself,
               # like the AppImage runtime); ignored for win/mac targets.
               PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
-            }
+            } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
+              # Cocoa headers/frameworks for notify-rust's mac-notification-sys.
+              SDKROOT = macosx-sdk;
+            })
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
@@ -237,7 +249,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime nixosFhs spa;
+          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on

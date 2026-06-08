@@ -37,6 +37,12 @@ fn log(msg: &str) {
     eprintln!("[plan-ai] {msg}");
 }
 
+/// Best-effort cross-platform desktop notification (notify-rust: Linux D-Bus,
+/// macOS, Windows toast).
+fn notify(title: &str, body: &str) {
+    let _ = notify_rust::Notification::new().summary(title).body(body).show();
+}
+
 /// Roots beside the launcher where the shared components/ pool lives.
 fn external_roots(here: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
@@ -143,6 +149,31 @@ fn maybe_reexec_in_fhs(comp: Option<&Path>) {
         .env("PLANAI_FHS_REEXEC", "1")
         .exec(); // returns only on failure
     log(&format!("NixOS FHS: exec {wrapper} failed: {err} — running bare"));
+}
+
+/// Single-instance guard: take an exclusive advisory lock on a file in the cache
+/// root. Returns the locked File (keep it alive for the whole run — the OS frees
+/// the lock when the process exits) or None if another instance already holds it.
+/// Best-effort: if the lock file can't be created we return Some(dummy)-equivalent
+/// by proceeding (None only means "another instance is running").
+fn acquire_instance_lock() -> Result<std::fs::File, bool> {
+    use fs2::FileExt;
+    let path = cache_root().join("instance.lock");
+    if let Some(p) = path.parent() {
+        let _ = fs::create_dir_all(p);
+    }
+    let file = match fs::OpenOptions::new().create(true).write(true).truncate(false).open(&path) {
+        Ok(f) => f,
+        // Can't open the lock file (read-only FS etc.) — don't block startup.
+        Err(e) => {
+            log(&format!("instance lock: cannot open {} ({e}) — skipping guard", path.display()));
+            return Err(false); // false = "couldn't lock, proceed anyway"
+        }
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(file),
+        Err(_) => Err(true), // true = "another instance holds the lock"
+    }
 }
 
 fn cache_root() -> PathBuf {
@@ -604,6 +635,19 @@ fn main() {
     // ollama can run (this replaces the process when it succeeds).
     #[cfg(target_os = "linux")]
     maybe_reexec_in_fhs(comp_dir.as_deref());
+
+    // Single-instance guard (after any FHS re-exec, so only the final process
+    // takes the lock). A second launch would fight over the supervisor socket and
+    // the ollama/open-webui/UI ports — so bail out instead. Held for the whole run.
+    let _instance_lock = match acquire_instance_lock() {
+        Ok(f) => Some(f),
+        Err(true) => {
+            log("another plan.ai instance is already running — exiting");
+            notify("plan.ai", "plan.ai is already running.");
+            std::process::exit(0);
+        }
+        Err(false) => None, // couldn't create the lock file — proceed unguarded
+    };
 
     if resources.is_none() {
         if let Some(comp) = comp_dir.as_ref() {
