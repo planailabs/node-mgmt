@@ -41,7 +41,21 @@ function createWindow() {
         )
     );
   }
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => {
+    win.show();
+    // Signal the launcher that the window is up so it closes the native splash
+    // spinner (it shows during the pre-Electron runtime mount). Best-effort.
+    if (UI_URL) {
+      try {
+        const { request } = require('http');
+        const req = request(new URL('/api/ready', UI_URL), { method: 'POST' });
+        req.on('error', () => {});
+        req.end();
+      } catch (_) {
+        /* ignore — the launcher has a timeout fallback */
+      }
+    }
+  });
 
   // CI/dev smoke: capture the dashboard then exit. PLANAI_CAPTURE=/dash.png.
   if (process.env.PLANAI_CAPTURE) {
