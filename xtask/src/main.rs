@@ -223,11 +223,15 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     stamp_edge("app", &srcs(&["app/package.json", "app/package-lock.json"]), "(cd app && npm ci)", "electron deps");
     stamp_edge("spa", &src_tree("launcher/spa-src"), "./scripts/build-spa.sh", "dioxus spa");
 
-    // runtimes per target (need the downloaded interpreter + the wheel)
+    // runtimes per target. make-runtime.sh installs open_webui from the pinned PyPI
+    // wheels-FOD (runtime/wheels-<t>.lock.json, hermetic), NOT build-openwebui's
+    // wheel — so the runtime depends only on `download` (the pbs interpreter). The
+    // old `wheel` dep was vestigial; dropping it means a flaky pyodide:fetch in the
+    // wheel step can't block the runtimes.
     let mut runtime_stamps = Vec::new();
     for t in targets {
         let s = stamp(&format!("runtime-{t}"));
-        stamp_edge(&format!("runtime-{t}"), &[stamp("download"), stamp("wheel")], &format!("./scripts/make-runtime.sh {t}"), &format!("runtime {t}"));
+        stamp_edge(&format!("runtime-{t}"), &[stamp("download")], &format!("./scripts/make-runtime.sh {t}"), &format!("runtime {t}"));
         runtime_stamps.push(s);
     }
 
