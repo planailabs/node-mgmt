@@ -139,25 +139,30 @@ fn external_roots(here: &Path) -> Vec<PathBuf> {
     roots
 }
 
-/// This bundle's OS key for the per-platform component group dir (components/<os>/).
-/// Matches the build's grouping (scripts/lib.sh comp_os / xtask) + platforms.json.
-const POOL_OS: &str = if cfg!(target_os = "windows") {
-    "win"
+/// This bundle's target key for the per-platform component group dir
+/// (components/<target>/). OS+arch, so two linux arches (linux-x64 / linux-arm64)
+/// read distinct groups instead of colliding in one `linux` bucket. Matches
+/// crates/manifest current_platform()/classify(), the build's grouping, and
+/// platforms.json.
+const POOL_TARGET: &str = if cfg!(target_os = "windows") {
+    "win-x64"
 } else if cfg!(target_os = "macos") {
-    "mac"
+    "mac-arm64"
+} else if cfg!(target_arch = "aarch64") {
+    "linux-arm64"
 } else {
-    "linux"
+    "linux-x64"
 };
 
-/// Resolve a `components/` root to the actual pool dir this OS reads. Components are
-/// grouped per platform (components/<os>/), so each OS mounts only its own tree and
-/// the manifest is declarative; prefer that. Fall back to a flat pool (components/
-/// holding every platform's files) for back-compat with older drives / dev layouts.
-/// Returns None if neither layout is present (no manifest.json marker).
+/// Resolve a `components/` root to the actual pool dir this target reads. Components
+/// are grouped per target (components/<target>/), so each binary mounts only its own
+/// arch's tree and the manifest is declarative; prefer that. Fall back to a flat pool
+/// (components/ holding every platform's files) for dev layouts. Returns None if
+/// neither layout is present (no manifest.json marker).
 fn resolve_pool(base: &Path) -> Option<PathBuf> {
-    let os = base.join(POOL_OS);
-    if os.join("manifest.json").exists() {
-        return Some(os);
+    let group = base.join(POOL_TARGET);
+    if group.join("manifest.json").exists() {
+        return Some(group);
     }
     if base.join("manifest.json").exists() {
         return Some(base.to_path_buf());

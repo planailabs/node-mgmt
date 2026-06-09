@@ -17,14 +17,15 @@
 #   --label/--size-mb are accepted for back-compat but ignored: the volume is
 #   PLANAI and the size is derived from the drive-root inside the derivation.
 #
-# Layout (everything at the image root; each tiny launcher finds the per-OS group
-# components/<os>/ beside it, and models/ + data/ via USB-relative paths). The
-# Electron app itself ships inside its group as app-<os>:
-#   /plan-ai.linux.exe linux launcher (static musl ELF; chmod +x)
-#   /plan-ai.exe       windows launcher
-#   /plan-ai.dmg       macOS launcher (dmg holding plan.ai.app; FAT32-safe)
-#   /components/<os>/  this platform's component group (runtime, ollama, ow-assets,
-#                      app, llmfit, manifest.json; linux also nixos-fhs.closure)
+# Layout (everything at the image root; each tiny launcher finds the per-TARGET group
+# components/<target>/ beside it, and models/ + data/ via USB-relative paths). The
+# Electron app itself ships inside its group as app-<target>:
+#   /plan-ai.linux-x64.exe   linux x64 launcher (static musl ELF; chmod +x)
+#   /plan-ai.linux-arm64.exe linux arm64 launcher (static musl ELF; chmod +x)
+#   /plan-ai.exe             windows launcher
+#   /plan-ai.dmg             macOS launcher (dmg holding plan.ai.app; FAT32-safe)
+#   /components/<target>/    that target's component group (runtime, ollama, ow-assets,
+#                            app, llmfit, manifest.json; linux also nixos-fhs.closure)
 #   /models/   /data/   /README.txt   /update.json   /platforms.json
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -50,8 +51,10 @@ BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 declare -a FILES=()
 add_if() { [ -e "$1" ] || return 0; FILES+=("$1"); log "include $(basename "$1")"; }
 shopt -s nullglob
-# the standalone launchers (the app itself rides inside components/<os>/ as app-<os>)
-for f in "$BUNDLE"/plan-ai.linux.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do add_if "$f"; done
+# the standalone launchers, one per target (the app itself rides inside
+# components/<target>/ as app-<target>). linux ships both arches, so the *.exe glob
+# matches plan-ai.linux-x64.exe / plan-ai.linux-arm64.exe; win/mac are single-arch.
+for f in "$BUNDLE"/plan-ai.*.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do add_if "$f"; done
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || die "no launchers in $BUNDLE — run scripts/bundle.sh <target> first"
 
@@ -86,10 +89,11 @@ cp -al "$POOL" "$DRIVE/components" 2>/dev/null || cp -a "$POOL" "$DRIVE/componen
 cat > "$DRIVE/README.txt" <<EOF
 plan.ai — portable offline AI (Ollama + Open-WebUI), v$VERSION
 
-Run on (each launcher mounts the matching app + runtime from /components/<os>/):
-  Linux    : chmod +x ./plan-ai.linux.exe   then  ./plan-ai.linux.exe
-  Windows  : run plan-ai.exe
-  macOS    : open plan-ai.dmg, then double-click plan.ai.app inside it
+Run on (each launcher mounts the matching app + runtime from /components/<target>/):
+  Linux x64  : chmod +x ./plan-ai.linux-x64.exe    then  ./plan-ai.linux-x64.exe
+  Linux arm64: chmod +x ./plan-ai.linux-arm64.exe  then  ./plan-ai.linux-arm64.exe
+  Windows    : run plan-ai.exe
+  macOS      : open plan-ai.dmg, then double-click plan.ai.app inside it
 
 First launch unpacks/mounts the runtime for your machine into a local cache;
 models and your data live in /models and /data on this drive. Everything runs
@@ -113,9 +117,10 @@ log "update.json -> drive root (url=$UPDATE_URL commit=${COMMIT:0:8})"
 # create it with only the CURRENT platform on first run and prune the others.
 PLATS=()
 for f in "${FILES[@]}"; do case "$(basename "$f")" in
-  plan-ai.linux.exe) PLATS+=(linux) ;;
-  plan-ai.exe)       PLATS+=(win) ;;
-  plan-ai.dmg)       PLATS+=(mac) ;;
+  plan-ai.linux-x64.exe)   PLATS+=(linux-x64) ;;
+  plan-ai.linux-arm64.exe) PLATS+=(linux-arm64) ;;
+  plan-ai.exe)             PLATS+=(win-x64) ;;
+  plan-ai.dmg)             PLATS+=(mac-arm64) ;;
 esac; done
 printf '%s\n' "${PLATS[@]}" | jq -Rsc '{platforms: (split("\n") | map(select(length>0)))}' > "$DRIVE/platforms.json"
 log "platforms.json -> drive root ($(jq -c .platforms "$DRIVE/platforms.json"))"

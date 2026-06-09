@@ -232,7 +232,8 @@ impl ControlApi for RealApi {
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
         let kept = crate::update::read_platforms();
         async move {
-            Platforms { kept, available: vec!["linux".into(), "mac".into(), "win".into()] }
+            let available = plan_ai_manifest::KNOWN_TARGET_KEYS.iter().map(|s| s.to_string()).collect();
+            Platforms { kept, available }
         }
     }
     fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Linux launcher (plan-ai.linux.exe — the real shipped artifact, static
+# Run the Linux launcher (plan-ai.linux-x64.exe — the real shipped artifact, static
 # musl) inside a stock Ubuntu instance (incus) under xvfb, to prove the bundle
 # runs on Ubuntu — not just NixOS. Asserts the stack SERVES
 # (ollama + Open-WebUI health); screenshot is best-effort (headless render is
@@ -14,10 +14,10 @@ set -euo pipefail
 UBUNTU="${UBUNTU_VERSION:-26.04}"
 # unique per run so concurrent test runs don't collide on the instance name
 VM="${PLANAI_VM_NAME:-planai-test-$$-${RANDOM}}"
-LAUNCHER="$DIST_DIR/bundle/plan-ai.linux.exe"
+LAUNCHER="$DIST_DIR/bundle/plan-ai.linux-x64.exe"
 SHOT="${1:-/tmp/ubuntu-dash.png}"
 
-[ -f "$LAUNCHER" ] || die "no plan-ai.linux.exe — run scripts/bundle.sh linux-x64 first"
+[ -f "$LAUNCHER" ] || die "no plan-ai.linux-x64.exe — run scripts/bundle.sh linux-x64 first"
 command -v incus >/dev/null 2>&1 || die "incus not available"
 
 # --ephemeral so the instance self-destructs if the run is killed before cleanup;
@@ -93,15 +93,15 @@ incus exec "$VM" -- bash -c '
 ' 2>&1 | sed 's/^/    /'
 
 log "push the launcher + shared components/ + tools/ into VM (siblings, as on the USB)"
-incus file push "$LAUNCHER" "$VM/root/plan-ai.linux.exe"
-incus exec "$VM" -- chmod +x /root/plan-ai.linux.exe
+incus file push "$LAUNCHER" "$VM/root/plan-ai.linux-x64.exe"
+incus exec "$VM" -- chmod +x /root/plan-ai.linux-x64.exe
 # components ship OUTSIDE the launcher; it finds them next to itself (here/parent).
 # Push the shared pool built by bundle.sh.
 POOL="$DIST_DIR/bundle/components"; TOOLS="$DIST_DIR/bundle/tools"
 [ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh linux-x64"
 incus file push -r "$POOL" "$VM/root/" 2>/dev/null
 [ -d "$TOOLS" ] && incus file push -r "$TOOLS" "$VM/root/" 2>/dev/null || true
-incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/linux/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'
+incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/linux-x64/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'
 
 log "run the launcher on stock Ubuntu; assert the stack serves (screenshot best-effort)"
 # What proves "runs on Ubuntu": ollama + Open-WebUI actually serving. These are
@@ -123,7 +123,7 @@ incus exec "$VM" -- bash -c '
   # dbus-run-session gives a session bus. The renderer may still not paint under
   # headless xvfb, but the MAIN process spawns/supervises ollama + uvicorn anyway.
   xvfb-run -a -s "-screen 0 1400x900x24" \
-    dbus-run-session -- ./plan-ai.linux.exe --no-sandbox --disable-gpu --disable-dev-shm-usage \
+    dbus-run-session -- ./plan-ai.linux-x64.exe --no-sandbox --disable-gpu --disable-dev-shm-usage \
     >/root/run.log 2>&1 &
   APP=$!
   ok=""

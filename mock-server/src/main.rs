@@ -42,7 +42,7 @@ async fn main() {
             update: UpdateState::Idle,
             upd_done: 0,
             upd_total: 100,
-            kept: vec!["linux".into()],
+            kept: vec!["linux-x64".into()],
             dl: HashMap::new(),
         }),
         logs,
@@ -198,7 +198,7 @@ impl ControlApi for Mock {
     }
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
         let kept = self.s.lock().unwrap().kept.clone();
-        async move { Platforms { kept, available: vec!["linux".into(), "mac".into(), "win".into()] } }
+        async move { Platforms { kept, available: vec!["linux-x64".into(), "linux-arm64".into(), "win-x64".into(), "mac-arm64".into()] } }
     }
     fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send {
         self.s.lock().unwrap().kept = kept;

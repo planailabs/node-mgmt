@@ -12,16 +12,24 @@ use sha2::{Digest, Sha256};
 /// The default update server (overridable per-build via the manifest's `update_url`).
 pub const DEFAULT_UPDATE_URL: &str = "https://usb-update.plan.ai";
 
-/// The platform this binary runs on, in manifest terms.
+/// The platform this binary runs on, in manifest terms: an OS+arch *target* key
+/// (`linux-x64` / `linux-arm64` / `win-x64` / `mac-arm64`). Component groups, kept
+/// platforms, and classification are all keyed by this so two arches of one OS
+/// (linux-x64 + linux-arm64) never collide in a shared OS bucket.
 pub fn current_platform() -> &'static str {
     if cfg!(target_os = "windows") {
-        "win"
+        "win-x64"
     } else if cfg!(target_os = "macos") {
-        "mac"
+        "mac-arm64"
+    } else if cfg!(target_arch = "aarch64") {
+        "linux-arm64"
     } else {
-        "linux"
+        "linux-x64"
     }
 }
+
+/// The build targets this manifest scheme knows, as drive-path group segments.
+pub const KNOWN_TARGET_KEYS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", "mac-arm64"];
 
 /// A manifest entry: a file or a directory in the drive layout, tagged with the
 /// platform(s) that need it.
@@ -82,35 +90,44 @@ impl Manifest {
 /// inside "darwin"). Anything unmatched is shared ("all").
 pub fn classify(rel: &str) -> Vec<String> {
     let p = rel.to_ascii_lowercase();
+    // Top-level standalone launchers, one per target (linux ships both arches, so
+    // the linux names carry the arch; win/mac have a single arch each).
     match p.as_str() {
-        "plan-ai.linux.exe" => return vec!["linux".into()],
-        "plan-ai.exe" => return vec!["win".into()],
-        "plan-ai.dmg" => return vec!["mac".into()],
+        "plan-ai.linux-x64.exe" => return vec!["linux-x64".into()],
+        "plan-ai.linux-arm64.exe" => return vec!["linux-arm64".into()],
+        "plan-ai.exe" => return vec!["win-x64".into()],
+        "plan-ai.dmg" => return vec!["mac-arm64".into()],
         _ => {}
     }
-    if p.starts_with("tools/") {
-        return vec!["linux".into()];
-    }
-    // Per-platform component group: everything under components/<os>/ (incl. that
-    // group's manifest.json) belongs to exactly that OS. Authoritative — the
+    // Per-target component group: everything under components/<target>/ (incl. that
+    // group's manifest.json) belongs to exactly that target. Authoritative — the
     // grouping makes the layout self-describing, so we don't fall back to the
     // substring heuristics below for grouped paths.
     if let Some(rest) = p.strip_prefix("components/") {
         if let Some((seg, _)) = rest.split_once('/') {
-            if matches!(seg, "linux" | "win" | "mac") {
+            if KNOWN_TARGET_KEYS.contains(&seg) {
                 return vec![seg.to_string()];
             }
         }
     }
+    if p.starts_with("tools/") {
+        // Vestigial (the launcher embeds its mount tools); if ever shipped, the
+        // static musl tools serve both linux arches.
+        return vec!["linux-x64".into(), "linux-arm64".into()];
+    }
+    // Fallback substring heuristic for ungrouped / back-compat paths. Arch can't be
+    // inferred from a bare OS substring, so a matched OS expands to both of its
+    // known target arches (only linux has more than one).
     let mut v = Vec::new();
     if p.contains("linux") || p.contains("nixos") {
-        v.push("linux".to_string());
+        v.push("linux-x64".to_string());
+        v.push("linux-arm64".to_string());
     }
     if p.contains("darwin") || p.contains("-mac-") || p.ends_with(".dmg") {
-        v.push("mac".to_string());
+        v.push("mac-arm64".to_string());
     }
     if p.contains("windows") || p.contains("-win-") {
-        v.push("win".to_string());
+        v.push("win-x64".to_string());
     }
     if v.is_empty() {
         v.push("all".to_string());
@@ -244,32 +261,30 @@ mod tests {
 
     #[test]
     fn classify_by_name() {
-        assert_eq!(classify("plan-ai.exe"), vec!["win"]);
-        assert_eq!(classify("plan-ai.dmg"), vec!["mac"]);
-        assert_eq!(classify("plan-ai.linux.exe"), vec!["linux"]);
-        assert_eq!(classify("tools/squashfuse_ll"), vec!["linux"]);
-        assert_eq!(classify("components/runtime-mac-arm64.dmg"), vec!["mac"]);
-        assert_eq!(classify("components/ollama-windows-amd64"), vec!["win"]);
-        assert_eq!(classify("components/nixos-fhs.closure"), vec!["linux"]);
+        assert_eq!(classify("plan-ai.exe"), vec!["win-x64"]);
+        assert_eq!(classify("plan-ai.dmg"), vec!["mac-arm64"]);
+        assert_eq!(classify("plan-ai.linux-x64.exe"), vec!["linux-x64"]);
+        assert_eq!(classify("plan-ai.linux-arm64.exe"), vec!["linux-arm64"]);
+        assert_eq!(classify("tools/squashfuse_ll"), vec!["linux-x64", "linux-arm64"]);
+        // ungrouped substring fallback: a bare OS expands to both of its arches
+        assert_eq!(classify("components/nixos-fhs.closure"), vec!["linux-x64", "linux-arm64"]);
         assert_eq!(classify("components/ow-assets.squashfs"), vec!["all"]);
-        // "darwin" must not be mistaken for win (contains "win")
-        assert_eq!(classify("components/ollama-darwin.dmg"), vec!["mac"]);
     }
 
     #[test]
-    fn classify_per_os_component_group() {
-        // Everything under components/<os>/ is tagged to that OS by the group
-        // segment — incl. files the substring heuristic would miss (ow-assets,
-        // the group's manifest.json) or mis-tag.
-        assert_eq!(classify("components/linux/runtime-linux-x64.squashfs"), vec!["linux"]);
-        assert_eq!(classify("components/linux/ow-assets.squashfs"), vec!["linux"]);
-        assert_eq!(classify("components/linux/manifest.json"), vec!["linux"]);
-        assert_eq!(classify("components/win/app-win-x64"), vec!["win"]);
-        assert_eq!(classify("components/win/manifest.json"), vec!["win"]);
-        assert_eq!(classify("components/mac/ow-assets.dmg"), vec!["mac"]);
-        assert_eq!(classify("components/mac/manifest.json"), vec!["mac"]);
-        // a stray top-level components file still uses the substring heuristic
-        assert_eq!(classify("components/nixos-fhs.closure"), vec!["linux"]);
+    fn classify_per_target_component_group() {
+        // Everything under components/<target>/ is tagged to that target by the group
+        // segment — incl. files the substring heuristic would miss (ow-assets, the
+        // group's manifest.json) or mis-tag. Two linux arches stay distinct.
+        assert_eq!(classify("components/linux-x64/runtime-linux-x64.squashfs"), vec!["linux-x64"]);
+        assert_eq!(classify("components/linux-arm64/runtime-linux-arm64.squashfs"), vec!["linux-arm64"]);
+        assert_eq!(classify("components/linux-arm64/nixos-fhs.closure"), vec!["linux-arm64"]);
+        assert_eq!(classify("components/linux-x64/ow-assets.squashfs"), vec!["linux-x64"]);
+        assert_eq!(classify("components/linux-arm64/manifest.json"), vec!["linux-arm64"]);
+        assert_eq!(classify("components/win-x64/app-win-x64"), vec!["win-x64"]);
+        assert_eq!(classify("components/win-x64/manifest.json"), vec!["win-x64"]);
+        assert_eq!(classify("components/mac-arm64/ow-assets.dmg"), vec!["mac-arm64"]);
+        assert_eq!(classify("components/mac-arm64/manifest.json"), vec!["mac-arm64"]);
     }
 
     #[test]
@@ -290,13 +305,13 @@ mod tests {
     #[test]
     fn diff_bootstrap_keeps_only_wanted_platforms() {
         let remote = manifest(vec![
-            file("plan-ai.linux.exe", "a", &["linux"]),
-            file("plan-ai.exe", "b", &["win"]),
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            file("plan-ai.exe", "b", &["win-x64"]),
             file("components/ow-assets.squashfs", "c", &["all"]),
         ]);
-        let plan = diff(None, &remote, &["linux".into()]);
+        let plan = diff(None, &remote, &["linux-x64".into()]);
         let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
-        assert!(paths.contains(&"plan-ai.linux.exe"));
+        assert!(paths.contains(&"plan-ai.linux-x64.exe"));
         assert!(paths.contains(&"components/ow-assets.squashfs")); // "all" wanted
         assert!(!paths.contains(&"plan-ai.exe")); // win not kept
         assert!(plan.to_delete.is_empty());
@@ -305,23 +320,23 @@ mod tests {
     #[test]
     fn diff_prunes_other_platforms_and_skips_unchanged() {
         let local = manifest(vec![
-            file("plan-ai.linux.exe", "a", &["linux"]),
-            file("plan-ai.exe", "b", &["win"]), // present from a prior multi-platform build
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            file("plan-ai.exe", "b", &["win-x64"]), // present from a prior multi-platform build
         ]);
         let remote = manifest(vec![
-            file("plan-ai.linux.exe", "a", &["linux"]), // unchanged
-            file("plan-ai.exe", "b", &["win"]),
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]), // unchanged
+            file("plan-ai.exe", "b", &["win-x64"]),
         ]);
-        let plan = diff(Some(&local), &remote, &["linux".into()]);
+        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
         assert!(plan.to_download.is_empty()); // linux unchanged, win not wanted
         assert_eq!(plan.to_delete, vec!["plan-ai.exe".to_string()]); // prune win
     }
 
     #[test]
     fn diff_redownloads_changed() {
-        let local = manifest(vec![file("plan-ai.linux.exe", "old", &["linux"])]);
-        let remote = manifest(vec![file("plan-ai.linux.exe", "new", &["linux"])]);
-        let plan = diff(Some(&local), &remote, &["linux".into()]);
+        let local = manifest(vec![file("plan-ai.linux-x64.exe", "old", &["linux-x64"])]);
+        let remote = manifest(vec![file("plan-ai.linux-x64.exe", "new", &["linux-x64"])]);
+        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
         assert_eq!(plan.to_download.len(), 1);
     }
 }

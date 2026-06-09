@@ -21,7 +21,7 @@ BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # (tar -h) so real content lands under files/<path>.
 MIRROR="$DIST_DIR/.update-mirror"; rm -rf "$MIRROR"; mkdir -p "$MIRROR"
 shopt -s nullglob
-for f in "$BUNDLE"/plan-ai.linux.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do
+for f in "$BUNDLE"/plan-ai.*.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do
   [ -e "$f" ] && ln -s "$f" "$MIRROR/$(basename "$f")"
 done
 shopt -u nullglob

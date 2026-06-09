@@ -40,11 +40,11 @@ cleanup() {
 trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
-# push the launcher + this OS's component group (components/win/, pre-extracted dirs).
+# push the launcher + this OS's component group (components/win-x64/, pre-extracted dirs).
 ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
 scp "${SSH_OPTS[@]}" -q "$EXE" "$HOST:$REMOTE/plan-ai.exe"
-[ -d "$POOL/win" ] || die "no components/win group in $POOL — run scripts/bundle.sh win-x64"
-scp "${SSH_OPTS[@]}" -q -r "$POOL/win" "$HOST:$REMOTE/components/" || true
+[ -d "$POOL/win-x64" ] || die "no components/win-x64 group in $POOL — run scripts/bundle.sh win-x64"
+scp "${SSH_OPTS[@]}" -q -r "$POOL/win-x64" "$HOST:$REMOTE/components/" || true
 
 # Supervisor script: starts the launcher, polls health, writes a result file. Shipped
 # as a real .ps1 and run with -File so PowerShell actually executes the whole thing.

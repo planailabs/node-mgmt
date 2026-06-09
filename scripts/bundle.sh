@@ -69,11 +69,30 @@ case "$TARGET" in
   mac-*)           FMTS="dmg";      ;;
   *)               FMTS="tar.gz";   ;;
 esac
-# This bundle's OS key for the per-platform component group dir (components/<os>/).
-# Components are grouped per platform so each OS mounts only its own tree, the
-# manifest is declarative, and a single-platform image carries only its group.
-# Matches crates/manifest classify() + the launcher's POOL_OS + platforms.json.
-case "$TARGET" in win-*) OS=win ;; mac-*) OS=mac ;; *) OS=linux ;; esac
+# This bundle's component group dir (components/<target>/), keyed by TARGET (os-arch)
+# so two linux arches (linux-x64 + linux-arm64) get distinct groups instead of
+# colliding in one `linux` bucket. Matches crates/manifest classify()/current_platform()
+# + the launcher's POOL_TARGET + platforms.json. (nixos-x64/-arm64 fold to linux-<arch>.)
+case "$TARGET" in nixos-x64) GROUP=linux-x64 ;; nixos-arm64) GROUP=linux-arm64 ;; *) GROUP="$TARGET" ;; esac
+# The shipped standalone-launcher filename for this target. linux carries the arch
+# (two arches coexist on one drive/update server); win/mac have a single arch each.
+case "$TARGET" in
+  linux-*|nixos-*) LAUNCHER_NAME="plan-ai.$GROUP.exe" ;;
+  win-*)           LAUNCHER_NAME="plan-ai.exe" ;;
+  mac-*)           LAUNCHER_NAME="plan-ai.dmg" ;;
+  *) die "no launcher filename for target $TARGET" ;;
+esac
+# electron-builder OS + arch flags (linux/win) and the unpacked dir it emits.
+# electron-builder arch-suffixes non-default arches: x64 -> <os>-unpacked, arm64 ->
+# <os>-arm64-unpacked — so two linux arches land in DISTINCT dirs and never clash.
+# (mac goes through @electron/packager in package_mac, so these stay empty.)
+case "$TARGET" in
+  linux-x64|nixos-x64) EB_OS=--linux; EB_ARCH=--x64;   UNPACK_DIR="linux-unpacked" ;;
+  linux-arm64)         EB_OS=--linux; EB_ARCH=--arm64; UNPACK_DIR="linux-arm64-unpacked" ;;
+  win-x64)             EB_OS=--win;   EB_ARCH=--x64;   UNPACK_DIR="win-unpacked" ;;
+  mac-*)               EB_OS="";      EB_ARCH="";      UNPACK_DIR="" ;;
+  *) die "no electron metadata for target $TARGET" ;;
+esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
 # a component exists in this OS's format as a FILE (base.ext) or a DIR (windows)
@@ -108,7 +127,7 @@ copy_comps_into() {  # <components-dir>
 write_os_manifest() {  # <group-dir>
   local cdst="$1" oll="[]" k
   for k in $OKEYS; do oll="$(printf '%s' "$oll" | jq -c --arg k "$k" '. + [$k]')"; done
-  jq -n --arg os "$OS" --arg tag "$(ollama_version)" --arg rt "runtime-$TARGET" \
+  jq -n --arg os "$GROUP" --arg tag "$(ollama_version)" --arg rt "runtime-$TARGET" \
         --arg app "app-$TARGET" --argjson ollama "$oll" \
     '{os:$os, ollama_tag:$tag, runtime:$rt, app:$app, ow_assets:"ow-assets", ollama:$ollama,
       note:"per-OS component group; loader mounts runtime/app/ow-assets + the ollama flavour matching the CPU arch (rocm if /dev/kfd)"}' \
@@ -137,11 +156,11 @@ mkdir -p "$OUT"
 # Scoped to this target's files (each target writes a distinct subtree), so it never
 # races a concurrently-bundling sibling target.
 clean_stale_outputs() {
-  rm -rf "$OUT/components/$OS"
+  rm -rf "$OUT/components/$GROUP"
+  rm -f "$OUT/$LAUNCHER_NAME"
+  [ -n "$UNPACK_DIR" ] && rm -rf "$OUT/$UNPACK_DIR"
   case "$TARGET" in
-    linux-*) rm -rf "$OUT/linux-unpacked"; rm -f  "$OUT/plan-ai.linux.exe" ;;
-    win-*)   rm -rf "$OUT/win-unpacked";   rm -f  "$OUT/plan-ai.exe" ;;
-    mac-*)   rm -rf "$OUT/mac-arm64" "$OUT/mac-x64"; rm -f "$OUT/plan-ai.dmg" ;;
+    mac-*) rm -rf "$OUT/mac-arm64" "$OUT/mac-x64" ;;
   esac
   log "cleaned stale outputs for $TARGET (atomic (re)build)"
 }
@@ -183,8 +202,7 @@ copy_llmfit_into() {  # <pool-dir>
 # (The splash spinner is no longer shipped in the pool — it's embedded directly in
 # the launcher via build.rs/PLANAI_SPINNER_BIN, fed by the flake; see flake.nix.)
 
-package_electron_builder() {  # linux AppImage / windows zip
-  local EB_OS; case "$TARGET" in linux-*) EB_OS="--linux";; win-*) EB_OS="--win";; esac
+package_electron_builder() {  # linux dir / windows dir (EB_OS/EB_ARCH/UNPACK_DIR set up top)
   patch_eb_build_tools() {
     [ -n "${NIX_LD:-}" ] && command -v patchelf >/dev/null 2>&1 || return 0
     local cache="${XDG_CACHE_HOME:-$HOME/.cache}/electron-builder" f
@@ -198,8 +216,8 @@ package_electron_builder() {  # linux AppImage / windows zip
   # with NO diagnostic on stdout (it just stops after "packaging …"), so a failure is
   # invisible — especially under ninja's captured output. The debug stream shows the
   # exact spawn/step that died. Override by exporting DEBUG before the build.
-  build_once() { ( cd "$APP" && DEBUG="${DEBUG:-electron-builder*}" npx --no-install electron-builder $EB_OS --config electron-builder.yml ); }
-  log "electron-builder $EB_OS -> $OUT"
+  build_once() { ( cd "$APP" && DEBUG="${DEBUG:-electron-builder*}" npx --no-install electron-builder $EB_OS $EB_ARCH --config electron-builder.yml ); }
+  log "electron-builder $EB_OS $EB_ARCH -> $OUT"
   # serialized vs the other targets (shared app/ + electron-builder cache); released
   # right after so the post-electron work below overlaps across targets.
   app_pkg_lock
@@ -211,19 +229,18 @@ package_electron_builder() {  # linux AppImage / windows zip
   # it concurrently: the component copy (+ llmfit nix build), the app-component pack,
   # the launcher nix build, and (linux) the NixOS FHS export overlap instead of
   # waiting on each other. None use sudo here, so there's no lock contention.
+  local UNPACK="$OUT/$UNPACK_DIR"; [ -d "$UNPACK" ] || die "no $UNPACK_DIR from electron-builder"
   if [ "$EB_OS" = "--linux" ]; then
-    local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
     run_jobs \
-      'copy_comps_into "$OUT/components/$OS"' \
+      'copy_comps_into "$OUT/components/$GROUP"' \
       'emit_app_component "$UNPACK"' \
       'emit_nixos_fhs' \
-      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai plan-ai.linux.exe'
+      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai "$LAUNCHER_NAME"'
   else
-    local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
     run_jobs \
-      'copy_comps_into "$OUT/components/$OS"' \
+      'copy_comps_into "$OUT/components/$GROUP"' \
       'emit_app_component "$UNPACK"' \
-      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai.exe plan-ai.exe'
+      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai.exe "$LAUNCHER_NAME"'
   fi
   log "bundle done -> $OUT/ (standalone launcher + shared components/ incl. app-$TARGET)"
 }
@@ -251,7 +268,7 @@ place_standalone_launcher() {  # <flake-attr> <binary-in-store> <shipped-name>
 # real file/dir at <out>. Same on-disk format as before, so the loader mounts it
 # identically. (The three targets run concurrently but import under distinct names.)
 emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding plan.ai.app)
-  local src="$1" name="app-$TARGET" cdst="$OUT/components/$OS"; mkdir -p "$cdst"
+  local src="$1" name="app-$TARGET" cdst="$OUT/components/$GROUP"; mkdir -p "$cdst"
   case "$FMTS" in
     squashfs) "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-squashfs" "$cdst/$name.squashfs" ;;
     dir)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dir"      "$cdst/$name" ;;
@@ -272,7 +289,7 @@ emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
 # launcher imports it + re-execs inside the sandbox so the generic glibc Electron/
 # ollama run (NixOS's bare nix-ld stub can't run them directly).
 emit_nixos_fhs() {
-  local cdst="$OUT/components/$OS" fhs fhs_attr closure_attr
+  local cdst="$OUT/components/$GROUP" fhs fhs_attr closure_attr
   # Arch-matched FHS: the closure is the TARGET machine's store paths, so arm64 NixOS
   # needs the aarch64 env/closure. emit_nixos_fhs only runs for linux targets.
   case "$TARGET" in
@@ -288,7 +305,7 @@ emit_nixos_fhs() {
   # closureInfo registration → throwaway local DB → nix-store --export, all in the
   # sandbox), not a host `nix-store --export`. The launcher imports it unchanged on
   # NixOS first-run. The wrapper path is still recorded for the launcher to exec.
-  log "packing NixOS FHS closure ($closure_attr) in nix (import stream) -> components/$OS/"
+  log "packing NixOS FHS closure ($closure_attr) in nix (import stream) -> components/$GROUP/"
   "$SCRIPT_DIR/nix-component.sh" "$closure_attr" "$cdst/nixos-fhs.closure"
   echo "$fhs/bin/planai-fhs" > "$cdst/nixos-fhs.path"
   log "  nixos-fhs.closure ($(du -h "$cdst/nixos-fhs.closure" | cut -f1)) + nixos-fhs.path"
@@ -389,7 +406,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   # launcher (plan-ai.dmg: mount → double-click plan.ai.app) finds the shared pool.
   local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"
   run_jobs \
-    'copy_comps_into "$OUT/components/$OS"' \
+    'copy_comps_into "$OUT/components/$GROUP"' \
     'emit_app_component "$STAGE"; build_mac_launcher_app'
   rm -rf "$STAGE"
   log "mac bundle -> $OUT/plan-ai.dmg (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"

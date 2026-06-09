@@ -33,11 +33,11 @@ cleanup() {
 trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
-# push the launcher dmg + this OS's component group (components/mac/) the launcher needs.
+# push the launcher dmg + this OS's component group (components/mac-arm64/) the launcher needs.
 ssh "$HOST" "mkdir -p '$REMOTE/components'"
 scp -q "$DMG" "$HOST:$REMOTE/plan-ai.dmg"
-[ -d "$POOL/mac" ] || die "no components/mac group in $POOL — run scripts/bundle.sh mac-arm64"
-scp -q -r "$POOL/mac" "$HOST:$REMOTE/components/" || true
+[ -d "$POOL/mac-arm64" ] || die "no components/mac-arm64 group in $POOL — run scripts/bundle.sh mac-arm64"
+scp -q -r "$POOL/mac-arm64" "$HOST:$REMOTE/components/" || true
 
 log "mount dmg + run launcher; assert ollama + Open-WebUI serve (≤6min cold start)"
 # Pass $REMOTE as $1 to the remote bash (avoids quoting the path into the heredoc).
