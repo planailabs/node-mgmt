@@ -30,6 +30,16 @@ let
     { nativeBuildInputs = [ pkgs.squashfsTools ]; }
     "mksquashfs ${src} $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet";
 
+  # A closure's store paths packed as a squashfs whose ROOT holds each path by its
+  # hash-name (mksquashfs adds multiple absolute sources at the root by basename), so
+  # <mnt>/<hash> == /nix/store/<hash>. The launcher squashfuse-mounts this and provides
+  # it as /nix/store inside an outer namespace (bind or overlay) — no `nix-store
+  # --import`, hence no trusted-user requirement on NixOS. Keep flags == mkSqfs so the
+  # embedded squashfuse_ll mounts it identically.
+  mkClosureSqfs = ci: pkgs.runCommand "nixos-fhs.squashfs"
+    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
+    "mksquashfs $(cat ${ci}/store-paths) $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet";
+
   # --- mac dmg components, built in a Linux VM ------------------------------
   # An HFS+ dmg needs a privileged loop-mount, impossible in a plain sandbox. So
   # build it inside a QEMU VM (fast with KVM) where we're root and the kernel has
@@ -105,26 +115,13 @@ let
   # --- NixOS FHS helper closure, exported PURELY in the sandbox --------------
   # The launcher imports this closure on NixOS first-run (`nix-store --import`,
   # daemon-mediated → works for any trusted user) so the FHS wrapper + its libs land
-  # in the user's store. We produce the `nix-store --import` stream WITHOUT a host
-  # `nix-store --export`: closureInfo gives the closure's store-paths + a
-  # `nix-store --load-db` registration via exportReferencesGraph — evaluated by the
-  # outer nix and fed in as data (no daemon needed; the paths are mounted into the
-  # sandbox because closureInfo's output text references them). We seed a throwaway
-  # local nix DB from that registration (NIX_STATE_DIR in $TMPDIR — the default
-  # /nix/var/nix is read-only in the sandbox) and `nix-store --export` against it.
-  # Pattern adapted from nixpkgs nixos/lib/make-squashfs.nix (same closureInfo data).
+  # in the user's store. closureInfo gives the closure's store-paths; mkClosureSqfs
+  # (above) packs them into a squashfs the launcher mounts + bind/overlays as
+  # /nix/store on NixOS — no `nix-store --import`, so no trusted-user requirement.
   nixosFhs = flake.packages.${builtins.currentSystem}.nixosFhs;
   nixosFhsArm64 = flake.packages.${builtins.currentSystem}.nixosFhs-arm64;
   nixosFhsClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhs ]; };
   nixosFhsArm64ClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhsArm64 ]; };
-  # closureInfo → a portable `nix-store --import` stream (registration + export from a
-  # throwaway local DB). Per-arch: the x64 / arm64 NixOS launcher imports its own.
-  mkFhsClosure = ci: pkgs.runCommand "nixos-fhs.closure" { nativeBuildInputs = [ pkgs.nix ]; } ''
-    export NIX_STATE_DIR=$TMPDIR/state NIX_LOG_DIR=$TMPDIR/log
-    mkdir -p "$NIX_STATE_DIR" "$NIX_LOG_DIR"
-    nix-store --load-db < ${ci}/registration
-    nix-store --export $(cat ${ci}/store-paths) > $out
-  '';
 in
 {
   # ollama: linux squashfs, darwin dmg, windows dir (source = the nix repack)
@@ -161,10 +158,10 @@ in
   # (volume "plan.ai" — the user mounts it, then double-clicks plan.ai.app). No sudo.
   "launcher-mac-arm64-dmg" = mkDmg { name = "plan-ai-launcher-mac"; src = launcherMacApp; vol = "plan.ai"; };
 
-  # the NixOS FHS helper closure as a `nix-store --import` stream (see notes above),
-  # one per linux arch (bundle.sh picks the one matching the target).
-  "nixos-fhs-closure-x64" = mkFhsClosure nixosFhsClosureInfo;
-  "nixos-fhs-closure-arm64" = mkFhsClosure nixosFhsArm64ClosureInfo;
+  # the NixOS FHS helper closure as a SQUASHFS (mounted + bind/overlaid as /nix/store
+  # on NixOS, no import), one per linux arch (bundle.sh picks the one matching target).
+  "nixos-fhs-squashfs-x64" = mkClosureSqfs nixosFhsClosureInfo;
+  "nixos-fhs-squashfs-arm64" = mkClosureSqfs nixosFhsArm64ClosureInfo;
 
   # --- the FAT32 USB image (the capstone) ------------------------------------
   # make-usb-image.sh assembles a drive-root dir (launchers + components/<os>/ +

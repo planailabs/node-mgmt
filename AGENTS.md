@@ -42,9 +42,12 @@ FAT32 USB image run on ordinary machines with no Nix. Therefore:
   cross-platform binaries**. Pre-fetch all external deps as FODs so the builder
   runs offline/pure.
 
-NixOS is not a separate target: the linux-x64 artifact ships a buildFHSEnv helper
-closure, and the static-musl launcher imports it + re-execs inside the FHS sandbox
-so the generic electron/ollama run. `make dev` covers local NixOS iteration.
+NixOS is not a separate target: the linux artifact ships a buildFHSEnv helper closure
+as a squashfs (`nixos-fhs.squashfs`), and the static-musl launcher squashfuse-mounts it
+and — in an outer bubblewrap namespace — provides it as `/nix/store` (overlay union
+where unprivileged overlayfs works, else a plain bind that replaces it), then re-execs
+inside the FHS sandbox so the generic electron/ollama run. No `nix-store --import`, so
+no trusted-user requirement. `make dev` covers local NixOS iteration.
 
 ---
 
@@ -154,14 +157,15 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
   (`usb-image`): `make-usb-image.sh` stages a drive-root (launchers +
   `components/<os>/` + models + update.json + platforms.json) → store-import →
   `mkfs.vfat`+`mcopy` offline. `crates/manifest` `classify()` tags everything
-  under `components/<os>/` to that OS by the group segment. Real mac-cert
+  under `components/<target>/` to that target by the group segment. Real mac-cert
   (`MAC_P12`) + windows (`WIN_PFX`, network timestamp) signing stay imperative
   (secret/network inputs); the ad-hoc default is pure nix.
 - **NixOS can't run generic FHS binaries** (bare nix-ld stub; `NIX_LD` ignored).
   - electron-builder's helpers (`mksquashfs`, `appimagetool`, `makensis`) are
     `patchelf`'d to the nix loader at pack time; `USE_SYSTEM_7ZA=true`.
   - Dev (`scripts/run-nixos.sh`) `patchelf`s the extracted ollama; the shipped
-    linux build instead FHS-reexecs (the launcher imports `nixos-fhs.closure`).
+    linux build instead FHS-reexecs (the launcher squashfuse-mounts
+    `nixos-fhs.squashfs` and bwrap-provides it as `/nix/store`, no import).
     Pass nix libs to **child processes only** via `PLANAI_CHILD_LD_LIBRARY_PATH`
     (`config.rs`) — a global `LD_LIBRARY_PATH` makes nixpkgs electron crash with
     **SIGILL**.

@@ -289,26 +289,26 @@ emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
 # launcher imports it + re-execs inside the sandbox so the generic glibc Electron/
 # ollama run (NixOS's bare nix-ld stub can't run them directly).
 emit_nixos_fhs() {
-  local cdst="$OUT/components/$GROUP" fhs fhs_attr closure_attr
+  local cdst="$OUT/components/$GROUP" fhs fhs_attr sqfs_attr
   # Arch-matched FHS: the closure is the TARGET machine's store paths, so arm64 NixOS
-  # needs the aarch64 env/closure. emit_nixos_fhs only runs for linux targets.
+  # needs the aarch64 env/squashfs. emit_nixos_fhs only runs for linux targets.
   case "$TARGET" in
-    linux-x64|nixos-x64) fhs_attr=nixosFhs;       closure_attr=nixos-fhs-closure-x64 ;;
-    linux-arm64)         fhs_attr=nixosFhs-arm64; closure_attr=nixos-fhs-closure-arm64 ;;
+    linux-x64|nixos-x64) fhs_attr=nixosFhs;       sqfs_attr=nixos-fhs-squashfs-x64 ;;
+    linux-arm64)         fhs_attr=nixosFhs-arm64; sqfs_attr=nixos-fhs-squashfs-arm64 ;;
     *) die "emit_nixos_fhs: unexpected target $TARGET" ;;
   esac
   command -v nix >/dev/null 2>&1 || { warn "no nix — skip NixOS FHS helper"; return 0; }
   fhs="$(cd "$REPO_ROOT" && nix build ".#$fhs_attr" --no-link --print-out-paths 2>/dev/null || true)"
   [ -n "$fhs" ] || { warn "$fhs_attr build failed — skip FHS helper"; return 0; }
   mkdir -p "$cdst"
-  # The `nix-store --import` stream is built PURELY by nix (nixos-fhs-closure-<arch>: a
-  # closureInfo registration → throwaway local DB → nix-store --export, all in the
-  # sandbox), not a host `nix-store --export`. The launcher imports it unchanged on
-  # NixOS first-run. The wrapper path is still recorded for the launcher to exec.
-  log "packing NixOS FHS closure ($closure_attr) in nix (import stream) -> components/$GROUP/"
-  "$SCRIPT_DIR/nix-component.sh" "$closure_attr" "$cdst/nixos-fhs.closure"
+  # The FHS closure as a squashfs (each store path at the squashfs root by hash-name).
+  # On NixOS the launcher squashfuse-mounts it and bind/overlays it as /nix/store inside
+  # an outer bwrap — no `nix-store --import`, so no trusted-user requirement. The wrapper
+  # path (resolved under the mounted store at runtime) is recorded for the launcher.
+  log "packing NixOS FHS squashfs ($sqfs_attr) in nix -> components/$GROUP/"
+  "$SCRIPT_DIR/nix-component.sh" "$sqfs_attr" "$cdst/nixos-fhs.squashfs"
   echo "$fhs/bin/planai-fhs" > "$cdst/nixos-fhs.path"
-  log "  nixos-fhs.closure ($(du -h "$cdst/nixos-fhs.closure" | cut -f1)) + nixos-fhs.path"
+  log "  nixos-fhs.squashfs ($(du -h "$cdst/nixos-fhs.squashfs" | cut -f1)) + nixos-fhs.path"
 }
 
 # Wrap the mac launcher binary in a tiny .app so Finder double-click works. Its

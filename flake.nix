@@ -157,6 +157,13 @@
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
               # the splash spinner, embedded into the launcher for every target.
               PLANAI_SPINNER_BIN = spinnerBin;
+            } // lib.optionalAttrs (lib.hasInfix "linux" zigTarget) {
+              # Static bubblewrap, embedded into the linux launcher: on NixOS it sets up
+              # the OUTER namespace that binds/overlays the FHS-closure squashfs over
+              # /nix/store (no `nix-store --import`, so no trusted-user requirement),
+              # then runs the buildFHSEnv wrapper inside it. Static so it runs with no
+              # store deps before the store is provided.
+              PLANAI_BWRAP_BIN = "${pkgs.pkgsStatic.bubblewrap}/bin/bwrap";
             } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
               # Cocoa headers/frameworks for notify-rust's mac-notification-sys.
               SDKROOT = macosx-sdk;

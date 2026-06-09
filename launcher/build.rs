@@ -39,5 +39,21 @@ fn main() {
         println!("cargo:rerun-if-env-changed=PLANAI_SPINNER_BIN");
     }
 
+    // Embed the static bubblewrap for the linux launcher's NixOS FHS path (sets up the
+    // outer namespace that provides the FHS-closure store over /nix/store). Empty when
+    // unset (dev / non-linux): the FHS path is NixOS-prod-only, so a dev build without
+    // it just can't enter the sandbox (and doesn't need to).
+    {
+        let dst = Path::new(&out).join("bwrap");
+        let bytes = match env::var("PLANAI_BWRAP_BIN") {
+            Ok(p) if !p.is_empty() && target_os == "linux" => {
+                fs::read(&p).unwrap_or_else(|e| panic!("read PLANAI_BWRAP_BIN={p}: {e}"))
+            }
+            _ => Vec::new(),
+        };
+        fs::write(&dst, bytes).unwrap();
+        println!("cargo:rerun-if-env-changed=PLANAI_BWRAP_BIN");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
 }

@@ -26,6 +26,9 @@ mod update;
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
 const UNSQUASHFS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unsquashfs"));
+// Static bubblewrap for the NixOS FHS path (sets up the outer namespace that provides
+// the FHS-closure squashfs as /nix/store). Empty off-linux / in dev builds.
+const BWRAP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bwrap"));
 // Embedded splash spinner for THIS target (all OSes; empty in dev — see build.rs).
 const SPINNER_BIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/spinner"));
 
@@ -226,14 +229,18 @@ fn is_nixos() -> bool {
         && (Path::new("/etc/NIXOS").exists() || Path::new("/run/current-system/sw").exists())
 }
 
-// On NixOS the generic glibc Electron/ollama can't run (bare nix-ld stub). We ship
-// a buildFHSEnv wrapper's closure as a NAR (its /nix/store paths don't exist on the
-// target); import it, then run OURSELF inside the wrapper as a CHILD (not exec) so
-// the components we already FUSE-mounted on the host stay mounted — the sandbox
-// sees them through the wrapper's recursive bind — and THIS process survives to
-// unmount them after the sandboxed app exits. Returns the child's exit code, or
-// None when the FHS path doesn't apply (non-NixOS / dev / already inside / setup
-// failed → the caller runs the app bare on the host). Guarded by PLANAI_FHS_REEXEC.
+// On NixOS the generic glibc Electron/ollama can't run (bare nix-ld stub). We ship the
+// buildFHSEnv wrapper's closure as a SQUASHFS (its /nix/store paths don't exist on the
+// target). Rather than `nix-store --import` it — which a non-trusted NixOS user can't do
+// (the daemon refuses unsigned imports), the bug that left this path dead on stock NixOS
+// — we squashfuse-mount it and, in an OUTER bubblewrap namespace, provide it as
+// /nix/store: an overlay UNION with the host store where unprivileged overlayfs works,
+// else a plain bind that REPLACES it (the closure is self-contained, so replace is fine
+// and needs only userns). Inside that namespace we run the wrapper, which sets up the
+// FHS and execs OURSELF as a CHILD (PLANAI_FHS_REEXEC=1); the components we already
+// FUSE-mounted on the host stay visible via --dev-bind / /, and THIS process survives to
+// unmount everything after the sandboxed app exits. Returns the child's exit code, or
+// None when the FHS path doesn't apply / can't be set up (caller then runs bare).
 #[cfg(target_os = "linux")]
 fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32> {
     // Skip in dev (nixpkgs Electron + staged dist/, no generic binaries to sandbox)
@@ -249,45 +256,103 @@ fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32>
     if wrapper.is_empty() {
         return None; // no FHS helper shipped — best-effort, run bare
     }
-    if !Path::new(&wrapper).exists() {
-        let closure = comp.join("nixos-fhs.closure");
-        if !closure.exists() {
-            log("NixOS FHS: helper closure missing — generic binaries may not run");
-            return None;
+    let squashfs = comp.join("nixos-fhs.squashfs");
+    if !squashfs.exists() {
+        log("NixOS FHS: helper squashfs missing — generic binaries may not run");
+        return None;
+    }
+    let tools = cache_root().join("root").join("tools");
+    let bwrap = ensure_tool(&tools, "bwrap", BWRAP).or_else(|| {
+        log("NixOS FHS: no embedded bwrap — running bare");
+        None
+    })?;
+    // Mount (or extract) the FHS-closure store: <store_root>/<hash> == /nix/store/<hash>
+    // (mksquashfs put each store path at the squashfs root by its hash-name).
+    let store_root = cache_root().join("root").join("dist").join("nixos-fhs");
+    detach_stale_mount(&store_root);
+    if fs::create_dir_all(&store_root).is_err() {
+        return None;
+    }
+    let mut mounted = false;
+    if let Some(sf) = ensure_tool(&tools, "squashfuse_ll", SQUASHFUSE_LL) {
+        let mut cmd = Command::new(&sf);
+        cmd.arg(&squashfs).arg(&store_root);
+        if let Some(fm) = find_fusermount() {
+            cmd.env("FUSERMOUNT_PROG", fm);
         }
-        log("NixOS FHS: importing helper closure into the nix store (first run)");
-        let f = match fs::File::open(&closure) {
-            Ok(f) => f,
-            Err(e) => { log(&format!("NixOS FHS: open closure: {e}")); return None; }
-        };
-        let ok = Command::new("nix-store")
-            .arg("--import")
-            .stdin(f)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok || !Path::new(&wrapper).exists() {
-            log("NixOS FHS: import failed (untrusted nix user? nix missing?) — running bare");
-            return None;
+        mounted = cmd.status().map(|s| s.success()).unwrap_or(false) && is_mountpoint(&store_root);
+    }
+    if !mounted {
+        // FUSE unavailable — extract instead (a plain dir binds/overlays identically).
+        match ensure_tool(&tools, "unsquashfs", UNSQUASHFS) {
+            Some(us) => {
+                log("NixOS FHS: FUSE mount failed — extracting helper store");
+                let ok = Command::new(&us)
+                    .args(["-f", "-no-progress", "-d"]).arg(&store_root).arg(&squashfs)
+                    .status().map(|s| s.success()).unwrap_or(false);
+                if !ok {
+                    log("NixOS FHS: extract failed — running bare");
+                    return None;
+                }
+            }
+            None => return None,
         }
     }
-    log("NixOS FHS: running launcher inside the FHS sandbox (components mounted on host)");
-    // The slow host-side work (extract + first-run closure import) is done and the
-    // sandboxed Electron is about to start — close the NixOS progress dialog now.
-    // It can't be killed later: the FHS child runs in a separate PID namespace, and
-    // this host process blocks here until Electron exits. The sliver until Electron
+
+    // Host-side work is done and the sandboxed Electron is about to start — close the
+    // splash now. The FHS child runs in a separate PID namespace and this process blocks
+    // until it exits, so the spinner can't be reaped later; the sliver until Electron
     // paints is covered by the SPA's pre-hydration loading banner.
     kill_spinner(spinner);
+    let mode = fhs_store_mode(&bwrap);
+    log(&format!("NixOS FHS: entering sandbox (store provided via {mode})"));
     let self_exe = std::env::current_exe().unwrap_or_default();
-    match Command::new(&wrapper)
-        .arg(&self_exe)
-        .args(std::env::args_os().skip(1))
-        .env("PLANAI_FHS_REEXEC", "1")
-        .status()
-    {
-        Ok(s) => Some(s.code().unwrap_or(0)),
-        Err(e) => { log(&format!("NixOS FHS: spawn {wrapper} failed: {e} — running bare")); None }
+    let mut cmd = Command::new(&bwrap);
+    cmd.args(["--dev-bind", "/", "/"]); // expose host (incl. the FUSE-mounted components)
+    if mode == "overlay" {
+        // Union the closure over the host store — both sets of /nix/store/<hash> resolve.
+        cmd.arg("--overlay-src").arg(&store_root)
+            .arg("--overlay-src").arg("/nix/store")
+            .args(["--ro-overlay", "/nix/store"]);
+    } else {
+        // Replace /nix/store with the closure (self-contained; needs only userns).
+        cmd.arg("--ro-bind").arg(&store_root).arg("/nix/store");
     }
+    cmd.arg("--").arg(&wrapper).arg(&self_exe).args(std::env::args_os().skip(1))
+        .env("PLANAI_FHS_REEXEC", "1");
+    let code = match cmd.status() {
+        Ok(s) => Some(s.code().unwrap_or(0)),
+        Err(e) => {
+            log(&format!("NixOS FHS: bwrap spawn failed: {e} — running bare"));
+            None
+        }
+    };
+    if mounted {
+        let fm = find_fusermount().unwrap_or_else(|| "fusermount".into());
+        let _ = Command::new(&fm).arg("-u").arg(&store_root).status();
+    }
+    code
+}
+
+/// Probe unprivileged overlayfs via the embedded bwrap (a throwaway `--ro-overlay`),
+/// returning "overlay" if it works, else "bind". Overlay unions the FHS closure with
+/// the host store (keeps host paths visible); bind replaces /nix/store with just the
+/// closure and needs only userns — the portable default where overlayfs is restricted.
+#[cfg(target_os = "linux")]
+fn fhs_store_mode(bwrap: &Path) -> &'static str {
+    let probe = cache_root().join("ovl-probe");
+    let low = probe.join("low");
+    let _ = fs::create_dir_all(&low);
+    let _ = fs::write(low.join("marker"), b"ok");
+    let ok = Command::new(bwrap)
+        .args(["--ro-bind", "/", "/", "--overlay-src"])
+        .arg(&low)
+        .args(["--ro-overlay", "/mnt", "cat", "/mnt/marker"])
+        .output()
+        .map(|o| o.status.success() && o.stdout == b"ok")
+        .unwrap_or(false);
+    let _ = fs::remove_dir_all(&probe);
+    if ok { "overlay" } else { "bind" }
 }
 
 /// Single-instance guard: take an exclusive advisory lock on a file in the cache
