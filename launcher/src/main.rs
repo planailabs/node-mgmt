@@ -49,9 +49,10 @@ fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new().summary(title).body(body).show();
 }
 
-/// A running splash: either the embedded eframe spinner or a system progress
-/// dialog (zenity/kdialog/yad). Both are child processes closed by killing them;
-/// progress/text updates are fed over stdin (zenity-compatible protocol).
+/// A running splash: the embedded eframe spinner, a GUI progress dialog
+/// (zenity/kdialog/yad), or the curses `dialog` gauge on a no-X terminal. All are
+/// child processes closed by killing them; progress/text updates are fed over stdin
+/// (zenity-compatible protocol — a bare percentage per line).
 pub struct Splash {
     child: std::process::Child,
 }
@@ -692,14 +693,22 @@ pub struct SplashOpts<'a> {
 /// NixOS / no-GL fallback splash: a progress dialog via the desktop's own tool
 /// (no GL/glibc deps to ship). zenity (GTK), kdialog (KDE) and yad keep the window
 /// for the life of the process, so killing the child closes it — same contract as
-/// the eframe spinner. Determinate mode reads 0..100 percentages on stdin (zenity/
-/// yad natively; kdialog stays indeterminate). None if no tool is installed.
+/// the eframe spinner. With no display at all but a terminal, the curses `dialog`
+/// gauge is the last resort (e.g. a headless SSH / TTY launch). Determinate mode
+/// reads 0..100 percentages on stdin (zenity/yad/dialog natively; kdialog stays
+/// indeterminate). None if no usable tool is present.
 #[cfg(target_os = "linux")]
 fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child> {
+    use std::io::IsTerminal;
     use std::process::Stdio;
     let title = "plan.ai";
     let text = if opts.text.is_empty() { i18n::t("starting-preparing") } else { opts.text.to_string() };
-    if in_path("zenity") {
+    // GUI tools need a display; without one they'd spawn then die. Gate them so the
+    // terminal `dialog` fallback below is reached on a no-X / headless-TTY launch.
+    let have_display = ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false));
+    if have_display && in_path("zenity") {
         let mut c = Command::new("zenity");
         c.args(["--progress", "--no-cancel", "--auto-close", "--width=360"]);
         if !opts.progress {
@@ -714,7 +723,7 @@ fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child>
             .spawn()
             .ok();
     }
-    if in_path("kdialog") {
+    if have_display && in_path("kdialog") {
         // kdialog progress is driven over D-Bus; keep it indeterminate (kill to close).
         return Command::new("kdialog")
             .arg(format!("--title={title}"))
@@ -725,7 +734,7 @@ fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child>
             .spawn()
             .ok();
     }
-    if in_path("yad") {
+    if have_display && in_path("yad") {
         let mut c = Command::new("yad");
         c.args(["--progress", "--no-buttons", "--auto-close"]);
         if !opts.progress {
@@ -740,7 +749,18 @@ fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child>
             .spawn()
             .ok();
     }
-    log("no system dialog (zenity/kdialog/yad) found — no splash");
+    // Terminal fallback: the curses `dialog` gauge (needs no X, only a tty). It reads
+    // bare 0..100 percentages on stdin — the same protocol Splash::set_progress emits
+    // (zenity-compatible); `#label` lines from set_text are non-numeric and ignored.
+    // stdout/stderr inherit the tty so curses can draw; killing the child closes it.
+    if std::io::stderr().is_terminal() && in_path("dialog") {
+        return Command::new("dialog")
+            .args(["--title", title, "--gauge", &text, "8", "70", "0"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .ok();
+    }
+    log("no system dialog (zenity/kdialog/yad/dialog) found — no splash");
     None
 }
 
@@ -783,11 +803,18 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
 /// progress dialog on NixOS (can't run the dynamic GL binary) or if eframe won't
 /// spawn on linux. Skipped with no display (headless/CI). Best-effort.
 pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
-    // Need a display; skip in headless CI (treat an empty var as unset too).
+    // Need a display OR a terminal: with no display but a tty, fall straight to the
+    // terminal `dialog` gauge (the eframe binary needs a display). Skip only when
+    // truly headless (no display, no tty — e.g. CI).
     #[cfg(target_os = "linux")]
     {
-        let has = |k| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false);
-        if !has("DISPLAY") && !has("WAYLAND_DISPLAY") {
+        use std::io::IsTerminal;
+        let has = |k: &str| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false);
+        let have_display = has("DISPLAY") || has("WAYLAND_DISPLAY");
+        if !have_display {
+            if std::io::stderr().is_terminal() {
+                return spawn_system_progress_dialog(opts).map(|child| Splash { child });
+            }
             return None;
         }
     }
