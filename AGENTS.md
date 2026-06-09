@@ -126,6 +126,21 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
   strip `nvidia_*` from a CUDA torch — it then fails on `libcublasLt` preload.
 - **FAT32.** Every artifact stays < 4 GiB → plain FAT32 via mtools (no root).
   `make-usb-image` has a hard 4 GiB guard.
+- **Components are nix-built + grouped per platform** (`components/<os>/`). Every
+  component (runtime, ollama, ow-assets, the Electron `app-<os>`, the mac launcher
+  `.app`+dmg) is packed by a nix derivation (`nix/builds.nix`: `mkSqfs`/`mkDmg`/
+  dir; squashfs in a sandbox, dmg in a KVM VM, no sudo) consuming a content-
+  addressed **store import** of the impure/electron-builder output. `bundle.sh`
+  lays the bundle pool out as `components/<os>/` with a **declarative** per-OS
+  `manifest.json` (the launcher uses it only as a pool marker — selection is by
+  dir scan; `resolve_pool` in `launcher/src/main.rs` prefers `components/<os>/`,
+  flat-pool fallback). The FAT32 **image** is itself a nix `runCommand`
+  (`usb-image`): `make-usb-image.sh` stages a drive-root (launchers +
+  `components/<os>/` + models + update.json + platforms.json) → store-import →
+  `mkfs.vfat`+`mcopy` offline. `crates/manifest` `classify()` tags everything
+  under `components/<os>/` to that OS by the group segment. Real mac-cert
+  (`MAC_P12`) + windows (`WIN_PFX`, network timestamp) signing stay imperative
+  (secret/network inputs); the ad-hoc default is pure nix.
 - **NixOS can't run generic FHS binaries** (bare nix-ld stub; `NIX_LD` ignored).
   - electron-builder's helpers (`mksquashfs`, `appimagetool`, `makensis`) are
     `patchelf`'d to the nix loader at pack time; `USE_SYSTEM_7ZA=true`.
@@ -175,7 +190,8 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
 
 - `make clean` mid-build wipes `dist/` + `node_modules` → app-builder "no such
   file" + npx refetch. Don't run it during a build.
-- After `make all`, `dist/components/` exists, so the launcher would also
+- After `make all`, `dist/components/` (the flat staging pool) + `dist/bundle/
+  components/<os>/` (the grouped bundle pool) exist, so the launcher would also
   extract; in dev it skips extraction when a dev runtime is staged in `dist/`
   (`PLANAI_DEV`/`PLANAI_RESOURCES`).
 - The design system (`third_party/plan-ai-design`) is a **git submodule** and a
