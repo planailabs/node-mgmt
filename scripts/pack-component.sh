@@ -24,7 +24,7 @@ fmts_for() { case "$1" in
   *linux-*|*nixos-*) echo sqfs ;;
   *windows-*|*win-*) echo dir ;;
   *darwin*|*mac-*)   echo dmg ;;
-  ow-assets)         echo "dmg dir" ;;       # shared: mac(dmg) win(dir); linux squashfs is built in nix (build-component-squashfs.sh)
+  ow-assets)         echo "dir" ;;           # win(dir) only; linux squashfs + mac dmg are built in nix (import-build-component.sh)
   *)                 echo gz ;;
 esac; }
 

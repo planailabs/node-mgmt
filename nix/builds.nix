@@ -29,11 +29,45 @@ let
       mkdir ex && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C ex
       mksquashfs ex $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet
     '';
+
+  # --- mac dmg components, built in a Linux VM ------------------------------
+  # An HFS+ dmg needs a privileged loop-mount, impossible in a plain sandbox. So
+  # build it inside a QEMU VM (fast with KVM) where we're root and the kernel has
+  # loop + hfsplus. The real mount + `cp -a` preserves symlinks + exec bits +
+  # signatures (a .app needs them); hard links are copied as independent files
+  # (the Linux HFS+ driver can't create them — same as lib.sh pack_dmg). libdmg
+  # then compresses the bare HFS+ to a UDIF dmg. This makes dmgs pure, cached nix
+  # derivations instead of host sudo calls.
+  libdmg = flake.packages.${builtins.currentSystem}.libdmg-hfsplus;
+  vmTools = pkgs.vmTools.override {
+    rootModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" "virtio_balloon"
+      "virtio_rng" "ext4" "virtiofs" "crc32c" "loop" "hfsplus" ];
+  };
+  mkDmg = { name, src, vol ? "PlanAI" }:
+    vmTools.runInLinuxVM (pkgs.runCommand "${name}.dmg"
+      { nativeBuildInputs = [ pkgs.hfsprogs pkgs.util-linux ]; memSize = 2048; }
+      ''
+        raw=$TMPDIR/raw.hfs
+        # size from du -l (each hard-link name counted, since cp breaks them) + a
+        # per-file catalog pad + slack; over-provision is free (UDIF compresses it).
+        kb=$(du -slk ${src} | cut -f1); nfiles=$(find ${src} | wc -l)
+        truncate -s $(( kb * 1024 + nfiles * 4096 + 256*1024*1024 )) $raw
+        mkfs.hfsplus -v "${vol}" $raw
+        mkdir -p $TMPDIR/mnt
+        mount -t hfsplus -o loop $raw $TMPDIR/mnt
+        cp -a --no-preserve=links ${src}/. $TMPDIR/mnt/
+        umount $TMPDIR/mnt
+        ${libdmg}/bin/dmg dmg $raw $out
+      '');
+  ollama-darwin-extracted = pkgs.runCommand "ollama-darwin" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
+    "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-darwin.tar.gz -C $out";
 in
 {
   "ollama-linux-amd64-squashfs" = mkOllamaSqfs "linux-amd64";
   "ollama-linux-arm64-squashfs" = mkOllamaSqfs "linux-arm64";
   "ollama-linux-amd64-rocm-squashfs" = mkOllamaSqfs "linux-amd64-rocm";
+  "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
+  "ollama-darwin-dmg" = mkDmg { name = "ollama-darwin"; src = ollama-darwin-extracted; };
 
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
