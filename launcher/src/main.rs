@@ -138,17 +138,56 @@ fn external_roots(here: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// This bundle's OS key for the per-platform component group dir (components/<os>/).
+/// Matches the build's grouping (scripts/lib.sh comp_os / xtask) + platforms.json.
+const POOL_OS: &str = if cfg!(target_os = "windows") {
+    "win"
+} else if cfg!(target_os = "macos") {
+    "mac"
+} else {
+    "linux"
+};
+
+/// Resolve a `components/` root to the actual pool dir this OS reads. Components are
+/// grouped per platform (components/<os>/), so each OS mounts only its own tree and
+/// the manifest is declarative; prefer that. Fall back to a flat pool (components/
+/// holding every platform's files) for back-compat with older drives / dev layouts.
+/// Returns None if neither layout is present (no manifest.json marker).
+fn resolve_pool(base: &Path) -> Option<PathBuf> {
+    let os = base.join(POOL_OS);
+    if os.join("manifest.json").exists() {
+        return Some(os);
+    }
+    if base.join("manifest.json").exists() {
+        return Some(base.to_path_buf());
+    }
+    None
+}
+
+/// The drive root (where models/ + data/ live) for a resolved pool dir, which is
+/// either <root>/components (flat) or <root>/components/<os> (per-platform group).
+/// Climbs to the `components` dir and returns its parent, so both layouts resolve
+/// to the same USB root; falls back to the immediate parent if no such ancestor.
+fn pool_drive_root(comp: &Path) -> Option<PathBuf> {
+    let mut p = Some(comp);
+    while let Some(cur) = p {
+        if cur.file_name().is_some_and(|n| n == "components") {
+            return cur.parent().map(Path::to_path_buf);
+        }
+        p = cur.parent();
+    }
+    comp.parent().map(Path::to_path_buf)
+}
+
 fn components_dir(here: &Path) -> Option<PathBuf> {
     if let Some(c) = std::env::var_os("PLANAI_COMPONENTS") {
-        let c = PathBuf::from(c);
-        if c.join("manifest.json").exists() {
-            return Some(c);
+        if let Some(p) = resolve_pool(&PathBuf::from(c)) {
+            return Some(p);
         }
     }
     for r in external_roots(here) {
-        let c = r.join("components");
-        if c.join("manifest.json").exists() {
-            return Some(c);
+        if let Some(p) = resolve_pool(&r.join("components")) {
+            return Some(p);
         }
     }
     // macOS: the launcher .app ships inside a dmg (so its exec bit + signature
@@ -159,9 +198,8 @@ fn components_dir(here: &Path) -> Option<PathBuf> {
     {
         if let Ok(entries) = fs::read_dir("/Volumes") {
             for e in entries.flatten() {
-                let c = e.path().join("components");
-                if c.join("manifest.json").exists() {
-                    return Some(c);
+                if let Some(p) = resolve_pool(&e.path().join("components")) {
+                    return Some(p);
                 }
             }
         }
@@ -981,12 +1019,15 @@ fn main() {
     // so NixOS gets a real mount instead of a slow extraction.
     if !in_fhs && resources.is_none() {
         if let Some(comp) = comp_dir.as_ref() {
-            // models/ + data/ live on the USB beside the components/ pool. Pin the
-            // portable root to the pool's parent so they resolve to the USB even
-            // when the launcher runs from a mounted dmg (where current_exe's parent
-            // is the read-only dmg volume, not the USB). Honour an explicit override.
+            // models/ + data/ live on the USB beside the components/ dir. Pin the
+            // portable root to the drive root so they resolve to the USB even when
+            // the launcher runs from a mounted dmg (where current_exe's parent is
+            // the read-only dmg volume, not the USB). `comp` may be the flat pool
+            // (components/) OR a per-OS group (components/<os>/), so climb to the
+            // dir that contains `components`, not just comp.parent(). Honour an
+            // explicit override.
             if std::env::var_os("PLANAI_PORTABLE_ROOT").is_none() {
-                if let Some(usb_root) = comp.parent() {
+                if let Some(usb_root) = pool_drive_root(comp) {
                     std::env::set_var("PLANAI_PORTABLE_ROOT", usb_root);
                 }
             }
