@@ -91,6 +91,17 @@ pub fn classify(rel: &str) -> Vec<String> {
     if p.starts_with("tools/") {
         return vec!["linux".into()];
     }
+    // Per-platform component group: everything under components/<os>/ (incl. that
+    // group's manifest.json) belongs to exactly that OS. Authoritative — the
+    // grouping makes the layout self-describing, so we don't fall back to the
+    // substring heuristics below for grouped paths.
+    if let Some(rest) = p.strip_prefix("components/") {
+        if let Some((seg, _)) = rest.split_once('/') {
+            if matches!(seg, "linux" | "win" | "mac") {
+                return vec![seg.to_string()];
+            }
+        }
+    }
     let mut v = Vec::new();
     if p.contains("linux") || p.contains("nixos") {
         v.push("linux".to_string());
@@ -243,6 +254,22 @@ mod tests {
         assert_eq!(classify("components/ow-assets.squashfs"), vec!["all"]);
         // "darwin" must not be mistaken for win (contains "win")
         assert_eq!(classify("components/ollama-darwin.dmg"), vec!["mac"]);
+    }
+
+    #[test]
+    fn classify_per_os_component_group() {
+        // Everything under components/<os>/ is tagged to that OS by the group
+        // segment — incl. files the substring heuristic would miss (ow-assets,
+        // the group's manifest.json) or mis-tag.
+        assert_eq!(classify("components/linux/runtime-linux-x64.squashfs"), vec!["linux"]);
+        assert_eq!(classify("components/linux/ow-assets.squashfs"), vec!["linux"]);
+        assert_eq!(classify("components/linux/manifest.json"), vec!["linux"]);
+        assert_eq!(classify("components/win/app-win-x64"), vec!["win"]);
+        assert_eq!(classify("components/win/manifest.json"), vec!["win"]);
+        assert_eq!(classify("components/mac/ow-assets.dmg"), vec!["mac"]);
+        assert_eq!(classify("components/mac/manifest.json"), vec!["mac"]);
+        // a stray top-level components file still uses the substring heuristic
+        assert_eq!(classify("components/nixos-fhs.closure"), vec!["linux"]);
     }
 
     #[test]

@@ -25,12 +25,11 @@ cleanup() { ssh "$HOST" "hdiutil detach '$REMOTE/mnt' -force >/dev/null 2>&1; rm
 trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
-# push the launcher dmg + the mac/shared components the launcher needs (one copy).
+# push the launcher dmg + this OS's component group (components/mac/) the launcher needs.
 ssh "$HOST" "mkdir -p '$REMOTE/components'"
 scp -q "$DMG" "$HOST:$REMOTE/plan-ai.dmg"
-for f in manifest.json app-mac-arm64.dmg runtime-mac-arm64.dmg ollama-darwin.dmg ow-assets.dmg llmfit-darwin; do
-  [ -e "$POOL/$f" ] && scp -q "$POOL/$f" "$HOST:$REMOTE/components/$f" || true
-done
+[ -d "$POOL/mac" ] || die "no components/mac group in $POOL — run scripts/bundle.sh mac-arm64"
+scp -q -r "$POOL/mac" "$HOST:$REMOTE/components/" || true
 
 log "mount dmg + run launcher; assert ollama + Open-WebUI serve (≤6min cold start)"
 # Pass $REMOTE as $1 to the remote bash (avoids quoting the path into the heredoc).

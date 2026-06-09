@@ -51,7 +51,7 @@ case "$TARGET" in
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
-# Component FORMAT this OS's loader consumes (it picks this from the shared pool):
+# Component FORMAT this OS's loader consumes (it picks this from its group dir):
 #   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
 #   macOS = dmg (hdiutil mount)  ;  windows = dir (pre-extracted, used in place)
 case "$TARGET" in
@@ -60,6 +60,11 @@ case "$TARGET" in
   mac-*)           FMTS="dmg";      ;;
   *)               FMTS="tar.gz";   ;;
 esac
+# This bundle's OS key for the per-platform component group dir (components/<os>/).
+# Components are grouped per platform so each OS mounts only its own tree, the
+# manifest is declarative, and a single-platform image carries only its group.
+# Matches crates/manifest classify() + the launcher's POOL_OS + platforms.json.
+case "$TARGET" in win-*) OS=win ;; mac-*) OS=mac ;; *) OS=linux ;; esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
 # a component exists in this OS's format as a FILE (base.ext) or a DIR (windows)
@@ -81,12 +86,24 @@ copy_comps_into() {  # <components-dir>
       *)   [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true ;;
     esac
   done; done
-  # manifest.json is the one file every target writes to the SHARED pool (identical
-  # content) — copy it atomically (temp + mv) so concurrent target bundles can't read
-  # a half-written file. Everything else copied here is per-OS-distinct (no overlap).
-  [ -f "$COMP_SRC/manifest.json" ] && { cp -f "$COMP_SRC/manifest.json" "$cdst/.manifest.$$.json" && mv -f "$cdst/.manifest.$$.json" "$cdst/manifest.json"; }
+  # Per-OS manifest: each target owns its OWN group dir (components/<os>/), so there
+  # are no cross-target races (no shared file) and the manifest is DECLARATIVE — it
+  # lists exactly this OS's contents instead of a global scan. The launcher uses it
+  # as the pool marker (selection is by dir scan), but it self-describes the group.
+  write_os_manifest "$cdst"
   copy_llmfit_into "$cdst"
   log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
+}
+
+# Write the declarative manifest.json for this OS's component group (components/<os>/).
+write_os_manifest() {  # <group-dir>
+  local cdst="$1" oll="[]" k
+  for k in $OKEYS; do oll="$(printf '%s' "$oll" | jq -c --arg k "$k" '. + [$k]')"; done
+  jq -n --arg os "$OS" --arg tag "$(ollama_version)" --arg rt "runtime-$TARGET" \
+        --arg app "app-$TARGET" --argjson ollama "$oll" \
+    '{os:$os, ollama_tag:$tag, runtime:$rt, app:$app, ow_assets:"ow-assets", ollama:$ollama,
+      note:"per-OS component group; loader mounts runtime/app/ow-assets + the ollama flavour matching the CPU arch (rocm if /dev/kfd)"}' \
+    > "$cdst/manifest.json"
 }
 
 # ninja launches bundle-linux/win/mac concurrently. The ONLY part of a bundle that
@@ -166,14 +183,14 @@ package_electron_builder() {  # linux AppImage / windows zip
   if [ "$EB_OS" = "--linux" ]; then
     local UNPACK="$OUT/linux-unpacked"; [ -d "$UNPACK" ] || die "no linux-unpacked from electron-builder"
     run_jobs \
-      'copy_comps_into "$OUT/components"' \
+      'copy_comps_into "$OUT/components/$OS"' \
       'emit_app_component "$UNPACK"' \
       'emit_nixos_fhs' \
       'place_standalone_launcher launcher-linux-x64 plan-ai plan-ai.linux.exe'
   else
     local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
     run_jobs \
-      'copy_comps_into "$OUT/components"' \
+      'copy_comps_into "$OUT/components/$OS"' \
       'emit_app_component "$UNPACK"' \
       'place_standalone_launcher launcher-win-x64 plan-ai.exe plan-ai.exe'
   fi
@@ -203,7 +220,7 @@ place_standalone_launcher() {  # <flake-attr> <binary-in-store> <shipped-name>
 # real file/dir at <out>. Same on-disk format as before, so the loader mounts it
 # identically. (The three targets run concurrently but import under distinct names.)
 emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding plan.ai.app)
-  local src="$1" name="app-$TARGET" cdst="$OUT/components"; mkdir -p "$cdst"
+  local src="$1" name="app-$TARGET" cdst="$OUT/components/$OS"; mkdir -p "$cdst"
   case "$FMTS" in
     squashfs) "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-squashfs" "$cdst/$name.squashfs" ;;
     dir)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dir"      "$cdst/$name" ;;
@@ -224,7 +241,7 @@ emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
 # launcher imports it + re-execs inside the sandbox so the generic glibc Electron/
 # ollama run (NixOS's bare nix-ld stub can't run them directly).
 emit_nixos_fhs() {
-  local cdst="$OUT/components" fhs
+  local cdst="$OUT/components/$OS" fhs
   command -v nix-store >/dev/null 2>&1 || { warn "no nix-store — skip NixOS FHS helper"; return 0; }
   fhs="$(cd "$REPO_ROOT" && nix build .#nixosFhs --no-link --print-out-paths 2>/dev/null || true)"
   [ -n "$fhs" ] || { warn "nixosFhs build failed — skip FHS helper"; return 0; }
@@ -320,7 +337,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   # launcher (plan-ai.dmg: mount → double-click plan.ai.app) finds the shared pool.
   local STAGE; STAGE="$(mktemp -d)"; cp -a "$APPDIR" "$STAGE/plan.ai.app"
   run_jobs \
-    'copy_comps_into "$OUT/components"' \
+    'copy_comps_into "$OUT/components/$OS"' \
     'emit_app_component "$STAGE"; build_mac_launcher_app'
   rm -rf "$STAGE"
   log "mac bundle -> $OUT/plan-ai.dmg (launcher) + components/app-$TARGET.dmg + shared $OUT/components/"

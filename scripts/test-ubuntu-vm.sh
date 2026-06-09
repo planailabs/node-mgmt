@@ -101,7 +101,7 @@ POOL="$DIST_DIR/bundle/components"; TOOLS="$DIST_DIR/bundle/tools"
 [ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh linux-x64"
 incus file push -r "$POOL" "$VM/root/" 2>/dev/null
 [ -d "$TOOLS" ] && incus file push -r "$TOOLS" "$VM/root/" 2>/dev/null || true
-incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'
+incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/linux/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'
 
 log "run the launcher on stock Ubuntu; assert the stack serves (screenshot best-effort)"
 # What proves "runs on Ubuntu": ollama + Open-WebUI actually serving. These are

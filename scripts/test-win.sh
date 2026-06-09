@@ -28,15 +28,11 @@ cleanup() { printf '%s' "Remove-Item -Recurse -Force '$REMOTE' -ErrorAction Sile
 trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
-# push the launcher + the win/shared components (dirs are pre-extracted on win).
+# push the launcher + this OS's component group (components/win/, pre-extracted dirs).
 ssh "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
 scp -q "$EXE" "$HOST:$REMOTE/plan-ai.exe"
-for f in manifest.json llmfit-windows.exe; do
-  [ -e "$POOL/$f" ] && scp -q "$POOL/$f" "$HOST:$REMOTE/components/$f" || true
-done
-for d in app-win-x64 runtime-win-x64 ollama-windows-amd64 ow-assets; do
-  [ -d "$POOL/$d" ] && scp -q -r "$POOL/$d" "$HOST:$REMOTE/components/" || true
-done
+[ -d "$POOL/win" ] || die "no components/win group in $POOL — run scripts/bundle.sh win-x64"
+scp -q -r "$POOL/win" "$HOST:$REMOTE/components/" || true
 
 log "run launcher; assert ollama + Open-WebUI serve (≤6min cold start)"
 # Prepend a $REMOTE definition (bash-interpolated), then the PowerShell body

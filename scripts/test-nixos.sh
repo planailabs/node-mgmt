@@ -11,7 +11,7 @@ set -euo pipefail
 OUT="$DIST_DIR/bundle"
 LAUNCHER="$OUT/plan-ai.linux.exe"
 [ -x "$LAUNCHER" ] || die "linux bundle missing — run: make bundle TARGET=linux-x64"
-[ -f "$OUT/components/manifest.json" ] || die "components/ missing beside the launcher — run: make components bundle TARGET=linux-x64"
+[ -f "$OUT/components/linux/manifest.json" ] || die "components/linux group missing beside the launcher — run: make components bundle TARGET=linux-x64"
 SHOT="${1:-/tmp/nixos-dash.png}"; rm -f "$SHOT"
 
 export PLANAI_CAPTURE="$SHOT" PLANAI_CAPTURE_DELAY="${PLANAI_CAPTURE_DELAY:-50000}"
