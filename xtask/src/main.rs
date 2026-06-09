@@ -588,7 +588,12 @@ struct StatusResp {
 
 fn upload(a: UploadArgs) -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = reqwest::blocking::Client::new();
+    // The tarball is multi-GB; allow up to an hour to stream it before the request
+    // is considered timed out.
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .context("failed to build HTTP client")?;
     deploy(&client, &a)
 }
 
