@@ -36,6 +36,8 @@ let
     squashfsTools hfsprogs
     # VM test (ubuntu): qemu + cloud-utils fallback (incus is used from the host)
     qemu cloud-utils
+    # NixOS launch test (make test-nixos runs the bundle headless under Xvfb)
+    xvfb-run
   ];
 
   # Generic prebuilt binaries (electron-builder helpers; Open-WebUI native wheels;

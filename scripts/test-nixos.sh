@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Launch the LINUX bundle on this (NixOS) host under xvfb with a fresh extraction
 # cache, and assert the dashboard renders. There's no separate NixOS bundle: the
-# linux-x64 artifact ships the FHS helper closure, and the static-musl launcher
-# detects NixOS, extracts the components, and FHS-reexecs so the generic
-# electron/ollama run. Exercises the full path: rust launcher -> control plane
-# (ollama + open-webui) -> localhost SPA -> thin electron.
+# linux-x64 artifact ships the FHS helper as a squashfs, and the static-musl launcher
+# detects NixOS, squashfuse-mounts it, and (in an outer bwrap) provides it as
+# /nix/store before FHS-reexecing so the generic electron/ollama run. Exercises the
+# full path: rust launcher -> bwrap FHS -> control plane (ollama + open-webui) ->
+# localhost SPA -> thin electron.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
