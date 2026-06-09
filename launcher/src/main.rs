@@ -448,6 +448,36 @@ fn find_fusermount() -> Option<String> {
     None
 }
 
+/// A prior run that crashed or was force-quit before teardown (the supervising
+/// test harness `kill`s the launcher; a user can Force-Quit it too) leaves the
+/// component still mounted at its FIXED cache `dest`. hdiutil / FUSE then refuse to
+/// mount onto the busy mountpoint — hdiutil reports a bare "Permission denied", and
+/// the dmg path has no extract fallback, so every subsequent launch would be wedged
+/// forever. Best-effort: if `dest` is already a mountpoint, tear that stale mount
+/// down so the fresh mount below can take it. No-op when `dest` isn't a mountpoint
+/// (the common first-run case) and on windows (its components are junctions, not mounts).
+#[cfg(unix)]
+fn detach_stale_mount(dest: &Path) {
+    if !is_mountpoint(dest) {
+        return;
+    }
+    log(&format!("{}: stale mount from a prior run — detaching before remount", dest.display()));
+    #[cfg(target_os = "macos")]
+    {
+        if !Command::new("hdiutil").arg("detach").arg(dest).status().map(|s| s.success()).unwrap_or(false) {
+            let _ = Command::new("hdiutil").arg("detach").arg("-force").arg(dest).status();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let fm = find_fusermount().unwrap_or_else(|| "fusermount".into());
+        if !Command::new(&fm).arg("-u").arg(dest).status().map(|s| s.success()).unwrap_or(false) {
+            // lazy-detach: a child mid-exit may still reference it; frees on last close.
+            let _ = Command::new(&fm).arg("-uz").arg(dest).status();
+        }
+    }
+}
+
 /// Make a component available at `dest`. Returns how it was provided (for teardown).
 fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract: bool) -> std::io::Result<MountKind> {
     // pre-extracted directory: windows' format (used in place). Only on windows —
@@ -477,6 +507,10 @@ fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract
             return Ok(MountKind::None);
         }
     }
+    // Self-heal a mountpoint leaked by a crashed/force-quit prior run before we try
+    // to mount onto it (else hdiutil/FUSE fail on the busy dest — "Permission denied").
+    #[cfg(unix)]
+    detach_stale_mount(dest);
     let squashfs = comp.join(format!("{base}.squashfs"));
     if squashfs.exists() {
         fs::create_dir_all(dest)?;
