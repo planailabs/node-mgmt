@@ -20,6 +20,11 @@ OUT="${4:?usage: import-build-component.sh <store-name> <src-dir> <nix-attr> <ou
 "$SCRIPT_DIR/store-import.sh" "$NAME" "$SRC"
 P="$(cd "$REPO_ROOT" && nix-build --impure nix/builds.nix -A "$ATTR" --no-out-link)"
 mkdir -p "$(dirname "$OUT")"
-# -L: copy the real file out of the read-only store so bundle/image can read it.
-cp -fL "$P" "$OUT"
-log "nix component -> $OUT ($(du -h "$OUT" | cut -f1))"
+# copy the real file/dir out of the read-only store so bundle/image can read it.
+# dir components (used in place on FAT32) need a writable recursive copy.
+if [ -d "$P" ]; then
+  rm -rf "$OUT"; cp -rL "$P" "$OUT"; chmod -R u+w "$OUT"
+else
+  cp -fL "$P" "$OUT"
+fi
+log "nix component -> $OUT ($(du -sh "$OUT" | cut -f1))"

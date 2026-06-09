@@ -84,7 +84,7 @@ in
   # win dir component needs no packing (used in place) — a derivation that just
   # materialises the imported tree, so nix-build -A has something to build.
   "runtime-win-x64-dir" = pkgs.runCommand "runtime-win-x64" { }
-    "cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")} $out";
+    "mkdir -p $out && cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")}/. $out/";
 
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
