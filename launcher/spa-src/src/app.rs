@@ -5,7 +5,6 @@ use dioxus_i18n::prelude::*;
 use dioxus_i18n::t;
 use futures_util::StreamExt;
 use gloo_net::eventsource::futures::EventSource;
-use serde_json::Value;
 use unic_langid::langid;
 
 use plan_ai_design::language_picker::LanguagePicker;
@@ -14,7 +13,7 @@ use plan_ai_design::theme_toggle::{
 };
 use plan_ai_design::{Button, ButtonSize, ButtonVariant};
 
-use crate::api::{self, Service};
+use crate::api::{self, Info, ServiceState, ServiceStatus};
 use crate::dashboard::Dashboard;
 use crate::models::Models;
 
@@ -28,25 +27,20 @@ pub enum Tab {
 /// State shared across views (provided via context; signals are Copy).
 #[derive(Clone, Copy)]
 pub struct AppState {
-    pub info: Signal<Option<Value>>,
-    pub services: Signal<Vec<Service>>,
+    pub info: Signal<Option<Info>>,
+    pub services: Signal<Vec<ServiceStatus>>,
     pub logs: Signal<String>,
     pub tab: Signal<Tab>,
 }
 
 impl AppState {
-    /// Whether a service id is in the "ready" state right now.
+    /// Whether a service id is in the ready state right now.
     pub fn ready(&self, id: &str) -> bool {
-        self.services.read().iter().any(|s| s.id == id && s.state == "ready")
+        self.services.read().iter().any(|s| s.id == id && s.state == ServiceState::Ready)
     }
     /// Whether llmfit (and thus the Models tab) is available.
     pub fn llmfit_ready(&self) -> bool {
-        self.info
-            .read()
-            .as_ref()
-            .and_then(|i| i.get("llmfit_url").cloned())
-            .map(|v| !v.is_null())
-            .unwrap_or(false)
+        self.info.read().as_ref().map(|i| i.llmfit_url.is_some()).unwrap_or(false)
     }
 }
 
@@ -138,11 +132,7 @@ pub fn App() -> Element {
     let tab = (state.tab)();
     let webui_ready = state.ready("webui");
     let models_ready = state.llmfit_ready();
-    let webui_url = state
-        .info
-        .read()
-        .as_ref()
-        .and_then(|i| i.get("webui_url").and_then(|v| v.as_str()).map(String::from));
+    let webui_url = state.info.read().as_ref().map(|i| i.webui_url.clone());
     // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
     // reactive — it tracks the 2s status poll). Mounting earlier would load before
     // the server accepts connections (blank/errored frame). If readiness later drops

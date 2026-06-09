@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use plan_ai_control_api::UpdateStatus;
+use plan_ai_control_api::{UpdateState, UpdateStatus};
 use plan_ai_manifest::{self as manifest, Manifest};
 
 use crate::{cache_root, net, paths};
@@ -39,7 +39,7 @@ impl Updater {
     }
     pub fn set_applying(&self, done: u64, total: u64) {
         let mut g = self.status.lock().unwrap();
-        g.state = "applying".into();
+        g.state = UpdateState::Applying;
         g.done = done;
         g.total = total;
     }
@@ -104,17 +104,17 @@ async fn fetch_remote(url: &str) -> anyhow::Result<Manifest> {
 }
 
 fn downloading(done: u64, total: u64, m: &Manifest) -> UpdateStatus {
-    UpdateStatus { state: "downloading".into(), done, total, version: m.version.clone(), commit: m.commit.clone(), message: None }
+    UpdateStatus { state: UpdateState::Downloading, done, total, version: m.version.clone(), commit: m.commit.clone(), message: None }
 }
 fn failed(msg: String) -> UpdateStatus {
-    UpdateStatus { state: "failed".into(), message: Some(msg), ..UpdateStatus::idle() }
+    UpdateStatus { state: UpdateState::Failed, message: Some(msg), ..UpdateStatus::idle() }
 }
 
 /// Check the remote manifest and pre-download the delta to staging (verified).
 /// Sets `up` state throughout; on success stashes a `Pending` for apply. Bootstrap
 /// (no local manifest) falls out naturally — the diff treats everything as new.
 pub async fn check_and_predownload(up: Handle) {
-    up.set(UpdateStatus { state: "checking".into(), ..UpdateStatus::idle() });
+    up.set(UpdateStatus { state: UpdateState::Checking, ..UpdateStatus::idle() });
     let url = update_url();
     let kept = read_platforms();
     let remote = match fetch_remote(&url).await {
@@ -127,7 +127,7 @@ pub async fn check_and_predownload(up: Handle) {
     let local = load_local();
     let plan = manifest::diff(local.as_ref(), &remote, &kept);
     if plan.to_download.is_empty() && plan.to_delete.is_empty() {
-        up.set(UpdateStatus { state: "idle".into(), version: remote.version, commit: remote.commit, ..UpdateStatus::idle() });
+        up.set(UpdateStatus { state: UpdateState::Idle, version: remote.version, commit: remote.commit, ..UpdateStatus::idle() });
         return;
     }
 
@@ -160,5 +160,5 @@ pub async fn check_and_predownload(up: Handle) {
     }
 
     *up.pending.lock().unwrap() = Some(Pending { staging, remote: remote.clone(), kept });
-    up.set(UpdateStatus { state: "ready".into(), done: total, total, version: remote.version, commit: remote.commit, message: None });
+    up.set(UpdateStatus { state: UpdateState::Ready, done: total, total, version: remote.version, commit: remote.commit, message: None });
 }

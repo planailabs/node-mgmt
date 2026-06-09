@@ -15,8 +15,10 @@ use axum::{
     Router,
 };
 use mac_mgmt_services::{protocol::Notification, Client};
-use plan_ai_control_api::{router, ControlApi, Platforms, ProxyReply, ServiceStatus, UpdateStatus};
-use serde_json::{json, Value};
+use plan_ai_control_api::{
+    router, Accel, ApiError, ControlApi, Gpu, Info, Platforms, ProxyReply, ServiceState,
+    ServiceStatus, UpdateState, UpdateStatus,
+};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::{config, control, paths, proxy};
@@ -111,42 +113,51 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         .unwrap_or_else(|| (StatusCode::NOT_FOUND, "not found").into_response())
 }
 
-/// Map a supervisor status + an OS-level health probe to {ready, starting, stopped}.
-async fn service_state(st: Option<&mac_mgmt_services::protocol::ServiceStatus>, health_url: &str) -> &'static str {
+/// Map a supervisor status + an OS-level health probe to a [`ServiceState`].
+async fn service_state(st: Option<&mac_mgmt_services::protocol::ServiceStatus>, health_url: &str) -> ServiceState {
     match st {
-        None => "stopped",
-        Some(s) if s.stopped => "stopped",
-        Some(s) if s.pid.is_none() => "starting",
+        None => ServiceState::Stopped,
+        Some(s) if s.stopped => ServiceState::Stopped,
+        Some(s) if s.pid.is_none() => ServiceState::Starting,
         Some(_) => {
             if control::http_ok(health_url).await {
-                "ready"
+                ServiceState::Ready
             } else {
-                "starting"
+                ServiceState::Starting
             }
         }
     }
 }
 
+/// The contract's canonical service id → the supervisor's internal name. The
+/// `webui` → `open-webui` alias lives here and nowhere else (standards §7).
+fn supervisor_name(svc: &str) -> &str {
+    if svc == "webui" {
+        "open-webui"
+    } else {
+        svc
+    }
+}
+
 impl ControlApi for RealApi {
-    fn info(&self) -> impl Future<Output = Value> + Send {
+    fn info(&self) -> impl Future<Output = Info> + Send {
         let gpu_json = self.gpu_json.clone();
         let llmfit_url = self.llmfit_url.clone();
         let webui_url = self.webui_url.clone();
         async move {
-            json!({
-                "webui_url": webui_url,
-                "llmfit_url": llmfit_url,
-                "ollama_port": config::ollama_port(),
-                "webui_port": config::webui_port(),
-                "models_dir": paths::models_dir().to_string_lossy(),
-                "data_dir": paths::data_dir().to_string_lossy(),
-                "accel": {
-                    "flavour": std::env::var("PLANAI_OLLAMA_FLAVOUR").ok(),
-                    "reason": std::env::var("PLANAI_OLLAMA_REASON").ok(),
-                    "llmfit_url": llmfit_url,
+            Info {
+                webui_url,
+                llmfit_url,
+                ollama_port: config::ollama_port(),
+                webui_port: config::webui_port(),
+                models_dir: paths::models_dir().to_string_lossy().into_owned(),
+                data_dir: paths::data_dir().to_string_lossy().into_owned(),
+                accel: Accel {
+                    flavour: std::env::var("PLANAI_OLLAMA_FLAVOUR").ok(),
+                    reason: std::env::var("PLANAI_OLLAMA_REASON").ok(),
                 },
-                "gpu": gpu_json.as_deref().and_then(|j| serde_json::from_str::<Value>(j).ok()),
-            })
+                gpu: gpu_json.as_deref().and_then(|j| serde_json::from_str::<Gpu>(j).ok()),
+            }
         }
     }
 
@@ -158,8 +169,8 @@ impl ControlApi for RealApi {
             let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
             let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
             vec![
-                ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama.into() },
-                ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui.into() },
+                ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama },
+                ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui },
             ]
         }
     }
@@ -176,7 +187,7 @@ impl ControlApi for RealApi {
     fn service_action(&self, svc: String, action: String) -> impl Future<Output = Result<(), String>> + Send {
         let client = self.client.clone();
         async move {
-            let svc = if svc == "webui" { "open-webui".to_string() } else { svc };
+            let svc = supervisor_name(&svc).to_string();
             let mut c = client.lock().await;
             let names: Vec<String> = if svc == "all" {
                 c.list().await.map(|l| l.into_iter().map(|x| x.name).collect()).unwrap_or_default()
@@ -184,11 +195,11 @@ impl ControlApi for RealApi {
                 vec![svc]
             };
             for n in &names {
+                // `action` is pre-validated by the shared handler (start|stop|restart).
                 let r = match action.as_str() {
                     "start" => c.start_service(n).await,
                     "stop" => c.stop_service(n).await,
-                    "restart" => c.restart_service(n).await,
-                    _ => return Err("unknown action".into()),
+                    _ => c.restart_service(n).await,
                 };
                 r.map_err(|e| e.to_string())?;
             }
@@ -208,7 +219,7 @@ impl ControlApi for RealApi {
     fn update_apply(&self) -> impl Future<Output = ()> + Send {
         // Only meaningful once Ready (a Pending is staged). Flag the apply + quit
         // Electron so main's wait returns and runs apply with the runtime down.
-        if self.updater.status().state == "ready" {
+        if self.updater.status().state == UpdateState::Ready {
             self.apply_requested.store(true, Ordering::SeqCst);
             if let Ok(mut g) = self.electron.lock() {
                 if let Some(child) = g.as_mut() {
@@ -240,16 +251,24 @@ impl ControlApi for RealApi {
 }
 
 /// Run a proxy call against the llmfit base, or a 503 if llmfit isn't running.
+/// Error bodies are `ApiError` JSON so the `application/json` the proxy sets is
+/// honest (standards §4).
 async fn proxy_or_unavailable<F, Fut>(base: Option<String>, call: F) -> ProxyReply
 where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = anyhow::Result<proxy::ProxyResponse>>,
 {
     let Some(b) = base else {
-        return ProxyReply { status: 503, body: b"model browser unavailable (llmfit not running)".to_vec() };
+        return err_reply(503, "model browser unavailable (llmfit not running)");
     };
     match call(b).await {
         Ok(r) => ProxyReply { status: r.status, body: r.body },
-        Err(e) => ProxyReply { status: 502, body: format!("llmfit proxy: {e}").into_bytes() },
+        Err(e) => err_reply(502, &format!("llmfit proxy: {e}")),
     }
+}
+
+/// A `ProxyReply` carrying an `ApiError` JSON body.
+fn err_reply(status: u16, message: &str) -> ProxyReply {
+    let body = serde_json::to_vec(&ApiError::new(message)).unwrap_or_default();
+    ProxyReply { status, body }
 }

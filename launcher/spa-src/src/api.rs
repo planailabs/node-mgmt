@@ -1,53 +1,77 @@
-//! Thin wasm HTTP client to the launcher's same-origin control API (/api/*).
-//! No CORS to worry about — the launcher serves both this SPA and the API.
+//! Thin wasm HTTP client to the launcher's same-origin control API (/api/*). No
+//! CORS — the launcher serves both this SPA and the API. Request/response types
+//! come from the shared `plan-ai-control-api` crate (the same the backends
+//! implement), so the SPA can't drift from the contract. See
+//! `standards/control-api.md`.
+//!
+//! Only the llmfit model-browser proxy (`/api/llmfit/*`) is read as untyped
+//! `Value` — it pass-through-proxies an upstream we don't own (standards §2).
 
-use gloo_net::http::Request;
-use serde::Deserialize;
+use gloo_net::http::{Request, Response};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// A service row as the launcher reports it (/api/status).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Service {
-    pub id: String,
-    pub name: String,
-    pub state: String,
+pub use plan_ai_control_api::{Info, Platforms, ServiceState, ServiceStatus, UpdateState, UpdateStatus};
+
+/// Pull the `{"error": ...}` body off a non-2xx response, else the HTTP status.
+async fn err_message(resp: Response) -> String {
+    let status = resp.status();
+    match resp.json::<plan_ai_control_api::ApiError>().await {
+        Ok(e) => e.error,
+        Err(_) => format!("HTTP {status}"),
+    }
 }
 
-pub async fn get_json(path: &str) -> Result<Value, String> {
+/// Typed GET into a contract DTO.
+pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
     let resp = Request::get(path).send().await.map_err(|e| e.to_string())?;
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(err_message(resp).await);
     }
-    resp.json::<Value>().await.map_err(|e| e.to_string())
+    resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
+/// Fire a command (POST). Succeeds on any 2xx (incl. the contract's 204) WITHOUT
+/// reading the body; surfaces `ApiError` on failure.
+pub async fn command(path: &str) -> Result<(), String> {
+    let resp = Request::post(path).send().await.map_err(|e| e.to_string())?;
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(err_message(resp).await)
+    }
+}
+
+/// Fire a command with a JSON body.
+pub async fn command_json(path: &str, body: Value) -> Result<(), String> {
+    let resp = Request::post(path).json(&body).map_err(|e| e.to_string())?.send().await.map_err(|e| e.to_string())?;
+    if resp.ok() {
+        Ok(())
+    } else {
+        Err(err_message(resp).await)
+    }
+}
+
+// --- llmfit proxy only: untyped upstream JSON (standards §2 exception) ------
+
+pub async fn get_json(path: &str) -> Result<Value, String> {
+    get::<Value>(path).await
 }
 
 pub async fn post_json(path: &str, body: Value) -> Result<Value, String> {
-    let resp = Request::post(path)
-        .json(&body)
-        .map_err(|e| e.to_string())?
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = Request::post(path).json(&body).map_err(|e| e.to_string())?.send().await.map_err(|e| e.to_string())?;
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(err_message(resp).await);
     }
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
-/// Fire-and-check a control action (start/stop/restart); body-less POST.
-pub async fn post_action(path: &str) -> Result<(), String> {
-    let resp = Request::post(path).send().await.map_err(|e| e.to_string())?;
-    if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    Ok(())
+// --- typed contract endpoints ----------------------------------------------
+
+pub async fn info() -> Result<Info, String> {
+    get("/api/info").await
 }
 
-pub async fn info() -> Result<Value, String> {
-    get_json("/api/info").await
-}
-
-pub async fn status() -> Result<Vec<Service>, String> {
-    let v = get_json("/api/status").await?;
-    serde_json::from_value(v).map_err(|e| e.to_string())
+pub async fn status() -> Result<Vec<ServiceStatus>, String> {
+    get("/api/status").await
 }

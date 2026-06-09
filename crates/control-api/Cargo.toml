@@ -2,11 +2,17 @@
 name = "plan-ai-control-api"
 version = "0.1.0"
 edition = "2021"
-description = "Shared control-plane HTTP surface for the plan.ai SPA: the ControlApi trait, request/response DTOs, and the axum router that wires /api/* to it. The launcher (real) and the mock-server are two implementors, so the routes + JSON shapes can't drift."
+description = "Shared control-plane HTTP contract for the plan.ai SPA. `types` (serde-only DTOs + state enums) is the source of truth both backends and the wasm SPA depend on; `server` (feature `server`, default-on) adds the ControlApi trait + axum router the launcher and mock implement. See standards/control-api.md."
+
+[features]
+default = ["server"]
+# The axum transport (ControlApi trait + router). Off for the wasm SPA, which only
+# needs the `types` DTOs and must not pull axum/tokio.
+server = ["dep:axum", "dep:tokio", "dep:tokio-stream"]
 
 [dependencies]
-axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["sync"], optional = true }
+tokio-stream = { version = "0.1", features = ["sync"], optional = true }

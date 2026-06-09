@@ -9,33 +9,26 @@ use plan_ai_design::{
     Button, ButtonSize, ButtonVariant, Card, Dot, HelpText, Kicker, PageHero, Pill, PillVariant,
 };
 
-use crate::api;
+use crate::api::{self, Platforms, ServiceState, UpdateState, UpdateStatus};
 use crate::app::{AppState, Tab};
 
-fn pill_variant(state: &str) -> PillVariant {
+fn pill_variant(state: ServiceState) -> PillVariant {
     match state {
-        "ready" => PillVariant::Ok,
-        "starting" => PillVariant::Warn,
-        "error" => PillVariant::Bad,
-        _ => PillVariant::Muted,
+        ServiceState::Ready => PillVariant::Ok,
+        ServiceState::Starting => PillVariant::Warn,
+        ServiceState::Error => PillVariant::Bad,
+        ServiceState::Stopped => PillVariant::Muted,
     }
 }
 
 /// Localised label for a service state (the wire value stays english).
-fn state_label(state: &str) -> String {
+fn state_label(state: ServiceState) -> String {
     match state {
-        "ready" => t!("state-ready"),
-        "starting" => t!("state-starting"),
-        "stopped" => t!("state-stopped"),
-        "error" => t!("state-error"),
-        other => other.to_string(),
+        ServiceState::Ready => t!("state-ready"),
+        ServiceState::Starting => t!("state-starting"),
+        ServiceState::Stopped => t!("state-stopped"),
+        ServiceState::Error => t!("state-error"),
     }
-}
-
-fn fact<'a>(info: &'a serde_json::Value, key: &str) -> String {
-    info.get(key)
-        .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())))
-        .unwrap_or_else(|| "—".into())
 }
 
 #[allow(non_snake_case)]
@@ -54,7 +47,7 @@ pub fn Dashboard() -> Element {
 
     let control = move |path: String| {
         spawn(async move {
-            let _ = api::post_action(&path).await;
+            let _ = api::command(&path).await;
         });
     };
 
@@ -73,7 +66,7 @@ pub fn Dashboard() -> Element {
                 for s in services.iter().cloned() {
                     Card { class: "card-pad flex items-center justify-between",
                         div { class: "flex items-center gap-3",
-                            Dot { variant: pill_variant(&s.state) }
+                            Dot { variant: pill_variant(s.state) }
                             div {
                                 div { class: "h-card", "{s.name}" }
                                 div { class: "help-xs",
@@ -82,7 +75,7 @@ pub fn Dashboard() -> Element {
                             }
                         }
                         div { class: "flex items-center gap-2",
-                            Pill { variant: pill_variant(&s.state), {state_label(&s.state)} }
+                            Pill { variant: pill_variant(s.state), {state_label(s.state)} }
                             Button {
                                 size: ButtonSize::Xs,
                                 variant: ButtonVariant::Secondary,
@@ -122,19 +115,19 @@ pub fn Dashboard() -> Element {
             if let Some(info) = info.as_ref() {
                 Card { class: "card-pad",
                     div { class: "grid grid-cols-2 md:grid-cols-4 gap-4 text-sm",
-                        Fact { label: t!("fact-ollama-port"), value: fact(info, "ollama_port") }
-                        Fact { label: t!("fact-webui-port"), value: fact(info, "webui_port") }
-                        Fact { label: t!("fact-models"), value: fact(info, "models_dir"), mono_muted: true }
-                        Fact { label: t!("fact-data"), value: fact(info, "data_dir"), mono_muted: true }
+                        Fact { label: t!("fact-ollama-port"), value: info.ollama_port.to_string() }
+                        Fact { label: t!("fact-webui-port"), value: info.webui_port.to_string() }
+                        Fact { label: t!("fact-models"), value: info.models_dir.clone(), mono_muted: true }
+                        Fact { label: t!("fact-data"), value: info.data_dir.clone(), mono_muted: true }
                     }
                     div { class: "mt-4 pt-3 border-t border-line",
                         div { class: "label", {t!("accel-label")} }
                         div { class: "flex items-baseline gap-2",
                             span { class: "font-mono text-fg-strong",
-                                {info.get("accel").and_then(|a| a.get("flavour")).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| t!("accel-bundled"))}
+                                {info.accel.flavour.clone().unwrap_or_else(|| t!("accel-bundled"))}
                             }
                             span { class: "help-xs td-muted",
-                                {info.get("accel").and_then(|a| a.get("reason")).and_then(|v| v.as_str()).map(|r| format!("— {r}")).unwrap_or_default()}
+                                {info.accel.reason.as_ref().map(|r| format!("— {r}")).unwrap_or_default()}
                             }
                         }
                     }
@@ -195,39 +188,33 @@ pub fn Dashboard() -> Element {
 /// and /api/platforms). Previewable against the mock server via `make ui`.
 #[allow(non_snake_case)]
 fn UpdatesCard() -> Element {
-    let mut status = use_signal(|| json!({ "state": "idle" }));
+    let mut status = use_signal(UpdateStatus::idle);
     let mut kept = use_signal(Vec::<String>::new);
     let mut available = use_signal(Vec::<String>::new);
 
     use_future(move || async move {
         loop {
-            if let Ok(v) = api::get_json("/api/update/status").await {
+            if let Ok(v) = api::get::<UpdateStatus>("/api/update/status").await {
                 status.set(v);
             }
             gloo_timers::future::TimeoutFuture::new(2000).await;
         }
     });
     use_future(move || async move {
-        if let Ok(v) = api::get_json("/api/platforms").await {
-            let arr = |k: &str| {
-                v.get(k)
-                    .and_then(|a| a.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
-                    .unwrap_or_default()
-            };
-            kept.set(arr("kept"));
-            available.set(arr("available"));
+        if let Ok(p) = api::get::<Platforms>("/api/platforms").await {
+            kept.set(p.kept);
+            available.set(p.available);
         }
     });
 
     let s = status.read();
-    let state = s.get("state").and_then(|v| v.as_str()).unwrap_or("idle").to_string();
-    let done = s.get("done").and_then(|v| v.as_u64()).unwrap_or(0);
-    let total = s.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-    let version = s.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let state = s.state;
+    let done = s.done;
+    let total = s.total;
+    let version = s.version.clone();
     drop(s);
     let pct: i64 = if total > 0 { (done * 100 / total) as i64 } else { 0 };
-    let busy = matches!(state.as_str(), "checking" | "downloading" | "applying");
+    let busy = matches!(state, UpdateState::Checking | UpdateState::Downloading | UpdateState::Applying);
     let kept_now = kept.read().clone();
     let avail = available.read().clone();
 
@@ -239,28 +226,28 @@ fn UpdatesCard() -> Element {
                     size: ButtonSize::Xs,
                     variant: ButtonVariant::Secondary,
                     disabled: busy,
-                    onclick: move |_| { spawn(async move { let _ = api::post_json("/api/update/check", json!({})).await; }); },
+                    onclick: move |_| { spawn(async move { let _ = api::command("/api/update/check").await; }); },
                     {t!("btn-check-updates")}
                 }
             }
             div { class: "text-sm",
-                {match state.as_str() {
-                    "downloading" => rsx! { span { class: "text-warn-strong", {t!("upd-downloading", pct: pct)} } },
-                    "checking" => rsx! { span { class: "td-muted", {t!("upd-checking")} } },
-                    "applying" => rsx! { span { class: "text-warn-strong", {t!("upd-applying")} } },
-                    "failed" => rsx! { span { class: "text-warn-strong", {t!("upd-failed")} } },
-                    "ready" => rsx! {
+                {match state {
+                    UpdateState::Downloading => rsx! { span { class: "text-warn-strong", {t!("upd-downloading", pct: pct)} } },
+                    UpdateState::Checking => rsx! { span { class: "td-muted", {t!("upd-checking")} } },
+                    UpdateState::Applying => rsx! { span { class: "text-warn-strong", {t!("upd-applying")} } },
+                    UpdateState::Failed => rsx! { span { class: "text-warn-strong", {t!("upd-failed")} } },
+                    UpdateState::Ready => rsx! {
                         div { class: "flex items-center gap-3",
                             span { class: "text-success font-medium", {t!("upd-ready", version: version.clone())} }
                             Button {
                                 size: ButtonSize::Sm,
                                 variant: ButtonVariant::Accent,
-                                onclick: move |_| { spawn(async move { let _ = api::post_json("/api/update/apply", json!({})).await; }); },
+                                onclick: move |_| { spawn(async move { let _ = api::command("/api/update/apply").await; }); },
                                 {t!("btn-apply-update")}
                             }
                         }
                     },
-                    _ => rsx! { span { class: "td-muted", {t!("upd-idle")} } },
+                    UpdateState::Idle => rsx! { span { class: "td-muted", {t!("upd-idle")} } },
                 }}
             }
             div { class: "pt-2 border-t border-line space-y-2",
@@ -288,7 +275,7 @@ fn UpdatesCard() -> Element {
                         variant: ButtonVariant::Primary,
                         onclick: move |_| {
                             let k = kept.read().clone();
-                            spawn(async move { let _ = api::post_json("/api/platforms", json!({ "platforms": k })).await; });
+                            spawn(async move { let _ = api::command_json("/api/platforms", json!({ "platforms": k })).await; });
                         },
                         {t!("btn-save")}
                     }

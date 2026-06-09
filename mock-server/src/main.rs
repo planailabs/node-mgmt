@@ -9,15 +9,18 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use plan_ai_control_api::{router, ControlApi, Platforms, ProxyReply, ServiceStatus, UpdateStatus};
+use plan_ai_control_api::{
+    router, Accel, ControlApi, Gpu, Info, Platforms, ProxyReply, ServiceState, ServiceStatus,
+    UpdateState, UpdateStatus,
+};
 use rand::Rng;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
 struct State {
-    ollama: String,
-    webui: String,
-    upd_state: String,
+    ollama: ServiceState,
+    webui: ServiceState,
+    update: UpdateState,
     upd_done: u64,
     upd_total: u64,
     kept: Vec<String>,
@@ -34,9 +37,9 @@ async fn main() {
     let (logs, _rx) = broadcast::channel::<String>(256);
     let mock = Arc::new(Mock {
         s: Mutex::new(State {
-            ollama: "starting".into(),
-            webui: "stopped".into(),
-            upd_state: "idle".into(),
+            ollama: ServiceState::Starting,
+            webui: ServiceState::Stopped,
+            update: UpdateState::Idle,
             upd_done: 0,
             upd_total: 100,
             kept: vec!["linux".into()],
@@ -54,17 +57,28 @@ async fn main() {
 
 /// Random-walk services, advance an in-flight update + downloads, emit fake logs.
 async fn ticker(mock: Arc<Mock>) {
-    let next = |s: &str, rng: &mut rand::rngs::ThreadRng| -> String {
-        match s {
-            "stopped" => "starting",
-            "starting" => {
+    let next = |st: ServiceState, rng: &mut rand::rngs::ThreadRng| -> ServiceState {
+        match st {
+            ServiceState::Stopped => ServiceState::Starting,
+            ServiceState::Starting => {
                 let r: f64 = rng.gen();
-                if r < 0.6 { "ready" } else if r < 0.7 { "error" } else { "starting" }
+                if r < 0.6 {
+                    ServiceState::Ready
+                } else if r < 0.7 {
+                    ServiceState::Error
+                } else {
+                    ServiceState::Starting
+                }
             }
-            "ready" => if rng.gen::<f64>() < 0.9 { "ready" } else { "starting" },
-            _ => "starting",
+            ServiceState::Ready => {
+                if rng.gen::<f64>() < 0.9 {
+                    ServiceState::Ready
+                } else {
+                    ServiceState::Starting
+                }
+            }
+            ServiceState::Error => ServiceState::Starting,
         }
-        .to_string()
     };
     let lines = [
         "[ollama] llama runner started",
@@ -78,20 +92,20 @@ async fn ticker(mock: Arc<Mock>) {
         let line = {
             let mut rng = rand::thread_rng();
             let mut m = mock.s.lock().unwrap();
-            m.ollama = next(&m.ollama.clone(), &mut rng);
-            m.webui = next(&m.webui.clone(), &mut rng);
-            match m.upd_state.as_str() {
-                "checking" => {
-                    m.upd_state = "downloading".into();
+            m.ollama = next(m.ollama, &mut rng);
+            m.webui = next(m.webui, &mut rng);
+            match m.update {
+                UpdateState::Checking => {
+                    m.update = UpdateState::Downloading;
                     m.upd_done = 0;
                 }
-                "downloading" => {
+                UpdateState::Downloading => {
                     m.upd_done = (m.upd_done + rng.gen_range(5..20)).min(m.upd_total);
                     if m.upd_done >= m.upd_total {
-                        m.upd_state = "ready".into();
+                        m.update = UpdateState::Ready;
                     }
                 }
-                "applying" => {
+                UpdateState::Applying => {
                     m.upd_done = (m.upd_done + rng.gen_range(8..25)).min(m.upd_total);
                 }
                 _ => {}
@@ -108,25 +122,31 @@ async fn ticker(mock: Arc<Mock>) {
 }
 
 impl ControlApi for Mock {
-    fn info(&self) -> impl Future<Output = Value> + Send {
-        let kept = self.s.lock().unwrap().kept.clone();
+    fn info(&self) -> impl Future<Output = Info> + Send {
         async move {
-            json!({
-                "webui_url": "http://127.0.0.1:8080",
-                "llmfit_url": "http://127.0.0.1:8787",
-                "ollama_port": 11434, "webui_port": 8080,
-                "models_dir": "/Volumes/PLANAI/models", "data_dir": "/Volumes/PLANAI/data",
-                "accel": { "flavour": "cpu", "reason": "no GPU detected (mock)" },
-                "gpu": { "gpu_name": "Apple M-mock", "gpu_vram_gb": 16.0, "backend": "metal", "total_ram_gb": 32.0, "cpu_name": "mock cpu" },
-                "platforms": kept,
-            })
+            Info {
+                webui_url: "http://127.0.0.1:8080".into(),
+                llmfit_url: Some("http://127.0.0.1:8787".into()),
+                ollama_port: 11434,
+                webui_port: 8080,
+                models_dir: "/Volumes/PLANAI/models".into(),
+                data_dir: "/Volumes/PLANAI/data".into(),
+                accel: Accel { flavour: Some("cpu".into()), reason: Some("no GPU detected (mock)".into()) },
+                gpu: Some(Gpu {
+                    gpu_name: Some("Apple M-mock".into()),
+                    gpu_vram_gb: Some(16.0),
+                    backend: Some("metal".into()),
+                    total_ram_gb: Some(32.0),
+                    cpu_name: Some("mock cpu".into()),
+                }),
+            }
         }
     }
     fn status(&self) -> impl Future<Output = Vec<ServiceStatus>> + Send {
         let m = self.s.lock().unwrap();
         let v = vec![
-            ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: m.ollama.clone() },
-            ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: m.webui.clone() },
+            ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: m.ollama },
+            ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: m.webui },
         ];
         async move { v }
     }
@@ -139,13 +159,13 @@ impl ControlApi for Mock {
     fn service_action(&self, svc: String, action: String) -> impl Future<Output = Result<(), String>> + Send {
         {
             let mut m = self.s.lock().unwrap();
-            let target = if action == "stop" { "stopped" } else { "starting" };
+            let target = if action == "stop" { ServiceState::Stopped } else { ServiceState::Starting };
             match svc.as_str() {
-                "ollama" => m.ollama = target.into(),
-                "webui" => m.webui = target.into(),
+                "ollama" => m.ollama = target,
+                "webui" => m.webui = target,
                 "all" => {
-                    m.ollama = target.into();
-                    m.webui = target.into();
+                    m.ollama = target;
+                    m.webui = target;
                 }
                 _ => {}
             }
@@ -155,7 +175,7 @@ impl ControlApi for Mock {
     fn update_status(&self) -> impl Future<Output = UpdateStatus> + Send {
         let m = self.s.lock().unwrap();
         let st = UpdateStatus {
-            state: m.upd_state.clone(),
+            state: m.update,
             done: m.upd_done,
             total: m.upd_total,
             version: "0.2.0".into(),
@@ -165,13 +185,13 @@ impl ControlApi for Mock {
         async move { st }
     }
     fn update_check(&self) -> impl Future<Output = ()> + Send {
-        self.s.lock().unwrap().upd_state = "checking".into();
+        self.s.lock().unwrap().update = UpdateState::Checking;
         async {}
     }
     fn update_apply(&self) -> impl Future<Output = ()> + Send {
         {
             let mut m = self.s.lock().unwrap();
-            m.upd_state = "applying".into();
+            m.update = UpdateState::Applying;
             m.upd_done = 0;
         }
         async {}

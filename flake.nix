@@ -77,7 +77,7 @@
           pname = "plan-ai-spa";
           version = "0.1.0";
           # whole flake source (git-tracked only): needs spa-src + the
-          # third_party/plan-ai-design path dep.
+          # third_party/plan-ai-design and crates/control-api path deps.
           src = ./.;
           # the crate (and its Cargo.lock) live in this subdir.
           cargoRoot = "launcher/spa-src";

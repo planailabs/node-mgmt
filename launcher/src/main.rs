@@ -955,13 +955,14 @@ fn run_self_update() -> ! {
     let up = update::Updater::new();
     rt.block_on(update::check_and_predownload(up.clone()));
     let st = up.status();
-    log(&format!("self-update: state={} {}/{}", st.state, st.done, st.total));
-    if st.state == "ready" {
+    use plan_ai_control_api::UpdateState;
+    log(&format!("self-update: state={:?} {}/{}", st.state, st.done, st.total));
+    if st.state == UpdateState::Ready {
         let applied = apply::run(&up);
         log(&format!("self-update: applied={applied}"));
         std::process::exit(if applied { 0 } else { 1 });
     }
-    std::process::exit(if st.state == "idle" { 0 } else { 1 });
+    std::process::exit(if st.state == UpdateState::Idle { 0 } else { 1 });
 }
 
 fn main() {
