@@ -21,7 +21,15 @@ POOL="$DIST_DIR/bundle/components"
 
 log "remote mac test on '$HOST'"
 REMOTE="$(ssh "$HOST" 'mktemp -d /tmp/planai-test.XXXXXX')" || die "ssh $HOST failed"
-cleanup() { ssh "$HOST" "hdiutil detach '$REMOTE/mnt' -force >/dev/null 2>&1; rm -rf '$REMOTE'" 2>/dev/null || true; }
+# Tear down the launcher dmg AND the component dmgs it mounts under the fixed cache
+# (~/Library/Caches/plan-ai/root/dist/*). We `kill` the launcher below rather than
+# letting it teardown, so those component mounts would otherwise leak and a later run
+# (or `hdiutil`) would hit "Permission denied" mounting onto the busy mountpoint. The
+# launcher self-heals such stale mounts on its next start, but a clean teardown keeps
+# the box tidy regardless.
+cleanup() {
+  ssh "$HOST" 'mount | awk "/plan-ai\/root\/dist/ {print \$1}" | while read d; do hdiutil detach "$d" -force >/dev/null 2>&1; done; hdiutil detach "'"$REMOTE"'/mnt" -force >/dev/null 2>&1; rm -rf "'"$REMOTE"'"' 2>/dev/null || true
+}
 trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
