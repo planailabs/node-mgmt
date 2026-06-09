@@ -262,6 +262,19 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     stamp_edge("app", &srcs(&["app/package.json", "app/package-lock.json"]), "(cd app && npm ci)", "electron deps");
     stamp_edge("spa", &src_tree("launcher/spa-src"), "./scripts/build-spa.sh", "dioxus spa");
 
+    // Open-WebUI frontend via the store-import layer (ninja runs the impure boundary,
+    // nix builds offline). ow-inputs: the networked npm ci + pyodide:fetch, imported
+    // into the store. stores: regenerate nix/stores.nix from the imports. ow-frontend:
+    // the pure nix vite build, linked at dist/ow-frontend. (Standalone for now; the
+    // wheel will consume it in a later slice.)
+    let mut ow_in_deps = vec![stamp("download")];
+    ow_in_deps.extend(srcs(&["scripts/fetch-ow-frontend.sh", "scripts/store-import.sh", "scripts/lib.sh"]));
+    stamp_edge("ow-inputs", &ow_in_deps, "./scripts/fetch-ow-frontend.sh", "ow frontend inputs (npm ci + pyodide)");
+    stamp_edge("stores", &[stamp("ow-inputs")], "nix run .#xtask -- gen-stores", "gen nix/stores.nix");
+    let mut owf_deps = vec![stamp("stores")];
+    owf_deps.extend(srcs(&["nix/builds.nix", "flake.nix"]));
+    stamp_edge("ow-frontend", &owf_deps, "nix-build --impure nix/builds.nix -A ow-frontend -o dist/ow-frontend", "nix: ow-frontend (vite, offline)");
+
     // runtimes per target (need the downloaded interpreter + the wheel)
     let mut runtime_stamps = Vec::new();
     for t in targets {
@@ -335,7 +348,7 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     edges.push_str(&format!("build dist/plan-ai-update.tar.gz: gen {}\n  cmd = ./scripts/make-update-tarball.sh\n  desc = update tarball\n\n", tar_deps.join(" ")));
 
     // phony aliases so `ninja <name>` (and the Makefile) read naturally
-    for s in ["download", "wheel", "app", "spa", "components", "models"] {
+    for s in ["download", "wheel", "app", "spa", "components", "models", "ow-inputs", "stores", "ow-frontend"] {
         edges.push_str(&format!("build {s}: phony {}\n", stamp(s)));
     }
     // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)

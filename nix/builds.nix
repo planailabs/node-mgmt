@@ -31,6 +31,35 @@ in
     '') stores)}
     cat $out/report.txt
   '';
+
+  # Open-WebUI frontend, built OFFLINE from store-imported inputs (the networked
+  # `npm ci` + `pyodide:fetch` happen outside, in ninja; their results are imported).
+  # We run `vite build` directly — NOT `npm run build`, which would re-run the
+  # networked pyodide:fetch. node_modules + static/pyodide are symlinked from the
+  # store (read-only is fine); only the small source is copied so it's writable.
+  ow-frontend = pkgs.stdenv.mkDerivation {
+    name = "ow-frontend";
+    nativeBuildInputs = [ pkgs.nodejs_22 ];
+    dontUnpack = true;
+    buildPhase = ''
+      runHook preBuild
+      export HOME="$TMPDIR"
+      # Copy (not symlink) node_modules: vite's config loader resolves symlinks via
+      # esbuild, which would chase a symlinked node_modules to its real store-path
+      # name and then fail to find sibling packages (kleur, rollup, …). A real
+      # ./node_modules dir resolves correctly for every tool. `cp -r` keeps exec bits
+      # (esbuild's binary needs them — --no-preserve=mode would strip them -> EACCES);
+      # chmod -R u+w then makes the store's read-only copies writable.
+      cp -r ${stores.ow-src or (throw "ow-src not imported — run scripts/store-import.sh")} src
+      chmod -R u+w src && cd src
+      cp -r ${stores.ow-node-modules} node_modules && chmod -R u+w node_modules
+      mkdir -p static && cp -r ${stores.ow-pyodide} static/pyodide && chmod -R u+w static/pyodide
+      # invoke node directly: the .bin shims use `#!/usr/bin/env node`, absent in the sandbox
+      node node_modules/vite/bin/vite.js build
+      runHook postBuild
+    '';
+    installPhase = "cp -r build $out";
+  };
 }
 # expose each import directly too (handy for `nix-build --impure nix/builds.nix -A <name>`)
 // stores
