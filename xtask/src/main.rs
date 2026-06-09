@@ -266,6 +266,12 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
             stamp_edge("comp-ollama-darwin", &deps,
                 "./scripts/nix-component.sh ollama-darwin-dmg dist/components/ollama-darwin.dmg",
                 "nix dmg: ollama-darwin");
+        } else if name == "ollama-windows-amd64" {
+            // win dir extracted in nix from the ollamaComponents repack
+            deps.extend(nix_comp_srcs.iter().cloned());
+            stamp_edge("comp-ollama-windows-amd64", &deps,
+                "./scripts/nix-component.sh ollama-windows-amd64-dir dist/components/ollama-windows-amd64",
+                "nix dir: ollama-windows-amd64");
         } else {
             deps.extend(pack_srcs.iter().cloned());
             stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));

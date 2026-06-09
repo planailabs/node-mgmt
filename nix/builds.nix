@@ -59,15 +59,19 @@ let
         umount $TMPDIR/mnt
         ${libdmg}/bin/dmg dmg $raw $out
       '');
-  ollama-darwin-extracted = pkgs.runCommand "ollama-darwin" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
-    "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-darwin.tar.gz -C $out";
+  # an ollama flavour extracted to a plain directory (the repack is already a store
+  # path). The windows component ships as a dir (used in place on FAT32); darwin's
+  # extracted tree feeds mkDmg.
+  mkOllamaDir = key: pkgs.runCommand "ollama-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
+    "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C $out";
 in
 {
   "ollama-linux-amd64-squashfs" = mkOllamaSqfs "linux-amd64";
   "ollama-linux-arm64-squashfs" = mkOllamaSqfs "linux-arm64";
   "ollama-linux-amd64-rocm-squashfs" = mkOllamaSqfs "linux-amd64-rocm";
   "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
-  "ollama-darwin-dmg" = mkDmg { name = "ollama-darwin"; src = ollama-darwin-extracted; };
+  "ollama-darwin-dmg" = mkDmg { name = "ollama-darwin"; src = mkOllamaDir "darwin"; };
+  "ollama-windows-amd64-dir" = mkOllamaDir "windows-amd64";
 
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
