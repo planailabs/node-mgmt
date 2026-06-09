@@ -262,6 +262,18 @@ emit_nixos_fhs() {
 # then plan.ai.app. The launcher then finds the shared components/ pool on the USB
 # (it scans /Volumes/* — see components_dir() in launcher/src/main.rs).
 build_mac_launcher_app() {
+  local DMG="$OUT/plan-ai.dmg"; rm -f "$DMG"
+  # Ad-hoc default (no cert): the whole wrap+sign+dmg is pure + offline, so let nix
+  # build it (launcher-mac-arm64-dmg: plan.ai.app, rcodesign ad-hoc, mkDmg in a VM —
+  # no host sudo loop-mount). The VM mount + cp -a preserves the .app's exec bit +
+  # signature. nix owns the build + content-addressed cache.
+  if [ -z "${MAC_P12:-}" ]; then
+    "$SCRIPT_DIR/nix-component.sh" launcher-mac-arm64-dmg "$DMG"
+    warn "MAC_P12 unset — launcher .app ad-hoc signed in nix (skipping verify)"
+    log "mac launcher (nix) -> $DMG (mount it, then double-click plan.ai.app)"
+    return
+  fi
+  # Real cert signing reads a secret p12 (impure) → stays imperative on the host.
   local L; L="$(nix_launcher launcher-mac-arm64 plan-ai)"
   local STAGE; STAGE="$(mktemp -d)"; local LAPP="$STAGE/plan.ai.app"
   mkdir -p "$LAPP/Contents/MacOS" "$LAPP/Contents/Resources"
@@ -283,19 +295,16 @@ build_mac_launcher_app() {
 </dict></plist>
 EOF
   printf 'APPL????' > "$LAPP/Contents/PkgInfo"
-  if [ -n "${MAC_P12:-}" ]; then
-    rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$LAPP"
-    # verify only a real signature — ad-hoc sigs always "fail" verify (rcodesign
-    # prints "problems reported during verification"), which is just noise.
-    rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
-  else rcodesign sign "$LAPP"; warn "MAC_P12 unset — launcher .app ad-hoc signed (skipping verify)"; fi
+  rcodesign sign --p12-file "$MAC_P12" --p12-password "${MAC_P12_PASS:-}" --code-signature-flags runtime "$LAPP"
+  # verify only a real signature — ad-hoc sigs always "fail" verify (rcodesign
+  # prints "problems reported during verification"), which is just noise.
+  rcodesign verify "$LAPP/Contents/MacOS/plan-ai" 2>&1 | tail -1 || true
   # Wrap the signed .app in a dmg (volume "plan.ai") so it survives the FAT32 USB
   # with exec bit + signature intact. emit_hfsplus_dmg copies the staging dir's
   # contents, so the dmg volume holds plan.ai.app at its root.
-  local DMG="$OUT/plan-ai.dmg"; rm -f "$DMG"
   emit_hfsplus_dmg "$STAGE" "$DMG" "plan.ai"
   rm -rf "$STAGE"
-  log "mac launcher -> $DMG (mount it, then double-click plan.ai.app)"
+  log "mac launcher (cert-signed) -> $DMG (mount it, then double-click plan.ai.app)"
 }
 
 sign_windows() {  # optional Authenticode signing via osslsigncode
