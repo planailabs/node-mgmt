@@ -308,15 +308,26 @@ fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32>
     log(&format!("NixOS FHS: entering sandbox (store provided via {mode})"));
     let self_exe = std::env::current_exe().unwrap_or_default();
     let mut cmd = Command::new(&bwrap);
-    cmd.args(["--dev-bind", "/", "/"]); // expose host (incl. the FUSE-mounted components)
+    cmd.args(["--dev-bind", "/", "/"]); // expose host (incl. host /nix/store + the FUSE-mounted components)
     if mode == "overlay" {
-        // Union the closure over the host store — both sets of /nix/store/<hash> resolve.
+        // Union the closure over the host store in ONE overlay mount — both sets of
+        // /nix/store/<hash> resolve (needs unprivileged overlayfs).
         cmd.arg("--overlay-src").arg(&store_root)
             .arg("--overlay-src").arg("/nix/store")
             .args(["--ro-overlay", "/nix/store"]);
     } else {
-        // Replace /nix/store with the closure (self-contained; needs only userns).
-        cmd.arg("--ro-bind").arg(&store_root).arg("/nix/store");
+        // Poor-man's union (needs only userns): keep the host store (already exposed by
+        // --dev-bind / /) and bind each closure path ON TOP. Unlike replacing /nix/store,
+        // this keeps host paths that inherited env points at (FONTCONFIG_FILE,
+        // LOCALE_ARCHIVE, GDK_PIXBUF_MODULE_FILE, …) resolvable — replacing them crashed
+        // the renderer (skia/fontconfig). Hash-named dirs never collide.
+        if let Ok(rd) = fs::read_dir(&store_root) {
+            let mut names: Vec<_> = rd.flatten().map(|e| e.file_name()).collect();
+            names.sort();
+            for name in names {
+                cmd.arg("--ro-bind").arg(store_root.join(&name)).arg(Path::new("/nix/store").join(&name));
+            }
+        }
     }
     cmd.arg("--").arg(&wrapper).arg(&self_exe).args(std::env::args_os().skip(1))
         .env("PLANAI_FHS_REEXEC", "1");
