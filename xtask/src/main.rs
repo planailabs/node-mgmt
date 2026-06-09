@@ -274,6 +274,9 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     let mut owf_deps = vec![stamp("stores")];
     owf_deps.extend(srcs(&["nix/builds.nix", "flake.nix"]));
     stamp_edge("ow-frontend", &owf_deps, "nix-build --impure nix/builds.nix -A ow-frontend -o dist/ow-frontend", "nix: ow-frontend (vite, offline)");
+    // the platform-agnostic open_webui wheel, built offline in nix (hatchling
+    // force-includes the nix ow-frontend; the custom npm hook is stripped).
+    stamp_edge("wheel-nix", &owf_deps.clone(), "nix-build --impure nix/builds.nix -A wheel -o dist/wheel-nix", "nix: open_webui wheel (offline)");
 
     // runtimes per target (need the downloaded interpreter + the wheel)
     let mut runtime_stamps = Vec::new();
@@ -348,7 +351,7 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     edges.push_str(&format!("build dist/plan-ai-update.tar.gz: gen {}\n  cmd = ./scripts/make-update-tarball.sh\n  desc = update tarball\n\n", tar_deps.join(" ")));
 
     // phony aliases so `ninja <name>` (and the Makefile) read naturally
-    for s in ["download", "wheel", "app", "spa", "components", "models", "ow-inputs", "stores", "ow-frontend"] {
+    for s in ["download", "wheel", "app", "spa", "components", "models", "ow-inputs", "stores", "ow-frontend", "wheel-nix"] {
         edges.push_str(&format!("build {s}: phony {}\n", stamp(s)));
     }
     // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)
