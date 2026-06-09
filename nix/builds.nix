@@ -14,7 +14,11 @@
 # (A from-source open_webui wheel/frontend built on this same foundation lives in
 # archive/from-source-openwebui/ — not shipped; the runtime uses the PyPI wheel FOD.)
 let
-  flake = builtins.getFlake (toString ../.);
+  # git+file (not a bare path) so the flake source is the GIT tree — tracked files
+  # only. A bare `toString ../.` is a `path:` flakeref that copies the WHOLE repo,
+  # including the multi-GB gitignored dist/, into the store on every nix-build
+  # (filled the disk + broke when a dist/ file changed mid-copy).
+  flake = builtins.getFlake "git+file://${toString ../.}";
   pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
   lib = pkgs.lib;
   stores = import ./stores.nix;
@@ -39,9 +43,11 @@ let
     rootModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" "virtio_balloon"
       "virtio_rng" "ext4" "virtiofs" "crc32c" "loop" "hfsplus" ];
   };
-  mkDmg = { name, src, vol ? "PlanAI" }:
+  # memSize must exceed the bare HFS+ raw (it lives in the VM's RAM tmpfs) — bump it
+  # for large components (the runtime). Host has 30G; 6G is plenty for a ~2.7G raw.
+  mkDmg = { name, src, vol ? "PlanAI", memSize ? 2048 }:
     vmTools.runInLinuxVM (pkgs.runCommand "${name}.dmg"
-      { nativeBuildInputs = [ pkgs.hfsprogs pkgs.util-linux ]; memSize = 2048; }
+      { nativeBuildInputs = [ pkgs.hfsprogs pkgs.util-linux ]; inherit memSize; }
       ''
         raw=$TMPDIR/raw.hfs
         # size from du -l (each hard-link name counted, since cp breaks them) + a
@@ -74,8 +80,11 @@ in
   # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
   # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
   "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
-  "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); };
-  "runtime-win-x64-dir" = stores.runtime-win-x64 or (throw "runtime-win-x64 not imported");
+  "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); memSize = 6144; };
+  # win dir component needs no packing (used in place) — a derivation that just
+  # materialises the imported tree, so nix-build -A has something to build.
+  "runtime-win-x64-dir" = pkgs.runCommand "runtime-win-x64" { }
+    "cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")} $out";
 
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
