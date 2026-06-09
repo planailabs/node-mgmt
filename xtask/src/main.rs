@@ -475,14 +475,87 @@ fn tarball(a: TarballArgs) -> Result<()> {
     // under files/<path> (no GB copy). manifest.json sits beside it at the root.
     std::os::unix::fs::symlink(&root, stage.join("files"))?;
     std::fs::write(stage.join("manifest.json"), m.to_json_pretty())?;
+    // A human landing page served by the update host on any unknown path: explains
+    // what this server is and links to the three launcher binaries (under files/).
+    std::fs::write(stage.join("404.html"), landing_404(&a.url))?;
     if let Some(parent) = a.out.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    run(Command::new("tar").arg("-C").arg(&stage).arg("-czhf").arg(&a.out).arg("manifest.json").arg("files"))
-        .context("creating tarball")?;
+    // Prefer pigz (parallel gzip) — the multi-GB update tarball is otherwise gzipped
+    // single-threaded. The output is plain gzip the launcher's tar reads identically;
+    // fall back to tar's built-in gzip (-z) when pigz isn't on PATH.
+    let mut cmd = Command::new("tar");
+    cmd.arg("-C").arg(&stage);
+    if which::which("pigz").is_ok() {
+        cmd.args(["-I", "pigz"]);
+    } else {
+        cmd.arg("-z");
+    }
+    cmd.arg("-chf").arg(&a.out).arg("manifest.json").arg("404.html").arg("files");
+    run(&mut cmd).context("creating tarball")?;
     let _ = std::fs::remove_dir_all(&stage);
     eprintln!("==> update tarball -> {} ({} files)", a.out.display(), m.files.len());
     Ok(())
+}
+
+/// The update host's 404 / landing page. Self-contained (inline CSS borrowing the
+/// plan-ai-design tokens — brand orange, cream canvas, the sans/mono stacks — so no
+/// asset fetch), explaining what the server is and linking the three launcher
+/// binaries with ABSOLUTE URLs (off `base`) so the page works served at any path.
+fn landing_404(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plan.ai update server — 404</title>
+<style>
+  :root {{
+    --bg:#f0ede4; --surface:#fff; --fg:#161a22; --fg-strong:#0b0f15;
+    --fg-muted:#686a6e; --line:#e0dcd1; --brand:#ea580c; --brand-strong:#c2410c;
+    --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Inter Tight",Inter,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--fg); font-family:var(--sans); line-height:1.55; padding:2rem; }}
+  .card {{ background:var(--surface); border:1px solid var(--line); border-radius:14px;
+          max-width:34rem; width:100%; padding:2.25rem 2.5rem; }}
+  .tag {{ font-family:var(--mono); font-size:.72rem; letter-spacing:.09em; text-transform:uppercase;
+         color:var(--brand); margin:0 0 .6rem; }}
+  h1 {{ font-size:1.9rem; margin:0; color:var(--fg-strong); letter-spacing:-.01em; }}
+  p {{ color:var(--fg-muted); margin:.65rem 0 0; }}
+  code {{ font-family:var(--mono); font-size:.85em; }}
+  .dl {{ list-style:none; padding:0; margin:1.6rem 0 0; display:grid; gap:.55rem; }}
+  .dl a {{ display:flex; justify-content:space-between; align-items:center; gap:1rem;
+          text-decoration:none; color:var(--fg); font-weight:600;
+          border:1px solid var(--line); border-radius:10px; padding:.8rem 1rem; }}
+  .dl a:hover {{ border-color:var(--brand); color:var(--brand-strong); }}
+  .dl .os {{ font-family:var(--mono); font-size:.76rem; color:var(--fg-muted); font-weight:400; }}
+  footer {{ margin-top:1.6rem; font-family:var(--mono); font-size:.7rem; color:var(--fg-muted); }}
+</style>
+</head>
+<body>
+  <main class="card">
+    <p class="tag">404 · not found</p>
+    <h1>plan.ai update server</h1>
+    <p>This host serves the offline update bundle for the <strong>plan.ai USB</strong>: the
+       launcher fetches <code>manifest.json</code> and the files under <code>/files/</code> to
+       update itself in place. There is nothing to browse at this path.</p>
+    <p>Download the launcher for your platform:</p>
+    <ul class="dl">
+      <li><a href="{base}/files/plan-ai.exe"><span>plan.ai for Windows</span><span class="os">plan-ai.exe</span></a></li>
+      <li><a href="{base}/files/plan-ai.dmg"><span>plan.ai for macOS</span><span class="os">plan-ai.dmg</span></a></li>
+      <li><a href="{base}/files/plan-ai.linux.exe"><span>plan.ai for Linux</span><span class="os">plan-ai.linux.exe</span></a></li>
+    </ul>
+    <footer>{base}</footer>
+  </main>
+</body>
+</html>
+"##
+    )
 }
 
 fn run(cmd: &mut Command) -> Result<()> {
@@ -523,9 +596,30 @@ fn upload(a: UploadArgs) -> Result<()> {
 /// drive it against a local server.
 fn deploy(client: &reqwest::blocking::Client, a: &UploadArgs) -> Result<()> {
     let base = a.url.trim_end_matches('/');
+    // Preflight: validate the token (and the chosen webspace) BEFORE streaming the
+    // multi-GB tarball. Deploying to a webspace the token isn't authorised for 403s
+    // mid-upload, which reqwest only surfaces — as a cryptic "send failed because
+    // receiver is gone" — AFTER the whole body has been sent. Check up front instead.
+    let who = whoami(client, base, &a.token)?;
     let webspace = match &a.webspace_id {
-        Some(id) => id.clone(),
-        None => resolve_webspace(client, base, &a.token)?,
+        Some(id) => {
+            if let Some(scoped) = who.webspace_id.as_deref() {
+                if scoped != id {
+                    bail!(
+                        "token is scoped to webspace {scoped} ({}), not {id} — unset \
+                         WEB_AGENCY_WEBSPACE_ID to deploy to the token's webspace, or use a \
+                         token authorised for {id}",
+                        who.webspace_name.as_deref().unwrap_or("unknown")
+                    );
+                }
+            }
+            id.clone()
+        }
+        None => who
+            .webspace_id
+            .clone()
+            .inspect(|id| eprintln!("using token's scoped webspace: {} ({id})", who.webspace_name.as_deref().unwrap_or("unknown")))
+            .ok_or_else(|| anyhow::anyhow!("token not scoped to a webspace — pass --webspace-id"))?,
     };
     if !a.tarball.is_file() {
         bail!("{} not found — run `make update-tarball` first", a.tarball.display());
@@ -566,7 +660,9 @@ fn deploy(client: &reqwest::blocking::Client, a: &UploadArgs) -> Result<()> {
     }
 }
 
-fn resolve_webspace(client: &reqwest::blocking::Client, base: &str, token: &str) -> Result<String> {
+/// Identify the token (and its scoped webspace, if any). Used as the upload preflight
+/// and to resolve the default webspace when none is given.
+fn whoami(client: &reqwest::blocking::Client, base: &str, token: &str) -> Result<Whoami> {
     let resp = client.get(format!("{base}/api/v1/deploy/whoami")).bearer_auth(token).send().context("failed to reach server")?;
     if !resp.status().is_success() {
         let s = resp.status();
@@ -576,10 +672,7 @@ fn resolve_webspace(client: &reqwest::blocking::Client, base: &str, token: &str)
     if w.kind != "deploy" {
         bail!("token kind is '{}', expected 'deploy'", w.kind);
     }
-    let name = w.webspace_name.as_deref().unwrap_or("unknown");
-    w.webspace_id
-        .inspect(|id| eprintln!("using token's scoped webspace: {name} ({id})"))
-        .ok_or_else(|| anyhow::anyhow!("token not scoped to a webspace — pass --webspace-id"))
+    Ok(w)
 }
 
 /// Percent-encode a path/query segment (branch names).
@@ -667,6 +760,7 @@ mod tests {
         let tb = std::env::temp_dir().join(format!("xtask-upl-{}.tar.gz", std::process::id()));
         std::fs::write(&tb, b"fake tarball").unwrap();
         let (url, h) = serve(vec![
+            ("200 OK", r#"{"kind":"deploy","webspace_id":"ws1","webspace_name":"test"}"#), // whoami preflight
             ("200 OK", r#"{"deployment_id":"d1","status":"queued"}"#), // POST upload
             ("200 OK", r#"{"deployment_id":"d1","status":"success"}"#), // GET status
         ]);
@@ -682,6 +776,7 @@ mod tests {
         let tb = std::env::temp_dir().join(format!("xtask-upl2-{}.tar.gz", std::process::id()));
         std::fs::write(&tb, b"fake").unwrap();
         let (url, h) = serve(vec![
+            ("200 OK", r#"{"kind":"deploy","webspace_id":"ws1","webspace_name":"test"}"#), // whoami preflight
             ("200 OK", r#"{"deployment_id":"d2","status":"queued"}"#),
             ("200 OK", r#"{"deployment_id":"d2","status":"failed","error_message":"boom"}"#),
         ]);

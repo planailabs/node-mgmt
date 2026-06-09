@@ -14,6 +14,8 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# locate pigz on PATH (parallel gzip for the update tarball; falls back to gzip).
+which = "7"
 # Upload the already-built update tarball to a web-agency webspace (Cloudflare
 # Pages). The few HTTP calls (whoami → POST tarball → poll status) are adopted
 # from mac-mgmt's web-agency-upload CLI. rustls + RING (not aws-lc → no cmake).
