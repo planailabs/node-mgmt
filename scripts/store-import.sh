@@ -24,5 +24,6 @@ log "store-add $NAME ($(du -sh "$DIR" | cut -f1)) …"
 P="$(nix store add-path "$DIR" --name "$NAME")"
 # indirect root: survives nix-store --gc AND auto-updates if the path changes.
 nix-store --add-root "$GCROOTS/$NAME" --indirect --realise "$P" >/dev/null
-printf '%s\n' "$P" > "$RECORDS/$NAME"
+# no trailing newline: nix/stores.nix reads this verbatim as the store path
+printf '%s' "$P" > "$RECORDS/$NAME"
 log "imported $NAME -> $P"

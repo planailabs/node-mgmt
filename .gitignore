@@ -36,6 +36,6 @@ __pycache__/
 /.ninja_log
 /.ninja_lock
 /launcher/spa/
-# store-import build layer: machine-specific store paths + indirect GC roots
-/nix/stores.nix
+# store-import build layer: per-import records (dist/ is ignored) + indirect GC
+# roots are machine-specific. nix/stores.nix is committed (it just reads the records).
 /.nix-gcroots/
