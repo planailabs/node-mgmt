@@ -48,6 +48,22 @@ so the generic electron/ollama run. `make dev` covers local NixOS iteration.
 
 ---
 
+## Standards
+
+`standards/` holds the written conventions that span the codebase — each file is the
+**source of truth** for one area (see `standards/README.md` for the index).
+
+- **Read them first.** Before changing code in an area a standard covers (the `/api/*`
+  control plane → `control-api.md`; any branch over a closed set like build targets /
+  platforms / state enums → `exhaustive-matching.md`), read that standard and make the
+  change conform. They exist because these classes of bug already bit us.
+- **The convention lands here first.** If you intend to deviate from or extend a
+  standard, update the standard in the same change — don't let code and standard
+  drift. New cross-cutting convention ⇒ add a `standards/<area>.md`, register it in
+  `standards/README.md`, and (if it's a rule agents must follow) link it here.
+
+---
+
 ## Architecture
 
 - **Rust launcher = control plane** (`launcher/`, static-musl on linux, cross-built

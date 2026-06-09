@@ -6,6 +6,7 @@ area — code is expected to match it, and changes to the convention land here f
 | Standard | Scope |
 |---|---|
 | [control-api.md](control-api.md) | The `/api/*` control-plane HTTP surface: the shared contract crate, response/error shapes, state enums, and how clients and backends consume it. |
+| [exhaustive-matching.md](exhaustive-matching.md) | Branching over a closed set (build target, platform, state enum): handle each known variant explicitly and throw/`die`/compile-error on the rest — no silent catch-all that picks an arm. |
 
 ## Why these exist
 
