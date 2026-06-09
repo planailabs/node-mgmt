@@ -249,10 +249,21 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     for k in ollama_keys {
         comp_jobs.push((format!("ollama-{k}"), stamp("download")));
     }
+    // inputs that change a nix-built squashfs component (the build layer + flake).
+    let nix_comp_srcs = srcs(&["scripts/nix-component.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]);
     for (name, src_stamp) in &comp_jobs {
         let mut deps = vec![src_stamp.clone()];
-        deps.extend(pack_srcs.iter().cloned());
-        stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));
+        // linux ollama squashfs is built IN NIX from the ollamaComponents repack
+        // (source already a store path); the mac dmg + win dir keep pack-component.
+        if let Some(key) = name.strip_prefix("ollama-").filter(|k| k.starts_with("linux-")) {
+            deps.extend(nix_comp_srcs.iter().cloned());
+            stamp_edge(&format!("comp-{name}"), &deps,
+                &format!("./scripts/nix-component.sh ollama-{key}-squashfs dist/components/ollama-{key}.squashfs"),
+                &format!("nix squashfs: ollama-{key}"));
+        } else {
+            deps.extend(pack_srcs.iter().cloned());
+            stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));
+        }
         comp_stamps.push(stamp(&format!("comp-{name}")));
     }
     // ow-assets squashfs (the linux format) is built IN NIX from the store-imported

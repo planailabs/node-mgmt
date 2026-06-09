@@ -18,8 +18,23 @@ let
   pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
   lib = pkgs.lib;
   stores = import ./stores.nix;
+  ollamaComponents = flake.packages.${builtins.currentSystem}.ollamaComponents;
+
+  # An ollama flavour as a squashfs, built in nix from the ollamaComponents repack
+  # (already a nix store path — no store-import needed). Same mksquashfs flags as
+  # pack-component, so the loader mounts it identically.
+  mkOllamaSqfs = key: pkgs.runCommand "ollama-${key}.squashfs"
+    { nativeBuildInputs = [ pkgs.squashfsTools pkgs.gnutar pkgs.gzip ]; }
+    ''
+      mkdir ex && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C ex
+      mksquashfs ex $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet
+    '';
 in
 {
+  "ollama-linux-amd64-squashfs" = mkOllamaSqfs "linux-amd64";
+  "ollama-linux-arm64-squashfs" = mkOllamaSqfs "linux-arm64";
+  "ollama-linux-amd64-rocm-squashfs" = mkOllamaSqfs "linux-amd64-rocm";
+
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
   # Each ${p} both interpolates the path AND registers it as a real build input (a bare
