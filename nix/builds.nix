@@ -86,6 +86,16 @@ in
   "runtime-win-x64-dir" = pkgs.runCommand "runtime-win-x64" { }
     "mkdir -p $out && cp -a ${stores.runtime-win-x64 or (throw "runtime-win-x64 not imported")}/. $out/";
 
+  # the Electron app itself, packed as a component (app-<os>) — same per-OS formats
+  # as the runtime. electron-builder/@electron/packager produce the unpacked tree
+  # impurely (downloads + helper patching), so bundle.sh store-imports that tree
+  # (already signed, for mac) and these pack it OFFLINE: linux squashfs, mac dmg
+  # (the VM mount + cp -a preserves the .app's exec bit + signature), win dir.
+  "app-linux-x64-squashfs" = mkSqfs "app-linux-x64" (stores.app-linux-x64 or (throw "app-linux-x64 not imported"));
+  "app-mac-arm64-dmg" = mkDmg { name = "app-mac-arm64"; src = stores.app-mac-arm64 or (throw "app-mac-arm64 not imported"); };
+  "app-win-x64-dir" = pkgs.runCommand "app-win-x64" { }
+    "mkdir -p $out && cp -a ${stores.app-win-x64 or (throw "app-win-x64 not imported")}/. $out/";
+
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
   # Each ${p} both interpolates the path AND registers it as a real build input (a bare

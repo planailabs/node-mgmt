@@ -194,16 +194,23 @@ place_standalone_launcher() {  # <flake-attr> <binary-in-store> <shipped-name>
 # Emit the Electron app itself as a component (app-$TARGET) in THIS OS's format,
 # into the shipped pool — the launcher mounts/links it and runs Electron from it
 # (parity with runtime/ollama/ow-assets). linux=squashfs, win=dir, mac=hfsplus dmg.
+#
+# electron-builder/@electron/packager produce the unpacked tree IMPURELY (downloads
+# + helper patching). So we store-import that tree (already signed, for mac) and let
+# nix pack it OFFLINE (content-addressed + cached) — squashfs in a sandbox, dmg in a
+# VM (the mount + cp -a preserves the .app's exec bit + signature), win dir
+# materialised. import-build-component.sh does: store-import -> nix-build <attr> ->
+# real file/dir at <out>. Same on-disk format as before, so the loader mounts it
+# identically. (The three targets run concurrently but import under distinct names.)
 emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding plan.ai.app)
   local src="$1" name="app-$TARGET" cdst="$OUT/components"; mkdir -p "$cdst"
   case "$FMTS" in
-    squashfs) pack_squashfs "$src" "$cdst/$name.squashfs"
-      log "app component -> $name.squashfs ($(du -h "$cdst/$name.squashfs" | cut -f1))" ;;
-    dir) pack_dir "$src" "$cdst/$name"
-      log "app component -> $name/ ($(du -sh "$cdst/$name" | cut -f1))" ;;
-    dmg) emit_hfsplus_dmg "$src" "$cdst/$name.dmg" ;;
+    squashfs) "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-squashfs" "$cdst/$name.squashfs" ;;
+    dir)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dir"      "$cdst/$name" ;;
+    dmg)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dmg"      "$cdst/$name.dmg" ;;
     *) die "no app-component format for FMTS=$FMTS" ;;
   esac
+  log "app component (nix) -> $name [$FMTS]"
 }
 
 # raw HFS+ image macOS mounts via hdiutil, compressed to UDIF via libdmg-hfsplus.
