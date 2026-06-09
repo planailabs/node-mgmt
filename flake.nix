@@ -335,19 +335,26 @@
         # target) and re-execs ITSELF inside the wrapper, so the Electron it then
         # spawns inherits the FHS mount namespace and runs. runScript just execs
         # its args (so `planai-fhs <launcher> <args...>` runs the launcher in-FHS).
-        nixosFhs = pkgs.buildFHSEnv {
-          name = "planai-fhs";
-          runScript = "${pkgs.writeShellScript "planai-fhs-run" ''exec "$@"''}";
-          targetPkgs = p: with p; [
-            glibc gcc-unwrapped.lib zlib
-            glib gtk3 nss nspr atk at-spi2-atk at-spi2-core cairo pango gdk-pixbuf
-            cups dbus expat libdrm libxkbcommon mesa libgbm alsa-lib
-            freetype fontconfig libGL systemd
-            libx11 libxcomposite libxcursor libxdamage
-            libxext libxfixes libxi libxrender libxtst
-            libxcb libxrandr libxscrnsaver
-          ];
-        };
+        # Built per linux arch: the FHS closure is the target machine's /nix/store
+        # paths (glibc, gtk3, …), so an aarch64 NixOS needs an aarch64-linux closure.
+        # We have native aarch64 builders, so each just builds on its own system.
+        mkNixosFhs = fhsSystem:
+          let fhsPkgs = import nixpkgs { system = fhsSystem; };
+          in fhsPkgs.buildFHSEnv {
+            name = "planai-fhs";
+            runScript = "${fhsPkgs.writeShellScript "planai-fhs-run" ''exec "$@"''}";
+            targetPkgs = p: with p; [
+              glibc gcc-unwrapped.lib zlib
+              glib gtk3 nss nspr atk at-spi2-atk at-spi2-core cairo pango gdk-pixbuf
+              cups dbus expat libdrm libxkbcommon mesa libgbm alsa-lib
+              freetype fontconfig libGL systemd
+              libx11 libxcomposite libxcursor libxdamage
+              libxext libxfixes libxi libxrender libxtst
+              libxcb libxrandr libxscrnsaver
+            ];
+          };
+        nixosFhs = mkNixosFhs "x86_64-linux";
+        nixosFhs-arm64 = mkNixosFhs "aarch64-linux";
 
         linuxMountTools = pkgs.runCommand "plan-ai-linux-mount-tools" { } ''
           mkdir -p "$out/bin"
@@ -358,7 +365,7 @@
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
-          inherit linuxMountTools appimageRuntime nixosFhs spa macosx-sdk libdmg-hfsplus xtask;
+          inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on

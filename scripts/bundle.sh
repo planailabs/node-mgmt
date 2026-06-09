@@ -47,9 +47,18 @@ OUT="$DIST_DIR/bundle"
 # override for a GPU image, e.g. OLLAMA_FLAVOURS="linux-amd64 linux-amd64-rocm".
 case "$TARGET" in
   linux-x64|nixos-x64) OKEYS="${OLLAMA_FLAVOURS:-linux-amd64}" ;;
+  linux-arm64) OKEYS="${OLLAMA_FLAVOURS:-linux-arm64}" ;;
   win-x64)   OKEYS="${OLLAMA_FLAVOURS:-windows-amd64}" ;;
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
+esac
+# The standalone rust launcher's nix attr for this target (its arch-matched build).
+case "$TARGET" in
+  linux-x64|nixos-x64) LAUNCHER_ATTR=launcher-linux-x64 ;;
+  linux-arm64)         LAUNCHER_ATTR=launcher-linux-arm64 ;;
+  win-x64)             LAUNCHER_ATTR=launcher-win-x64 ;;
+  mac-arm64)           LAUNCHER_ATTR=launcher-mac-arm64 ;;
+  *) die "no launcher attr for target $TARGET" ;;
 esac
 # Component FORMAT this OS's loader consumes (it picks this from its group dir):
 #   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
@@ -157,9 +166,10 @@ nix_launcher() {  # <flake-attr> <binary-name>
 copy_llmfit_into() {  # <pool-dir>
   local pool="$1" attr name out bin
   case "$TARGET" in
-    linux-*|nixos-*) attr=llmfit-linux-x64; name=llmfit-linux ;;
-    win-*)           attr=llmfit-win-x64;   name=llmfit-windows.exe ;;
-    mac-*)           attr=llmfit-mac-arm64; name=llmfit-darwin ;;
+    linux-arm64)     attr=llmfit-linux-arm64; name=llmfit-linux ;;
+    linux-*|nixos-*) attr=llmfit-linux-x64;   name=llmfit-linux ;;
+    win-*)           attr=llmfit-win-x64;     name=llmfit-windows.exe ;;
+    mac-*)           attr=llmfit-mac-arm64;   name=llmfit-darwin ;;
     *) return 0 ;;
   esac
   out="$(cd "$REPO_ROOT" && nix build ".#$attr" --no-link --print-out-paths 2>/dev/null || true)"
@@ -207,13 +217,13 @@ package_electron_builder() {  # linux AppImage / windows zip
       'copy_comps_into "$OUT/components/$OS"' \
       'emit_app_component "$UNPACK"' \
       'emit_nixos_fhs' \
-      'place_standalone_launcher launcher-linux-x64 plan-ai plan-ai.linux.exe'
+      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai plan-ai.linux.exe'
   else
     local UNPACK="$OUT/win-unpacked"; [ -d "$UNPACK" ] || die "no win-unpacked from electron-builder"
     run_jobs \
       'copy_comps_into "$OUT/components/$OS"' \
       'emit_app_component "$UNPACK"' \
-      'place_standalone_launcher launcher-win-x64 plan-ai.exe plan-ai.exe'
+      'place_standalone_launcher "$LAUNCHER_ATTR" plan-ai.exe plan-ai.exe'
   fi
   log "bundle done -> $OUT/ (standalone launcher + shared components/ incl. app-$TARGET)"
 }
@@ -262,17 +272,24 @@ emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
 # launcher imports it + re-execs inside the sandbox so the generic glibc Electron/
 # ollama run (NixOS's bare nix-ld stub can't run them directly).
 emit_nixos_fhs() {
-  local cdst="$OUT/components/$OS" fhs
+  local cdst="$OUT/components/$OS" fhs fhs_attr closure_attr
+  # Arch-matched FHS: the closure is the TARGET machine's store paths, so arm64 NixOS
+  # needs the aarch64 env/closure. emit_nixos_fhs only runs for linux targets.
+  case "$TARGET" in
+    linux-x64|nixos-x64) fhs_attr=nixosFhs;       closure_attr=nixos-fhs-closure-x64 ;;
+    linux-arm64)         fhs_attr=nixosFhs-arm64; closure_attr=nixos-fhs-closure-arm64 ;;
+    *) die "emit_nixos_fhs: unexpected target $TARGET" ;;
+  esac
   command -v nix >/dev/null 2>&1 || { warn "no nix — skip NixOS FHS helper"; return 0; }
-  fhs="$(cd "$REPO_ROOT" && nix build .#nixosFhs --no-link --print-out-paths 2>/dev/null || true)"
-  [ -n "$fhs" ] || { warn "nixosFhs build failed — skip FHS helper"; return 0; }
+  fhs="$(cd "$REPO_ROOT" && nix build ".#$fhs_attr" --no-link --print-out-paths 2>/dev/null || true)"
+  [ -n "$fhs" ] || { warn "$fhs_attr build failed — skip FHS helper"; return 0; }
   mkdir -p "$cdst"
-  # The `nix-store --import` stream is built PURELY by nix (nixos-fhs-closure: a
+  # The `nix-store --import` stream is built PURELY by nix (nixos-fhs-closure-<arch>: a
   # closureInfo registration → throwaway local DB → nix-store --export, all in the
   # sandbox), not a host `nix-store --export`. The launcher imports it unchanged on
   # NixOS first-run. The wrapper path is still recorded for the launcher to exec.
-  log "packing NixOS FHS closure in nix (import stream) -> components/$OS/"
-  "$SCRIPT_DIR/nix-component.sh" nixos-fhs-closure "$cdst/nixos-fhs.closure"
+  log "packing NixOS FHS closure ($closure_attr) in nix (import stream) -> components/$OS/"
+  "$SCRIPT_DIR/nix-component.sh" "$closure_attr" "$cdst/nixos-fhs.closure"
   echo "$fhs/bin/planai-fhs" > "$cdst/nixos-fhs.path"
   log "  nixos-fhs.closure ($(du -h "$cdst/nixos-fhs.closure" | cut -f1)) + nixos-fhs.path"
 }

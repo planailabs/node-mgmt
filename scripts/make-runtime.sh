@@ -84,13 +84,14 @@ fi
 nix_runtime_attr() {
   case "$1" in
     linux-x64) echo "runtime-linux-x64" ;;
+    linux-arm64) echo "runtime-linux-arm64" ;;
     win-x64)   echo "runtime-win-x64" ;;
     mac-arm64) echo "runtime-mac-arm64" ;;
     *)         echo "" ;;
   esac
 }
 ATTR="$(nix_runtime_attr "$TARGET")"
-[ -n "$ATTR" ] || die "[$TARGET] no nix runtime for target (supported: linux-x64, win-x64, mac-arm64, nixos-x64)"
+[ -n "$ATTR" ] || die "[$TARGET] no nix runtime for target (supported: linux-x64, linux-arm64, win-x64, mac-arm64, nixos-x64)"
 
 log "[$TARGET] building portable runtime via nix (.#$ATTR)"
 STORE="$(cd "$REPO_ROOT" && nix build ".#$ATTR" --no-link --print-out-paths)" \

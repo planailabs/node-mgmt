@@ -10,7 +10,7 @@ set -euo pipefail
 need python3; need nix
 
 # default: every distributable target (mac-x64 dropped — arm64-only wheels)
-TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=(linux-x64 win-x64 mac-arm64)
+TARGETS=("$@"); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=(linux-x64 linux-arm64 win-x64 mac-arm64)
 [ -f "$REPO_ROOT/runtime/uv.lock" ] || die "runtime/uv.lock missing — run: cd runtime && uv lock"
 
 for TARGET in "${TARGETS[@]}"; do
@@ -26,6 +26,7 @@ lock = tomllib.load(open(lockpath, "rb"))
 PYTAG = "cp312"
 PLAT = {
     "linux-x64": [r"manylinux.*x86_64", r"linux_x86_64", r"musllinux.*x86_64"],
+    "linux-arm64": [r"manylinux.*aarch64", r"linux_aarch64", r"musllinux.*aarch64"],
     "win-x64":   [r"win_amd64"],
     "mac-arm64": [r"macosx.*arm64", r"macosx.*universal2"],
 }[target]

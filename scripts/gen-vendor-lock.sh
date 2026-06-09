@@ -37,6 +37,7 @@ pbs_entry() {  # <target> <triple>
 }
 PBS_ENTRIES="$(printf '%s\n' \
   "$(pbs_entry linux-x64 x86_64-unknown-linux-gnu)" \
+  "$(pbs_entry linux-arm64 aarch64-unknown-linux-gnu)" \
   "$(pbs_entry mac-arm64 aarch64-apple-darwin)" \
   "$(pbs_entry win-x64 x86_64-pc-windows-msvc)" | jq -sc 'map(select(. != null and . != {}))')"
 
@@ -58,8 +59,13 @@ llmfit_entry() {  # <target> <ext>
   jq -nc --arg t "$target" --arg e "$ext" --arg u "$url" --arg s "$sha" \
     '{target:$t, ext:$e, url:$u, sha256:$s}'
 }
+# aarch64-linux-musl is added only if upstream actually published it (llmfit_entry
+# returns nothing when the .sha256 sidecar is missing); flake.nix adds the
+# llmfit-linux-arm64 attr only when this asset is present, so a gap degrades to "no
+# model browser on arm64" rather than a build error.
 LLMFIT_ASSETS="$(printf '%s\n' \
   "$(llmfit_entry x86_64-unknown-linux-musl tar.gz)" \
+  "$(llmfit_entry aarch64-unknown-linux-musl tar.gz)" \
   "$(llmfit_entry x86_64-pc-windows-msvc zip)" \
   "$(llmfit_entry aarch64-apple-darwin tar.gz)" | jq -sc 'map(select(. != null and . != {}))')"
 

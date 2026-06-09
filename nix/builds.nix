@@ -114,7 +114,17 @@ let
   # /nix/var/nix is read-only in the sandbox) and `nix-store --export` against it.
   # Pattern adapted from nixpkgs nixos/lib/make-squashfs.nix (same closureInfo data).
   nixosFhs = flake.packages.${builtins.currentSystem}.nixosFhs;
+  nixosFhsArm64 = flake.packages.${builtins.currentSystem}.nixosFhs-arm64;
   nixosFhsClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhs ]; };
+  nixosFhsArm64ClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhsArm64 ]; };
+  # closureInfo → a portable `nix-store --import` stream (registration + export from a
+  # throwaway local DB). Per-arch: the x64 / arm64 NixOS launcher imports its own.
+  mkFhsClosure = ci: pkgs.runCommand "nixos-fhs.closure" { nativeBuildInputs = [ pkgs.nix ]; } ''
+    export NIX_STATE_DIR=$TMPDIR/state NIX_LOG_DIR=$TMPDIR/log
+    mkdir -p "$NIX_STATE_DIR" "$NIX_LOG_DIR"
+    nix-store --load-db < ${ci}/registration
+    nix-store --export $(cat ${ci}/store-paths) > $out
+  '';
 in
 {
   # ollama: linux squashfs, darwin dmg, windows dir (source = the nix repack)
@@ -151,13 +161,10 @@ in
   # (volume "plan.ai" — the user mounts it, then double-clicks plan.ai.app). No sudo.
   "launcher-mac-arm64-dmg" = mkDmg { name = "plan-ai-launcher-mac"; src = launcherMacApp; vol = "plan.ai"; };
 
-  # the NixOS FHS helper closure as a `nix-store --import` stream (see notes above).
-  "nixos-fhs-closure" = pkgs.runCommand "nixos-fhs.closure" { nativeBuildInputs = [ pkgs.nix ]; } ''
-    export NIX_STATE_DIR=$TMPDIR/state NIX_LOG_DIR=$TMPDIR/log
-    mkdir -p "$NIX_STATE_DIR" "$NIX_LOG_DIR"
-    nix-store --load-db < ${nixosFhsClosureInfo}/registration
-    nix-store --export $(cat ${nixosFhsClosureInfo}/store-paths) > $out
-  '';
+  # the NixOS FHS helper closure as a `nix-store --import` stream (see notes above),
+  # one per linux arch (bundle.sh picks the one matching the target).
+  "nixos-fhs-closure-x64" = mkFhsClosure nixosFhsClosureInfo;
+  "nixos-fhs-closure-arm64" = mkFhsClosure nixosFhsArm64ClosureInfo;
 
   # --- the FAT32 USB image (the capstone) ------------------------------------
   # make-usb-image.sh assembles a drive-root dir (launchers + components/<os>/ +

@@ -75,6 +75,7 @@ release_json() {
 target_triple() {
   case "$1" in
     linux-x64) echo "x86_64-unknown-linux-gnu" ;;
+    linux-arm64) echo "aarch64-unknown-linux-gnu" ;;
     mac-arm64) echo "aarch64-apple-darwin" ;;
     mac-x64)   echo "x86_64-apple-darwin" ;;
     win-x64)   echo "x86_64-pc-windows-msvc" ;;

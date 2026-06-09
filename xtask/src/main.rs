@@ -115,9 +115,9 @@ fn main() -> Result<()> {
 }
 
 /// Every platform the pipeline knows how to build. The active set for a given
-/// build is a subset of this (see `resolve_targets`); nixos-x64 is not separate —
-/// the linux-x64 bundle ships the FHS helper and runs on NixOS too.
-const KNOWN_TARGETS: &[&str] = &["linux-x64", "win-x64", "mac-arm64"];
+/// build is a subset of this (see `resolve_targets`); nixos-x64 / nixos-arm64 are
+/// not separate — the linux-<arch> bundle ships the FHS helper and runs on NixOS too.
+const KNOWN_TARGETS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", "mac-arm64"];
 /// ollama flavours the loader may ship (one per CPU arch / GPU); a flavour whose
 /// archive isn't vendored is simply omitted from the components manifest. The
 /// active set is filtered to the OSes of the built platforms (see `ollama_keys_for`).
@@ -143,7 +143,11 @@ fn resolve_targets() -> Result<Vec<String>> {
     };
     let mut out: Vec<String> = Vec::new();
     for t in raw {
-        let t = if t == "nixos-x64" { "linux-x64".to_string() } else { t };
+        let t = match t.as_str() {
+            "nixos-x64" => "linux-x64".to_string(),
+            "nixos-arm64" => "linux-arm64".to_string(),
+            _ => t,
+        };
         if !KNOWN_TARGETS.contains(&t.as_str()) {
             bail!("unknown platform `{t}` (known: {})", KNOWN_TARGETS.join(", "));
         }
