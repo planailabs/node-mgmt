@@ -255,6 +255,14 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
         stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));
         comp_stamps.push(stamp(&format!("comp-{name}")));
     }
+    // ow-assets squashfs (the linux format) is built IN NIX from the store-imported
+    // assets — content-addressed + cached — instead of by pack-component (which now
+    // does only the mac dmg + win dir). build-component-squashfs.sh imports + nix-builds
+    // + drops a real file at dist/components/ow-assets.squashfs.
+    let mut sqfs_deps = vec![stamp("wheel")];
+    sqfs_deps.extend(srcs(&["scripts/build-component-squashfs.sh", "scripts/store-import.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]));
+    stamp_edge("comp-ow-assets-sqfs", &sqfs_deps, "./scripts/build-component-squashfs.sh ow-assets vendor/ow-assets dist/components/ow-assets.squashfs", "nix squashfs: ow-assets");
+    comp_stamps.push(stamp("comp-ow-assets-sqfs"));
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
 
@@ -301,6 +309,7 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     }
     // per-component packs (handy for `ninja comp-ollama-darwin` while iterating)
     edges.push_str(&format!("build comp-ow-assets: phony {}\n", stamp("comp-ow-assets")));
+    edges.push_str(&format!("build comp-ow-assets-sqfs: phony {}\n", stamp("comp-ow-assets-sqfs")));
     for t in targets {
         edges.push_str(&format!("build comp-runtime-{t}: phony {}\n", stamp(&format!("comp-runtime-{t}"))));
     }

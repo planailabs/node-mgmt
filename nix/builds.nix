@@ -33,6 +33,18 @@ in
     '') stores)}
     cat $out/report.txt
   '';
+
+  # ow-assets component as a squashfs, built in nix from the store-imported assets
+  # (the networked hf+nltk prefetch stays imperative). Same mksquashfs flags as
+  # scripts/lib.sh pack_squashfs, so the loader mounts it identically — nix just
+  # owns the build (cached/invalidated by the import's content hash). The mac dmg +
+  # win dir formats stay in pack-component.sh (dmg needs a privileged loop-mount).
+  ow-assets-squashfs = pkgs.runCommand "ow-assets.squashfs"
+    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
+    ''
+      mksquashfs ${stores.ow-assets or (throw "ow-assets not imported — run store-import.sh ow-assets vendor/ow-assets")} \
+        $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet
+    '';
 }
 # expose each import directly too (handy for `nix-build --impure nix/builds.nix -A <name>`)
 // stores
