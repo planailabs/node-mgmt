@@ -242,11 +242,16 @@ emit_hfsplus_dmg() {  # <src-dir> <out.dmg> [volume-label]
 # ollama run (NixOS's bare nix-ld stub can't run them directly).
 emit_nixos_fhs() {
   local cdst="$OUT/components/$OS" fhs
-  command -v nix-store >/dev/null 2>&1 || { warn "no nix-store — skip NixOS FHS helper"; return 0; }
+  command -v nix >/dev/null 2>&1 || { warn "no nix — skip NixOS FHS helper"; return 0; }
   fhs="$(cd "$REPO_ROOT" && nix build .#nixosFhs --no-link --print-out-paths 2>/dev/null || true)"
   [ -n "$fhs" ] || { warn "nixosFhs build failed — skip FHS helper"; return 0; }
-  log "exporting NixOS FHS closure (NAR) -> components/ (first-run import on NixOS)"
-  nix-store --export $(nix-store -qR "$fhs") > "$cdst/nixos-fhs.closure"
+  mkdir -p "$cdst"
+  # The `nix-store --import` stream is built PURELY by nix (nixos-fhs-closure: a
+  # closureInfo registration → throwaway local DB → nix-store --export, all in the
+  # sandbox), not a host `nix-store --export`. The launcher imports it unchanged on
+  # NixOS first-run. The wrapper path is still recorded for the launcher to exec.
+  log "packing NixOS FHS closure in nix (import stream) -> components/$OS/"
+  "$SCRIPT_DIR/nix-component.sh" nixos-fhs-closure "$cdst/nixos-fhs.closure"
   echo "$fhs/bin/planai-fhs" > "$cdst/nixos-fhs.path"
   log "  nixos-fhs.closure ($(du -h "$cdst/nixos-fhs.closure" | cut -f1)) + nixos-fhs.path"
 }

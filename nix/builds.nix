@@ -101,6 +101,20 @@ let
     printf 'APPL????' > "$app/Contents/PkgInfo"
     rcodesign sign "$app"
   '';
+
+  # --- NixOS FHS helper closure, exported PURELY in the sandbox --------------
+  # The launcher imports this closure on NixOS first-run (`nix-store --import`,
+  # daemon-mediated → works for any trusted user) so the FHS wrapper + its libs land
+  # in the user's store. We produce the `nix-store --import` stream WITHOUT a host
+  # `nix-store --export`: closureInfo gives the closure's store-paths + a
+  # `nix-store --load-db` registration via exportReferencesGraph — evaluated by the
+  # outer nix and fed in as data (no daemon needed; the paths are mounted into the
+  # sandbox because closureInfo's output text references them). We seed a throwaway
+  # local nix DB from that registration (NIX_STATE_DIR in $TMPDIR — the default
+  # /nix/var/nix is read-only in the sandbox) and `nix-store --export` against it.
+  # Pattern adapted from nixpkgs nixos/lib/make-squashfs.nix (same closureInfo data).
+  nixosFhs = flake.packages.${builtins.currentSystem}.nixosFhs;
+  nixosFhsClosureInfo = pkgs.closureInfo { rootPaths = [ nixosFhs ]; };
 in
 {
   # ollama: linux squashfs, darwin dmg, windows dir (source = the nix repack)
@@ -134,6 +148,14 @@ in
   # the mac LAUNCHER dmg (plan-ai.dmg): the ad-hoc-signed plan.ai.app packed by mkDmg
   # (volume "plan.ai" — the user mounts it, then double-clicks plan.ai.app). No sudo.
   "launcher-mac-arm64-dmg" = mkDmg { name = "plan-ai-launcher-mac"; src = launcherMacApp; vol = "plan.ai"; };
+
+  # the NixOS FHS helper closure as a `nix-store --import` stream (see notes above).
+  "nixos-fhs-closure" = pkgs.runCommand "nixos-fhs.closure" { nativeBuildInputs = [ pkgs.nix ]; } ''
+    export NIX_STATE_DIR=$TMPDIR/state NIX_LOG_DIR=$TMPDIR/log
+    mkdir -p "$NIX_STATE_DIR" "$NIX_LOG_DIR"
+    nix-store --load-db < ${nixosFhsClosureInfo}/registration
+    nix-store --export $(cat ${nixosFhsClosureInfo}/store-paths) > $out
+  '';
 
   # --- the FAT32 USB image (the capstone) ------------------------------------
   # make-usb-image.sh assembles a drive-root dir (launchers + components/<os>/ +
