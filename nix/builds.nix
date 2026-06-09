@@ -129,6 +129,7 @@ in
   # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
   # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
   "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
+  "runtime-linux-arm64-squashfs" = mkSqfs "runtime-linux-arm64" (stores.runtime-linux-arm64 or (throw "runtime-linux-arm64 not imported"));
   "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); memSize = 6144; };
   # win dir component needs no packing (used in place) — a derivation that just
   # materialises the imported tree, so nix-build -A has something to build.
@@ -141,6 +142,7 @@ in
   # (already signed, for mac) and these pack it OFFLINE: linux squashfs, mac dmg
   # (the VM mount + cp -a preserves the .app's exec bit + signature), win dir.
   "app-linux-x64-squashfs" = mkSqfs "app-linux-x64" (stores.app-linux-x64 or (throw "app-linux-x64 not imported"));
+  "app-linux-arm64-squashfs" = mkSqfs "app-linux-arm64" (stores.app-linux-arm64 or (throw "app-linux-arm64 not imported"));
   "app-mac-arm64-dmg" = mkDmg { name = "app-mac-arm64"; src = stores.app-mac-arm64 or (throw "app-mac-arm64 not imported"); };
   "app-win-x64-dir" = pkgs.runCommand "app-win-x64" { }
     "mkdir -p $out && cp -a ${stores.app-win-x64 or (throw "app-win-x64 not imported")}/. $out/";

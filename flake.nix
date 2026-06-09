@@ -37,7 +37,8 @@
         # rust toolchain with the cross-target std libs the launcher needs
         rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
-                      "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
+                      "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl"
+                      "aarch64-unknown-linux-gnu" "aarch64-unknown-linux-musl" ];
         };
         # Full stable toolchain + wasm32 for the Dioxus SPA (dx/cargo need a full
         # rustc for wasm32-unknown-unknown).
@@ -139,8 +140,12 @@
                 spinnerFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; }
               else if lib.hasInfix "apple-darwin" zigTarget then
                 spinnerFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; }
+              else if lib.hasInfix "aarch64" zigTarget then
+                spinnerFor { zigTarget = "aarch64-unknown-linux-gnu"; outDir = "aarch64-unknown-linux-gnu"; }
+              else if lib.hasInfix "x86_64" zigTarget then
+                spinnerFor { zigTarget = "x86_64-unknown-linux-gnu"; outDir = "x86_64-unknown-linux-gnu"; }
               else
-                spinnerFor { zigTarget = "x86_64-unknown-linux-gnu"; outDir = "x86_64-unknown-linux-gnu"; };
+                throw "launcherFor: no spinner mapping for zigTarget '${zigTarget}'";
             spinnerBin = "${spinnerPkg}/${if lib.hasInfix "windows" zigTarget then "plan-ai-spinner.exe" else "plan-ai-spinner"}";
           in
           pkgs.runCommand "plan-ai-launcher-${outDir}"
@@ -297,6 +302,10 @@
             target = "linux-x64"; triple = "x86_64-unknown-linux-gnu";
             lockFile = ./runtime/wheels-linux-x64.lock.json;
           };
+          runtime-linux-arm64 = runtimeFor {
+            target = "linux-arm64"; triple = "aarch64-unknown-linux-gnu";
+            lockFile = ./runtime/wheels-linux-arm64.lock.json;
+          };
           runtime-win-x64 = runtimeFor {
             target = "win-x64"; triple = "x86_64-pc-windows-msvc";
             lockFile = ./runtime/wheels-win-x64.lock.json;
@@ -357,6 +366,8 @@
           # binary). It autodetects NixOS at runtime and EXTRACTS components there
           # (the generic squashfs mount/patchelf path the node loader uses).
           launcher-linux-x64 = launcherFor { zigTarget = "x86_64-unknown-linux-musl"; outDir = "x86_64-unknown-linux-musl"; };
+          # arm64: same static-musl story as x64 — runs on any aarch64 linux incl. NixOS.
+          launcher-linux-arm64 = launcherFor { zigTarget = "aarch64-unknown-linux-musl"; outDir = "aarch64-unknown-linux-musl"; };
           # llmfit prebuilt binaries (bundled beside the launcher; GPU detect + serve).
           # Pins from vendor.lock.json (.llmfit.assets) — regen via gen-vendor-lock.sh.
           llmfit-linux-x64 = llmfitBin (llmfitAsset "x86_64-unknown-linux-musl");
@@ -365,9 +376,16 @@
           # native splash spinner (shown while the launcher mounts the runtime).
           # linux=gnu (dynamic; a GUI can't be static-musl like the launcher).
           spinner-linux-x64 = spinnerFor { zigTarget = "x86_64-unknown-linux-gnu"; outDir = "x86_64-unknown-linux-gnu"; };
+          spinner-linux-arm64 = spinnerFor { zigTarget = "aarch64-unknown-linux-gnu"; outDir = "aarch64-unknown-linux-gnu"; };
           spinner-win-x64   = spinnerFor { zigTarget = "x86_64-pc-windows-gnu";    outDir = "x86_64-pc-windows-gnu"; };
           spinner-mac-arm64 = spinnerFor { zigTarget = "aarch64-apple-darwin";     outDir = "aarch64-apple-darwin"; };
-        } // runtimes;
+        } // runtimes
+          # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;
+          # add the attr only when the asset is in vendor.lock.json so a missing arm64
+          # binary doesn't poison flake eval (the bundle tolerates its absence).
+          // lib.optionalAttrs (builtins.any (a: a.target == "aarch64-unknown-linux-musl") vendorLock.llmfit.assets) {
+            llmfit-linux-arm64 = llmfitBin (llmfitAsset "aarch64-unknown-linux-musl");
+          };
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib spaTools; };
       });
 }
