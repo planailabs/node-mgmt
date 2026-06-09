@@ -135,6 +135,29 @@ in
   # (volume "plan.ai" — the user mounts it, then double-clicks plan.ai.app). No sudo.
   "launcher-mac-arm64-dmg" = mkDmg { name = "plan-ai-launcher-mac"; src = launcherMacApp; vol = "plan.ai"; };
 
+  # --- the FAT32 USB image (the capstone) ------------------------------------
+  # make-usb-image.sh assembles a drive-root dir (launchers + components/<os>/ +
+  # models + update.json + platforms.json + README) IMPERATIVELY (the manifest gen
+  # is xtask; models are the seeded cache), store-imports it, and this packs it into
+  # a ready-to-burn FAT32 image OFFLINE — mkfs.vfat + mcopy via mtools, all
+  # userspace (no VM, no sudo; mechanism proven). Size = drive-root + 15% + 128M
+  # slack. Each per-file FAT32 4 GiB guard is enforced in the staging script.
+  "usb-image" = pkgs.runCommand "plan-ai-usb.img"
+    { nativeBuildInputs = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils ]; }
+    ''
+      src=${stores.drive-root or (throw "drive-root not imported")}
+      bytes=$(du -sb "$src" | cut -f1)
+      mb=$(( bytes / 1048576 * 115 / 100 + 128 ))
+      echo "FAT32 image: ''${mb}MB from drive-root $(du -sh "$src" | cut -f1)"
+      truncate -s "''${mb}M" "$out"
+      mkfs.vfat -F 32 -n PLANAI "$out" >/dev/null
+      # copy the drive-root contents (not the dir itself) to the image root. `*`
+      # skips dotfiles — the drive-root has none. mcopy -s recurses incl. empty dirs.
+      mcopy -i "$out" -s -Q -b "$src"/* ::/
+      mmd -i "$out" ::/data 2>/dev/null || true
+      echo "contents:"; mdir -i "$out" :: 2>/dev/null | sed 's/^/    /' || true
+    '';
+
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
   # Each ${p} both interpolates the path AND registers it as a real build input (a bare

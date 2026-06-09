@@ -335,7 +335,10 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     // does NOT — models are excluded from the update manifest.
     let mut img_deps = bundle_stamps.clone();
     img_deps.push(stamp("models"));
-    img_deps.extend(srcs(&["scripts/make-usb-image.sh"]));
+    // the image is staged imperatively then packed by nix (usb-image): depend on the
+    // staging script + the store-import/nix layer so editing either re-packs.
+    img_deps.extend(srcs(&["scripts/make-usb-image.sh", "scripts/import-build-component.sh",
+        "scripts/store-import.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]));
     img_deps.extend(src_tree("xtask/src"));
     img_deps.extend(src_tree("crates"));
     edges.push_str(&format!("build dist/plan-ai-usb.img: gen {}\n  cmd = ./scripts/make-usb-image.sh\n  desc = usb image\n\n", img_deps.join(" ")));
