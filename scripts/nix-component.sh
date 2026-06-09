@@ -11,9 +11,11 @@ need nix
 
 ATTR="${1:?usage: nix-component.sh <nix-attr> <out-file>}"
 OUT="${2:?usage: nix-component.sh <nix-attr> <out-file>}"
-# -L (--print-build-logs): stream the build output so a failing component build shows
-# its compiler/packer errors instead of just nix's terse "builder for … failed" line.
-P="$(cd "$REPO_ROOT" && nix-build -L --impure nix/builds.nix -A "$ATTR" --no-out-link)"
+# Use the new `nix build` CLI with -L (--print-build-logs) so a failing component
+# build streams its real compiler/packer errors instead of nix's terse "builder for …
+# failed" line. (Legacy `nix-build` has no -L.) --print-out-paths gives us the store
+# path on stdout (build logs go to stderr, so they don't pollute $P).
+P="$(cd "$REPO_ROOT" && nix build -L --impure -f nix/builds.nix "$ATTR" --no-link --print-out-paths)"
 mkdir -p "$(dirname "$OUT")"
 # copy the real file/dir out of the read-only store so bundle/image can read it.
 # dir components (used in place on FAT32) need a writable recursive copy.
