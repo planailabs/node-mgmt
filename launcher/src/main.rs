@@ -1029,7 +1029,7 @@ fn main() {
     let mut resources = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from);
     // The app component is mounted/linked here so we can run Electron from it.
     let mut app_dir: Option<PathBuf> = None;
-    let comp_dir = components_dir(&here);
+    let mut comp_dir = components_dir(&here);
 
     // Single-instance guard — taken by the host process only (the FHS child is
     // part of the same run). A second launch would fight over the supervisor
@@ -1053,21 +1053,55 @@ fn main() {
     // them, so the bundled ollama never crash-loops on "address in use".
     config::init_ports();
 
-    // Show the splash spinner ASAP (host only) — it covers the slow first-run mount/
-    // extract below, when no window exists yet. Killed when Electron signals ready
-    // (POST /api/ready), on a timeout, or on exit. The FHS child never spawns one
-    // (its PID namespace can't reach the host's; the host closes it before reexec).
     let spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
-    if !in_fhs {
-        if let Some(splash) = show_splash(SplashOpts { text: &i18n::t("starting-preparing"), progress: false }) {
-            *spinner.lock().unwrap() = Some(splash);
-        }
-    }
 
     // Auto-updater state (manual check from the SPA; bootstrap if the drive has no
     // manifest/platforms). apply_requested + the Electron handle let /api/update/apply
     // quit Electron so this process applies the staged update with the runtime down.
     let updater = update::Updater::new();
+
+    // First-run provisioning: the drive carries the launcher but no component pool and
+    // no local manifest → fetch the manifest from the hardcoded update server, stage
+    // this platform's components, and apply them onto the USB — all through the regular
+    // updater (check_and_predownload → apply::run, the same path as `self-update`), so
+    // THIS launch can mount + run instead of erroring out with nothing to start. Once
+    // the manifest lands we re-resolve the pool. Skipped in the FHS child (the host
+    // already provisioned before re-exec).
+    if !in_fhs && comp_dir.is_none() && update::load_local().is_none() {
+        log("no components on the drive — provisioning from the update server");
+        // Indeterminate splash for the download; apply::run shows its own determinate
+        // splash while it copies the staged files onto the drive.
+        if let Some(s) = show_splash(SplashOpts { text: &i18n::t("provisioning"), progress: false }) {
+            *spinner.lock().unwrap() = Some(s);
+        }
+        let provisioned = match tokio::runtime::Runtime::new() {
+            Ok(boot_rt) => {
+                boot_rt.block_on(update::check_and_predownload(updater.clone()));
+                kill_spinner(&spinner); // close the download splash before apply's own
+                apply::run(&updater) // stages → drive (verified, atomic, commits update.json)
+            }
+            Err(e) => {
+                log(&format!("bootstrap: runtime: {e}"));
+                false
+            }
+        };
+        kill_spinner(&spinner);
+        if provisioned {
+            comp_dir = components_dir(&here);
+        } else {
+            log("bootstrap: provisioning did not complete — starting without a component pool");
+        }
+    }
+
+    // Show the splash spinner ASAP (host only) — it covers the slow first-run mount/
+    // extract below, when no window exists yet. Killed when Electron signals ready
+    // (POST /api/ready), on a timeout, or on exit. The FHS child never spawns one
+    // (its PID namespace can't reach the host's; the host closes it before reexec).
+    if !in_fhs {
+        if let Some(splash) = show_splash(SplashOpts { text: &i18n::t("starting-preparing"), progress: false }) {
+            *spinner.lock().unwrap() = Some(splash);
+        }
+    }
     let apply_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let electron: ElectronHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
     // Whether to auto-run the download routine this launch (no manifest yet, or
