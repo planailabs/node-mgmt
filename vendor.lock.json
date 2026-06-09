@@ -40,6 +40,12 @@
         "sha256": "9be5c21b78dbc371e739bc7faf3b007b8e607335f780bdd2e0dd44a6e3580d76"
       },
       {
+        "target": "linux-arm64",
+        "triple": "aarch64-unknown-linux-gnu",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13%2B20260602-aarch64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "f0c9ea0022b2dfdf0a4733e962ba8cc883c45d26df26116b9802b658240a25d7"
+      },
+      {
         "target": "mac-arm64",
         "triple": "aarch64-apple-darwin",
         "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.12.13%2B20260602-aarch64-apple-darwin-install_only.tar.gz",
@@ -66,6 +72,12 @@
         "ext": "tar.gz",
         "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-x86_64-unknown-linux-musl.tar.gz",
         "sha256": "98b464373d1dac42ccd09af99cdd40f7c32f66285f86034b363f3100fec14484"
+      },
+      {
+        "target": "aarch64-unknown-linux-musl",
+        "ext": "tar.gz",
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-aarch64-unknown-linux-musl.tar.gz",
+        "sha256": "9c50784f8f236dd80343c6636569a82437da8e852f20180efc0e29beec1bcd8c"
       },
       {
         "target": "x86_64-pc-windows-msvc",
