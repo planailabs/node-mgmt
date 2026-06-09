@@ -20,15 +20,11 @@ let
   stores = import ./stores.nix;
   ollamaComponents = flake.packages.${builtins.currentSystem}.ollamaComponents;
 
-  # An ollama flavour as a squashfs, built in nix from the ollamaComponents repack
-  # (already a nix store path — no store-import needed). Same mksquashfs flags as
-  # pack-component, so the loader mounts it identically.
-  mkOllamaSqfs = key: pkgs.runCommand "ollama-${key}.squashfs"
-    { nativeBuildInputs = [ pkgs.squashfsTools pkgs.gnutar pkgs.gzip ]; }
-    ''
-      mkdir ex && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C ex
-      mksquashfs ex $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet
-    '';
+  # squashfs of a source dir — same mksquashfs flags as scripts/lib.sh pack_squashfs,
+  # so the loader mounts it identically. nix owns the build + content-addressed cache.
+  mkSqfs = name: src: pkgs.runCommand "${name}.squashfs"
+    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
+    "mksquashfs ${src} $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet";
 
   # --- mac dmg components, built in a Linux VM ------------------------------
   # An HFS+ dmg needs a privileged loop-mount, impossible in a plain sandbox. So
@@ -66,12 +62,20 @@ let
     "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C $out";
 in
 {
-  "ollama-linux-amd64-squashfs" = mkOllamaSqfs "linux-amd64";
-  "ollama-linux-arm64-squashfs" = mkOllamaSqfs "linux-arm64";
-  "ollama-linux-amd64-rocm-squashfs" = mkOllamaSqfs "linux-amd64-rocm";
-  "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
+  # ollama: linux squashfs, darwin dmg, windows dir (source = the nix repack)
+  "ollama-linux-amd64-squashfs" = mkSqfs "ollama-linux-amd64" (mkOllamaDir "linux-amd64");
+  "ollama-linux-arm64-squashfs" = mkSqfs "ollama-linux-arm64" (mkOllamaDir "linux-arm64");
+  "ollama-linux-amd64-rocm-squashfs" = mkSqfs "ollama-linux-amd64-rocm" (mkOllamaDir "linux-amd64-rocm");
   "ollama-darwin-dmg" = mkDmg { name = "ollama-darwin"; src = mkOllamaDir "darwin"; };
   "ollama-windows-amd64-dir" = mkOllamaDir "windows-amd64";
+  # ow-assets: linux squashfs + mac dmg (source = the store-imported hf+nltk assets)
+  "ow-assets-squashfs" = mkSqfs "ow-assets" (stores.ow-assets or (throw "ow-assets not imported"));
+  "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
+  # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
+  # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
+  "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
+  "runtime-mac-arm64-dmg" = mkDmg { name = "runtime-mac-arm64"; src = stores.runtime-mac-arm64 or (throw "runtime-mac-arm64 not imported"); };
+  "runtime-win-x64-dir" = stores.runtime-win-x64 or (throw "runtime-win-x64 not imported");
 
   # Smoke proof: a pure derivation consuming every imported store path, showing the
   # fetch -> store-add -> gcroot -> record -> storePath chain feeds offline nix builds.
@@ -86,18 +90,6 @@ in
     '') stores)}
     cat $out/report.txt
   '';
-
-  # ow-assets component as a squashfs, built in nix from the store-imported assets
-  # (the networked hf+nltk prefetch stays imperative). Same mksquashfs flags as
-  # scripts/lib.sh pack_squashfs, so the loader mounts it identically — nix just
-  # owns the build (cached/invalidated by the import's content hash). The mac dmg +
-  # win dir formats stay in pack-component.sh (dmg needs a privileged loop-mount).
-  ow-assets-squashfs = pkgs.runCommand "ow-assets.squashfs"
-    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
-    ''
-      mksquashfs ${stores.ow-assets or (throw "ow-assets not imported — run store-import.sh ow-assets vendor/ow-assets")} \
-        $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet
-    '';
 }
 # expose each import directly too (handy for `nix-build --impure nix/builds.nix -A <name>`)
 // stores

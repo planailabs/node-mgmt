@@ -249,8 +249,9 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     for k in ollama_keys {
         comp_jobs.push((format!("ollama-{k}"), stamp("download")));
     }
-    // inputs that change a nix-built squashfs component (the build layer + flake).
+    // inputs that change a nix-built component (the build layer + flake).
     let nix_comp_srcs = srcs(&["scripts/nix-component.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]);
+    let ib_srcs = srcs(&["scripts/import-build-component.sh", "scripts/store-import.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]);
     for (name, src_stamp) in &comp_jobs {
         let mut deps = vec![src_stamp.clone()];
         // linux ollama squashfs is built IN NIX from the ollamaComponents repack
@@ -272,6 +273,18 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
             stamp_edge("comp-ollama-windows-amd64", &deps,
                 "./scripts/nix-component.sh ollama-windows-amd64-dir dist/components/ollama-windows-amd64",
                 "nix dir: ollama-windows-amd64");
+        } else if let Some(t) = name.strip_prefix("runtime-") {
+            // runtime packed in nix from the store-imported dist/runtime/<t> (make-runtime
+            // already wrote the python/ tree + runtime.json): linux squashfs, mac dmg, win dir.
+            deps.extend(ib_srcs.iter().cloned());
+            let (fmt, out) = match target_os(t) {
+                "linux" => ("squashfs", format!("dist/components/runtime-{t}.squashfs")),
+                "mac" => ("dmg", format!("dist/components/runtime-{t}.dmg")),
+                _ => ("dir", format!("dist/components/runtime-{t}")),
+            };
+            stamp_edge(&format!("comp-{name}"), &deps,
+                &format!("./scripts/import-build-component.sh runtime-{t} dist/runtime/{t} runtime-{t}-{fmt} {out}"),
+                &format!("nix {fmt}: runtime-{t}"));
         } else {
             deps.extend(pack_srcs.iter().cloned());
             stamp_edge(&format!("comp-{name}"), &deps, &format!("./scripts/pack-component.sh {name}"), &format!("pack {name}"));
