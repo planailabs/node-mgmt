@@ -120,6 +120,23 @@ app_pkg_unlock()  { flock -u 9 2>/dev/null || true; exec 9>&- 2>/dev/null || tru
 ensure_app_deps() { [ -x "$APP/node_modules/.bin/electron-builder" ] || ( cd "$APP" && npm ci ); }
 mkdir -p "$OUT"
 
+# Atomic phase: wipe THIS target's prior bundle outputs before (re)building, so a
+# crash / disk-full mid-write can't leave a half-written tree that a rerun mistakes
+# for good (electron's unpacked dir, the per-OS component group, the standalone
+# launcher). ninja only runs this script when the target is out of date, so this
+# fires exactly when a fresh build is wanted — no extra "needs rebuild" check needed.
+# Scoped to this target's files (each target writes a distinct subtree), so it never
+# races a concurrently-bundling sibling target.
+clean_stale_outputs() {
+  rm -rf "$OUT/components/$OS"
+  case "$TARGET" in
+    linux-*) rm -rf "$OUT/linux-unpacked"; rm -f  "$OUT/plan-ai.linux.exe" ;;
+    win-*)   rm -rf "$OUT/win-unpacked";   rm -f  "$OUT/plan-ai.exe" ;;
+    mac-*)   rm -rf "$OUT/mac-arm64" "$OUT/mac-x64"; rm -f "$OUT/plan-ai.dmg" ;;
+  esac
+  log "cleaned stale outputs for $TARGET (atomic (re)build)"
+}
+
 # ---------------------------------------------------------------------------
 # Cross-built RUST launcher (rust prepares the runtime, then launches Electron),
 # shipped BESIDE the Electron app. Running it mounts/links the shared components/
@@ -167,7 +184,11 @@ package_electron_builder() {  # linux AppImage / windows zip
       [ -n "${NIX_LD_LIBRARY_PATH:-}" ] && patchelf --set-rpath "$NIX_LD_LIBRARY_PATH" "$f" 2>/dev/null || true
     done
   }
-  build_once() { ( cd "$APP" && npx --no-install electron-builder $EB_OS --config electron-builder.yml ); }
+  # DEBUG=electron-builder* by default: electron-builder otherwise exits non-zero
+  # with NO diagnostic on stdout (it just stops after "packaging …"), so a failure is
+  # invisible — especially under ninja's captured output. The debug stream shows the
+  # exact spawn/step that died. Override by exporting DEBUG before the build.
+  build_once() { ( cd "$APP" && DEBUG="${DEBUG:-electron-builder*}" npx --no-install electron-builder $EB_OS --config electron-builder.yml ); }
   log "electron-builder $EB_OS -> $OUT"
   # serialized vs the other targets (shared app/ + electron-builder cache); released
   # right after so the post-electron work below overlaps across targets.
@@ -333,7 +354,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
   # dmg work so it overlaps a concurrent linux/win bundle's post-electron steps.
   app_pkg_lock
   ensure_app_deps
-  ( cd "$APP" && npx --no-install @electron/packager . "plan.ai" --platform=darwin --arch="$ARCH" \
+  ( cd "$APP" && DEBUG="${DEBUG:-electron-*}" npx --no-install @electron/packager . "plan.ai" --platform=darwin --arch="$ARCH" \
       --out="$APPROOT" --overwrite --app-bundle-id=ai.plan.usb --ignore="(^/\.stage)" )
   app_pkg_unlock
   local APPDIR; APPDIR="$(ls -d "$APPROOT"/plan.ai-darwin-*/plan.ai.app 2>/dev/null | head -1)"
@@ -361,6 +382,7 @@ package_mac() {  # @electron/packager (cross) + rcodesign
 # closure (emit_nixos_fhs) and the static-musl launcher FHS-reexecs on NixOS, so
 # the regular linux build runs there too. `make dev` covers local NixOS dev.
 
+clean_stale_outputs
 case "$TARGET" in
   linux-*|win-*) package_electron_builder ;;
   mac-*)         package_mac ;;
