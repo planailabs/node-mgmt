@@ -31,6 +31,11 @@ struct Args {
     /// Determinate progress-bar mode: read 0..100 percentages + `#labels` on stdin.
     #[arg(long)]
     progress: bool,
+    /// Self-test: open the window, render a few frames, then exit 0. Used to verify
+    /// the splash actually comes up in a given environment (display + GL present).
+    /// Exits non-zero if the window can't be created or never rendered.
+    #[arg(long)]
+    selftest: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +48,8 @@ struct Shared {
 fn main() -> eframe::Result {
     let args = Args::parse();
     let shared = Arc::new(Mutex::new(Shared { frac: 0.0, label: args.text.clone(), closed: false }));
+    // Counts frames the app actually painted — the selftest's proof the window came up.
+    let frames = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -52,9 +59,11 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     let progress = args.progress;
+    let selftest = args.selftest;
     let title = args.title.clone();
     let shared_for_app = shared.clone();
-    eframe::run_native(
+    let frames_for_app = frames.clone();
+    let res = eframe::run_native(
         &title,
         options,
         Box::new(move |cc| {
@@ -65,12 +74,42 @@ fn main() -> eframe::Result {
             // Only the determinate mode reads stdin (the launcher pipes it). The
             // indeterminate splash is killed by the launcher, so it must not treat
             // an inherited /dev/null EOF as "close".
-            if progress {
+            if progress && !selftest {
                 spawn_stdin_reader(shared.clone(), cc.egui_ctx.clone());
             }
-            Ok(Box::new(SpinnerApp { started: Instant::now(), progress, shared: shared_for_app }))
+            // Selftest needs continuous repaints so it reaches the close-after-N-frames
+            // condition without waiting on input events.
+            if selftest {
+                cc.egui_ctx.request_repaint();
+            }
+            Ok(Box::new(SpinnerApp {
+                started: Instant::now(),
+                progress,
+                selftest,
+                frames: frames_for_app,
+                shared: shared_for_app,
+            }))
         }),
-    )
+    );
+
+    if selftest {
+        match res {
+            Ok(()) => {
+                let n = frames.load(std::sync::atomic::Ordering::Relaxed);
+                if n >= 1 {
+                    println!("plan-ai-spinner: selftest ok ({n} frames rendered)");
+                    std::process::exit(0);
+                }
+                eprintln!("plan-ai-spinner: selftest FAILED — window opened but never rendered");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("plan-ai-spinner: selftest FAILED — could not create window: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+    res
 }
 
 /// Read the zenity-style progress protocol from stdin on a background thread,
@@ -102,8 +141,15 @@ fn spawn_stdin_reader(shared: Arc<Mutex<Shared>>, ctx: egui::Context) {
 struct SpinnerApp {
     started: Instant,
     progress: bool,
+    selftest: bool,
+    frames: Arc<std::sync::atomic::AtomicU32>,
     shared: Arc<Mutex<Shared>>,
 }
+
+/// Selftest closes after this many painted frames (proof the window renders) or
+/// this wall-clock cap, whichever comes first — so the test never hangs.
+const SELFTEST_FRAMES: u32 = 6;
+const SELFTEST_MAX: Duration = Duration::from_secs(5);
 
 impl eframe::App for SpinnerApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -116,6 +162,14 @@ impl eframe::App for SpinnerApp {
             let s = self.shared.lock().unwrap();
             (s.frac, s.label.clone(), s.closed)
         };
+        let painted = self.frames.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if self.selftest {
+            // Keep animating until we've proven a few frames, then close cleanly.
+            ctx.request_repaint();
+            if painted >= SELFTEST_FRAMES || self.started.elapsed() >= SELFTEST_MAX {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         if closed || self.started.elapsed() >= MAX_LIFETIME {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
