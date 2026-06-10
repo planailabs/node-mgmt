@@ -53,34 +53,96 @@ fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new().summary(title).body(body).show();
 }
 
-/// A running splash: the embedded eframe spinner, a GUI progress dialog
-/// (zenity/kdialog/yad), or the curses `dialog` gauge on a no-X terminal. All are
-/// child processes closed by killing them; progress/text updates are fed over stdin
-/// (zenity-compatible protocol — a bare percentage per line).
-pub struct Splash {
-    child: std::process::Child,
+/// A running splash — the single shared progress abstraction for BOTH the GUI and
+/// the terminal. Every caller uses the same `set_text` / `set_progress` / `close`
+/// API regardless of which backend `show_splash` picked:
+///   - `Proc`: an external splash process — the embedded eframe spinner, a GUI
+///     progress dialog (zenity/kdialog/yad), or the curses `dialog` gauge — all fed
+///     over the zenity-compatible stdin protocol (`#label` / a bare percentage).
+///   - `Term`: an in-process progress line drawn on stderr. The universal fallback
+///     when no GUI/dialog tool is available but we have a tty, so progress is never
+///     silently lost (no external dependency).
+pub enum Splash {
+    Proc(std::process::Child),
+    Term(TermBar),
 }
 
 impl Splash {
-    fn write_line(&mut self, line: &str) {
-        if let Some(stdin) = self.child.stdin.as_mut() {
-            use std::io::Write;
-            let _ = writeln!(stdin, "{line}");
-            let _ = stdin.flush();
-        }
-    }
-    /// Update the label (determinate/progress splashes; no-op if stdin isn't piped).
+    /// Update the label.
     pub fn set_text(&mut self, text: &str) {
-        self.write_line(&format!("#{text}"));
+        match self {
+            Splash::Proc(child) => write_proc_line(child, &format!("#{text}")),
+            Splash::Term(bar) => bar.set_text(text),
+        }
     }
     /// Update the percentage 0..=100 (determinate/progress splashes).
     pub fn set_progress(&mut self, pct: u8) {
-        self.write_line(&pct.min(100).to_string());
+        match self {
+            Splash::Proc(child) => write_proc_line(child, &pct.min(100).to_string()),
+            Splash::Term(bar) => bar.set_progress(pct),
+        }
     }
-    /// Close + reap the splash window.
-    pub fn close(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+    /// Close + reap the splash.
+    pub fn close(self) {
+        match self {
+            Splash::Proc(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Splash::Term(bar) => bar.close(),
+        }
+    }
+}
+
+/// Feed one line of the zenity-style protocol to an external splash's stdin.
+fn write_proc_line(child: &mut std::process::Child, line: &str) {
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        let _ = writeln!(stdin, "{line}");
+        let _ = stdin.flush();
+    }
+}
+
+/// In-process terminal progress backend: a single `\r`-redrawn line on stderr,
+/// determinate (a bar + percentage) or indeterminate (`label …`). No external deps,
+/// works on every OS — the terminal half of the `Splash` abstraction.
+pub struct TermBar {
+    label: String,
+    progress: bool,
+    pct: u8,
+}
+
+impl TermBar {
+    const WIDTH: usize = 24;
+    fn new(label: String, progress: bool) -> Self {
+        let bar = TermBar { label, progress, pct: 0 };
+        bar.draw();
+        bar
+    }
+    fn draw(&self) {
+        use std::io::Write;
+        let mut err = std::io::stderr();
+        if self.progress {
+            let filled = (self.pct as usize * Self::WIDTH) / 100;
+            let bar: String = "█".repeat(filled) + &"░".repeat(Self::WIDTH - filled);
+            let _ = write!(err, "\r[plan-ai] {} ▕{}▏ {:>3}%", self.label, bar, self.pct);
+        } else {
+            let _ = write!(err, "\r[plan-ai] {} …", self.label);
+        }
+        let _ = err.flush();
+    }
+    fn set_text(&mut self, text: &str) {
+        self.label = text.to_string();
+        self.draw();
+    }
+    fn set_progress(&mut self, pct: u8) {
+        self.pct = pct.min(100);
+        self.draw();
+    }
+    fn close(self) {
+        use std::io::Write;
+        // Finish the redrawn line so later output starts cleanly.
+        let _ = writeln!(std::io::stderr());
     }
 }
 
@@ -904,10 +966,19 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
     let name = if cfg!(target_os = "windows") { "plan-ai-spinner.exe" } else { "plan-ai-spinner" };
     let bin = tools.join(name);
     let written = if !SPINNER_BIN.is_empty() {
-        fs::write(&bin, SPINNER_BIN).is_ok()
+        match fs::write(&bin, SPINNER_BIN) {
+            Ok(()) => true,
+            Err(e) => { log(&format!("spinner: write {} failed: {e}", bin.display())); false }
+        }
     } else if let Some(dev) = std::env::var_os("PLANAI_SPINNER").map(PathBuf::from).filter(|p| p.exists()) {
-        fs::copy(&dev, &bin).is_ok()
+        match fs::copy(&dev, &bin) {
+            Ok(_) => true,
+            Err(e) => { log(&format!("spinner: copy dev override failed: {e}")); false }
+        }
     } else {
+        // The usual reason the eframe splash is absent: a dev/bare-cargo launcher
+        // built without PLANAI_SPINNER_BIN, and no PLANAI_SPINNER override set.
+        log("spinner: no embedded binary (built without PLANAI_SPINNER_BIN) and no PLANAI_SPINNER override");
         false
     };
     if !written {
@@ -925,43 +996,83 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
     } else {
         cmd.stdin(Stdio::null());
     }
-    cmd.stdout(Stdio::null()).stderr(Stdio::null());
-    cmd.spawn().ok()
+    cmd.stdout(Stdio::null());
+    // Hide the spinner's own stderr by default, but surface it for diagnosis when
+    // PLANAI_SPINNER_DEBUG is set — that's where a missing-libGL / no-display crash
+    // prints, which is otherwise invisible (the launcher only sees a dead child).
+    if std::env::var_os("PLANAI_SPINNER_DEBUG").is_some() {
+        cmd.stderr(Stdio::inherit());
+    } else {
+        cmd.stderr(Stdio::null());
+    }
+    match cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) => { log(&format!("spinner: spawn {} failed: {e}", bin.display())); None }
+    }
 }
 
-/// Show the splash: the embedded eframe spinner where it can run; the desktop's
-/// progress dialog on NixOS (can't run the dynamic GL binary) or if eframe won't
-/// spawn on linux. Skipped with no display (headless/CI). Best-effort.
+/// Show the splash — the one entry point every progress site uses. Picks the best
+/// available backend, all behind the same `Splash` API: the embedded eframe spinner
+/// where it can run; the desktop's progress dialog on NixOS (can't run the dynamic
+/// GL binary) or if eframe won't spawn on linux; and finally an in-process terminal
+/// progress line whenever we have a tty but no GUI/dialog. Returns None only when
+/// truly headless (no display, no tty — e.g. CI). Best-effort.
 pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
-    // Need a display OR a terminal: with no display but a tty, fall straight to the
-    // terminal `dialog` gauge (the eframe binary needs a display). Skip only when
-    // truly headless (no display, no tty — e.g. CI).
+    // No display → skip the GUI backends entirely and go to the terminal fallback
+    // (the eframe binary needs a display). Truly headless (no display, no tty) → None.
     #[cfg(target_os = "linux")]
     {
-        use std::io::IsTerminal;
         let has = |k: &str| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false);
         let have_display = has("DISPLAY") || has("WAYLAND_DISPLAY");
         if !have_display {
-            if std::io::stderr().is_terminal() {
-                return spawn_system_progress_dialog(opts).map(|child| Splash { child });
+            if let Some(child) = spawn_system_progress_dialog(opts) {
+                return Some(Splash::Proc(child));
             }
-            return None;
+            return term_splash(opts);
         }
     }
     // NixOS: the dynamic glibc/GL eframe binary can't run (bare nix-ld stub) — use
-    // the system dialog directly.
+    // the system dialog directly, then the terminal line.
     #[cfg(target_os = "linux")]
     if is_nixos() {
-        return spawn_system_progress_dialog(opts).map(|child| Splash { child });
+        if let Some(child) = spawn_system_progress_dialog(opts) {
+            return Some(Splash::Proc(child));
+        }
+        return term_splash(opts);
     }
-    if let Some(child) = spawn_eframe_spinner(opts) {
-        log("splash spinner shown");
-        return Some(Splash { child });
+    if let Some(mut child) = spawn_eframe_spinner(opts) {
+        // The eframe binary dlopens GL + windowing libs; if those (or the display)
+        // are missing it exits almost immediately. Give it a beat, then check — a
+        // spinner that already died is no splash at all, so fall through to the
+        // system dialog instead of logging "shown" for a window nobody can see.
+        // (Negligible vs the multi-second mount this splash covers.)
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                log(&format!("spinner: eframe splash exited immediately ({status}) — falling back (set PLANAI_SPINNER_DEBUG to see why)"));
+            }
+            _ => {
+                log("splash spinner shown");
+                return Some(Splash::Proc(child));
+            }
+        }
     }
     // Linux fallback if the eframe binary is absent / won't spawn.
     #[cfg(target_os = "linux")]
     if let Some(child) = spawn_system_progress_dialog(opts) {
-        return Some(Splash { child });
+        return Some(Splash::Proc(child));
+    }
+    // Universal last resort: an in-process terminal progress line (every OS).
+    term_splash(opts)
+}
+
+/// The terminal backend of `Splash`: only when stderr is a real tty (otherwise the
+/// per-step `log()` lines already narrate progress on a non-interactive stream).
+fn term_splash(opts: SplashOpts) -> Option<Splash> {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() {
+        log("splash: terminal progress line (no GUI/dialog available)");
+        return Some(Splash::Term(TermBar::new(opts.text.to_string(), opts.progress)));
     }
     None
 }
@@ -1095,6 +1206,87 @@ fn run_self_update() -> ! {
     std::process::exit(if st.state == UpdateState::Idle { 0 } else { 1 });
 }
 
+/// Locate the prepared component tree (PLANAI_RESOURCES). A running launcher mounts
+/// it at `<cache>/root/dist` and exports the env; a standalone CLI invocation
+/// (`plan-ai ollama …`) inherits neither, so fall back to that well-known path and
+/// export it so `paths::*` / `usbd::resolve_bin` resolve. None if nothing's mounted.
+fn ensure_resources() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from).filter(|p| p.exists()) {
+        return Some(p);
+    }
+    let dist = cache_root().join("root").join("dist");
+    if dist.exists() {
+        std::env::set_var("PLANAI_RESOURCES", &dist);
+        // models/ + data/ live beside the cache root's runtime; the daemon seeds the
+        // portable root too. Only set if unset so an explicit override wins.
+        return Some(dist);
+    }
+    None
+}
+
+/// The ollama port the running stack uses, so `plan-ai ollama …` talks to the live
+/// server: PLANAI_OLLAMA_PORT if inherited, else the daemon's seeded config.json,
+/// else the well-known default.
+fn running_ollama_port() -> u16 {
+    if let Some(p) = std::env::var("PLANAI_OLLAMA_PORT").ok().and_then(|p| p.parse().ok()) {
+        return p;
+    }
+    let cfg = cache_root().join("usbd-home").join("config.json");
+    if let Ok(s) = std::fs::read_to_string(&cfg) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+            if let Some(p) = v.get("ollama").and_then(|o| o.get("port")).and_then(|p| p.as_u64()) {
+                return p as u16;
+            }
+        }
+    }
+    config::OLLAMA_PORT_DEFAULT
+}
+
+/// Run a bundled tool (`ollama` / `mac-mgmt`) with the launcher's mounted runtime,
+/// forwarding argv + stdio and exiting with the child's status. Never returns.
+fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
+    let mounted = ensure_resources().is_some();
+    let bin = match tool {
+        "ollama" if mounted => Some(paths::ollama_binary()).filter(|b| b.exists()),
+        "mac-mgmt" => usbd::resolve_bin(),
+        _ => None,
+    };
+    let bin = match bin {
+        Some(b) => b,
+        None => {
+            log(&format!(
+                "`plan-ai {tool}` unavailable: plan.ai's components aren't mounted — start the app first, or point PLANAI_RESOURCES at a prepared component tree"
+            ));
+            std::process::exit(127);
+        }
+    };
+    let mut cmd = Command::new(&bin);
+    cmd.args(&args);
+    if tool == "ollama" {
+        // Point the CLI at the already-running server + the USB models dir, so
+        // `ollama pull/list/rm` operate on the same store the app uses.
+        cmd.env("OLLAMA_HOST", format!("{}:{}", config::OLLAMA_HOST, running_ollama_port()));
+        cmd.env("OLLAMA_MODELS", paths::models_dir());
+        // NixOS dev: foreign-binary libs come via PLANAI_CHILD_LD_LIBRARY_PATH.
+        if let Ok(extra) = std::env::var("PLANAI_CHILD_LD_LIBRARY_PATH") {
+            if !extra.is_empty() {
+                let v = match std::env::var("LD_LIBRARY_PATH") {
+                    Ok(e) if !e.is_empty() => format!("{extra}:{e}"),
+                    _ => extra,
+                };
+                cmd.env("LD_LIBRARY_PATH", v);
+            }
+        }
+    }
+    match cmd.status() {
+        Ok(st) => std::process::exit(st.code().unwrap_or(1)),
+        Err(e) => {
+            log(&format!("failed to run {}: {e}", bin.display()));
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     // Subcommands (re-invocations of this same binary):
     {
@@ -1109,6 +1301,13 @@ fn main() {
             // Ops/test: check the update server, pre-download the delta, and apply it
             // (no Electron/runtime). Honours PLANAI_PORTABLE_ROOT + PLANAI_CACHE.
             Some("self-update") => run_self_update(),
+            // Passthrough to the bundled tools while the app is running, e.g.
+            //   ./plan-ai ollama pull llama3      ./plan-ai mac-mgmt status
+            // Resolves the binary from the mounted component tree and forwards the
+            // rest of argv + stdio (ollama also gets OLLAMA_HOST/OLLAMA_MODELS for
+            // the running server). Never returns.
+            Some("ollama") => run_tool_passthrough("ollama", a.collect()),
+            Some("mac-mgmt") => run_tool_passthrough("mac-mgmt", a.collect()),
             _ => {}
         }
     }
@@ -1182,7 +1381,13 @@ fn main() {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     let st = up.status();
                     if st.total > 0 {
-                        let pct = ((st.done * 100 / st.total) as u8).min(100);
+                        // Prefer byte-level progress (steady) over file-count progress
+                        // (jumps once per file); fall back to file count pre-download.
+                        let pct = if st.total_bytes > 0 {
+                            ((st.done_bytes * 100 / st.total_bytes) as u8).min(100)
+                        } else {
+                            ((st.done * 100 / st.total) as u8).min(100)
+                        };
                         if let Ok(mut g) = sp.lock() {
                             if let Some(splash) = g.as_mut() {
                                 if pct != last {

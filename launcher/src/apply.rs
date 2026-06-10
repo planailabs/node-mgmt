@@ -93,7 +93,7 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], u
         plan.to_download.len(), plan.to_delete.len(), root.display(), remote.version, commit,
     ));
     let total_bytes: u64 = plan.to_download.iter().map(|e| e.size.unwrap_or(0)).sum();
-    let mut splash = crate::show_splash(crate::SplashOpts { text: "Updating plan.ai…", progress: true });
+    let mut splash = crate::show_splash(crate::SplashOpts { text: &crate::i18n::t("applying-update"), progress: true });
     let mut done = 0u64;
     let mut done_bytes = 0u64;
     // Log a terminal progress line at most every ~5% (so a 60k-file windows apply
