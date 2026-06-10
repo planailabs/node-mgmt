@@ -27,6 +27,14 @@ browser (`/api/llmfit/*`): it is an opaque reverse-proxy to an upstream service 
 not own, so it passes bytes through (`ProxyReply`) and the SPA reads those responses
 as `Value`. Anything that is *our* contract is typed.
 
+The **second exception** is the config plane (`/api/config`, `/api/config/schema`):
+the config is a **schema-driven** document edited by the shared
+`mac_mgmt_config_ui::ConfigEditor`. Its shape is the daemon's `UsbConfig` JSON Schema
+(served at `/config/schema`), not a Rust DTO the SPA knows at compile time, so both the
+config body and the schema are opaque `Value`. The launcher reverse-proxies these to
+the USB daemon's loopback control server (which owns validation + persistence); the
+mock serves the real `UsbConfig` schema + a sample.
+
 ## 3. State is an enum, declared once
 
 `ServiceState` (`ready` / `starting` / `stopped` / `error`) and `UpdateState`
@@ -65,6 +73,11 @@ parameters are extracted, not string-sliced. The known set of an enumerable path
 parameter (e.g. the service action `start|stop|restart`) is validated in the shared
 handler, which returns `400 {"error": ...}` for an unknown value — so no backend has
 to re-implement that check.
+
+Config plane: `GET /api/config` (stored config), `GET /api/config/schema`
+(`UsbConfig` JSON Schema), `PUT /api/config` (validate → persist → live-apply;
+`200` with the daemon's `{ok, applied, …}` reply, or `422 {"error": ...}`). The real
+launcher proxies these to the daemon (`PLANAI_USBD_URL`).
 
 ## 7. Service identity
 

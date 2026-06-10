@@ -41,6 +41,11 @@ struct RealApi {
     updater: crate::update::Handle,
     apply_requested: Arc<AtomicBool>,
     electron: crate::ElectronHandle,
+    /// Base URL of the USB daemon's loopback control server (config endpoints
+    /// proxy here). `None` when the daemon isn't running (config tab degrades
+    /// gracefully). Set from `PLANAI_USBD_URL` by the launcher when it spawns
+    /// the daemon.
+    usbd_url: Option<String>,
 }
 
 /// Start the control server. Returns the base URL; the server runs on a task.
@@ -63,6 +68,7 @@ pub async fn run_server(
         updater,
         apply_requested,
         electron,
+        usbd_url: std::env::var("PLANAI_USBD_URL").ok(),
     });
 
     // Drain supervisor notifications → fan out to the SSE log subscribers.
@@ -248,6 +254,62 @@ impl ControlApi for RealApi {
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
         let base = self.llmfit_url.clone();
         async move { proxy_or_unavailable(base, |b| async move { proxy::post(&b, &path, &body).await }).await }
+    }
+
+    fn config(&self) -> impl Future<Output = serde_json::Value> + Send {
+        let base = self.usbd_url.clone();
+        async move {
+            match base {
+                Some(b) => proxy::get(&b, "/config")
+                    .await
+                    .ok()
+                    .and_then(|r| serde_json::from_slice(&r.body).ok())
+                    .unwrap_or_else(|| serde_json::json!({})),
+                None => serde_json::json!({}),
+            }
+        }
+    }
+
+    fn config_schema(&self) -> impl Future<Output = serde_json::Value> + Send {
+        let base = self.usbd_url.clone();
+        async move {
+            match base {
+                Some(b) => proxy::get(&b, "/config/schema")
+                    .await
+                    .ok()
+                    .and_then(|r| serde_json::from_slice(&r.body).ok())
+                    .unwrap_or_else(|| serde_json::json!({})),
+                None => serde_json::json!({}),
+            }
+        }
+    }
+
+    fn set_config(
+        &self,
+        body: serde_json::Value,
+    ) -> impl Future<Output = Result<serde_json::Value, String>> + Send {
+        let base = self.usbd_url.clone();
+        async move {
+            let Some(b) = base else {
+                return Err("config editing unavailable (usb daemon not running)".into());
+            };
+            let payload = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+            let r = proxy::put(&b, "/config", &payload)
+                .await
+                .map_err(|e| format!("usbd proxy: {e}"))?;
+            let parsed: serde_json::Value =
+                serde_json::from_slice(&r.body).unwrap_or_else(|_| serde_json::json!({}));
+            if (200..300).contains(&r.status) {
+                Ok(parsed)
+            } else {
+                let msg = parsed
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("usbd returned {}", r.status));
+                Err(msg)
+            }
+        }
     }
 }
 

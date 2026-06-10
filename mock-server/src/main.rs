@@ -25,6 +25,8 @@ struct State {
     upd_total: u64,
     kept: Vec<String>,
     dl: HashMap<String, f64>,
+    /// Stored USB config (only the values "set"), round-tripped by the Config tab.
+    config: Value,
 }
 
 struct Mock {
@@ -44,6 +46,11 @@ async fn main() {
             upd_total: 100,
             kept: vec!["linux-x64".into()],
             dl: HashMap::new(),
+            config: json!({
+                "ollama": { "enabled": true, "default_model": "qwen3.5", "models": ["qwen3.5"] },
+                "openwebui": { "enabled": true, "port": 8088 },
+                "memvault": { "enabled": false },
+            }),
         }),
         logs,
     });
@@ -250,5 +257,28 @@ impl ControlApi for Mock {
         self.s.lock().unwrap().dl.insert(id.clone(), 0.0);
         eprintln!("[mock] download {model} -> {id}");
         async move { ProxyReply { status: 200, body: json!({ "id": id }).to_string().into_bytes() } }
+    }
+
+    fn config(&self) -> impl Future<Output = Value> + Send {
+        let v = self.s.lock().unwrap().config.clone();
+        async move { v }
+    }
+    fn config_schema(&self) -> impl Future<Output = Value> + Send {
+        // The REAL reduced subset schema, so the editor matches the daemon.
+        let schema = schemars::schema_for!(mac_mgmt_common::UsbConfig);
+        let v = serde_json::to_value(&schema).unwrap_or_else(|_| json!({}));
+        async move { v }
+    }
+    fn set_config(&self, body: Value) -> impl Future<Output = Result<Value, String>> + Send {
+        // Validate against UsbConfig (mirrors the daemon's PUT), then store.
+        let result = match mac_mgmt_common::UsbConfig::from_json(&body) {
+            Ok(_) => {
+                self.s.lock().unwrap().config = body.clone();
+                eprintln!("[mock] config saved");
+                Ok(json!({ "ok": true, "applied": true, "note": "stored (mock)" }))
+            }
+            Err(e) => Err(format!("invalid config: {e}")),
+        };
+        async move { result }
     }
 }

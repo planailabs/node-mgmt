@@ -57,6 +57,20 @@ pub trait ControlApi: Send + Sync + 'static {
     /// Proxy a GET/POST to the llmfit model-browser (real: reqwest; mock: fake).
     fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send;
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send;
+
+    /// The stored daemon config as raw JSON (only the values the user set). Opaque
+    /// JSON — the schema-driven editor in the SPA drives it, so it stays a
+    /// `serde_json::Value` (same rationale as the llmfit pass-through). The real
+    /// launcher proxies to the USB daemon's `/config`; the mock serves a sample.
+    fn config(&self) -> impl Future<Output = serde_json::Value> + Send;
+    /// The JSON Schema for the (reduced) USB config, driving the editor's form.
+    fn config_schema(&self) -> impl Future<Output = serde_json::Value> + Send;
+    /// Validate + persist + live-apply an edited config. `Ok` carries the
+    /// daemon's `{ ok, applied, … }` reply; `Err` is a human-readable message.
+    fn set_config(
+        &self,
+        body: serde_json::Value,
+    ) -> impl Future<Output = Result<serde_json::Value, String>> + Send;
 }
 
 /// Build the `/api/*` router for any [`ControlApi`].
@@ -71,6 +85,8 @@ pub fn router<T: ControlApi>(state: Arc<T>) -> Router {
         .route("/api/update/check", post(h_update_check::<T>))
         .route("/api/update/apply", post(h_update_apply::<T>))
         .route("/api/platforms", get(h_platforms::<T>).post(h_set_platforms::<T>))
+        .route("/api/config", get(h_config::<T>).put(h_set_config::<T>))
+        .route("/api/config/schema", get(h_config_schema::<T>))
         .route("/api/llmfit/models", get(h_llm_models::<T>))
         .route("/api/llmfit/installed", get(h_llm_installed::<T>))
         .route("/api/llmfit/download", post(h_llm_download::<T>))
@@ -95,6 +111,21 @@ async fn h_update_status<T: ControlApi>(State(s): State<Arc<T>>) -> Json<UpdateS
 }
 async fn h_platforms<T: ControlApi>(State(s): State<Arc<T>>) -> Json<Platforms> {
     Json(s.platforms().await)
+}
+async fn h_config<T: ControlApi>(State(s): State<Arc<T>>) -> Json<serde_json::Value> {
+    Json(s.config().await)
+}
+async fn h_config_schema<T: ControlApi>(State(s): State<Arc<T>>) -> Json<serde_json::Value> {
+    Json(s.config_schema().await)
+}
+async fn h_set_config<T: ControlApi>(
+    State(s): State<Arc<T>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    match s.set_config(body).await {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, Json(ApiError::new(e))).into_response(),
+    }
 }
 
 // --- commands (204 No Content on success) ----------------------------------

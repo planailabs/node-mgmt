@@ -28,3 +28,13 @@ pub async fn post(base: &str, path: &str, body: &str) -> anyhow::Result<ProxyRes
     )
     .await
 }
+
+pub async fn put(base: &str, path: &str, body: &str) -> anyhow::Result<ProxyResponse> {
+    send(
+        crate::net::client()
+            .put(format!("{base}{path}"))
+            .header("content-type", "application/json")
+            .body(body.to_string()),
+    )
+    .await
+}
