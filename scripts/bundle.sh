@@ -218,6 +218,21 @@ copy_llmfit_into() {  # <pool-dir>
   [ -n "$bin" ] || { warn "no llmfit binary in $out"; return 0; }
   cp -f "$bin" "$pool/$name"; chmod +x "$pool/$name" 2>/dev/null || true
   log "llmfit -> components/$name ($(du -h "$pool/$name" | cut -f1))"
+  # windows: the msvc-linked llmfit.exe needs VCRUNTIME140.dll beside it. Pull the
+  # MSVC redist DLLs (their own nix target) into the pool too; the launcher copies
+  # them next to llmfit.exe in its writable tools dir before run.
+  case "$TARGET" in win-*) copy_msvc_dlls_into "$pool" ;; esac
+}
+
+# Copy the MSVC C++ redistributable DLLs (vcruntime140*.dll, …) into the shared pool
+# so the windows launcher can place them beside llmfit.exe (no VC++ redist on the
+# target machine). Separate nix target from llmfit — the pin lives in nix/msvc-runtime.nix.
+copy_msvc_dlls_into() {  # <pool-dir>
+  local pool="$1" out
+  out="$(cd "$REPO_ROOT" && nix build ".#msvc-dlls-win-x64" --no-link --print-out-paths 2>/dev/null || true)"
+  [ -n "$out" ] || { warn "msvc redist DLLs build failed — llmfit.exe may not start without VC++ redist"; return 0; }
+  find "$out" -maxdepth 1 -type f -name '*.dll' -exec cp -f {} "$pool/" \;
+  log "msvc redist -> components/ ($(find "$out" -maxdepth 1 -name '*.dll' | wc -l | tr -d ' ') DLLs)"
 }
 
 # (The splash spinner is no longer shipped in the pool — it's embedded directly in

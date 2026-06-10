@@ -858,7 +858,27 @@ fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
     let dst = tools.join(name);
     let _ = fs::create_dir_all(tools);
     if fs::copy(&src, &dst).is_err() {
+        // On copy failure llmfit runs from the pool (comp) dir, where the bundled
+        // VCRUNTIME140.dll already sits beside it — so the windows loader still
+        // resolves the redist there; nothing extra to do for the fallback.
         return Some(src);
+    }
+    // Windows: the msvc-linked llmfit.exe dynamically links VCRUNTIME140.dll. We run
+    // it from the writable `tools` dir (FAT32 has no exec bit), so the redist DLLs the
+    // pool ships beside it must be copied next to the destination .exe (the loader
+    // searches the exe's own dir first), or it dies with "VCRUNTIME140.dll not found".
+    #[cfg(target_os = "windows")]
+    if let Some(dir) = src.parent() {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) {
+                    if let Some(fname) = p.file_name() {
+                        let _ = fs::copy(&p, tools.join(fname));
+                    }
+                }
+            }
+        }
     }
     #[cfg(unix)]
     {

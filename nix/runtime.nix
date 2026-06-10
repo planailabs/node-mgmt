@@ -18,13 +18,9 @@ let
   # sentence-transformers → open-webui embeddings) link MSVCP140.dll +
   # MSVCP140_ATOMIC_WAIT.dll, so without these open-webui dies at `import torch`
   # with WinError 126. A portable kiosk can't assume the VC++ redist is installed
-  # → bundle these redistributable DLLs into the python root. The `msvc-runtime`
-  # PyPI wheel just ships the redist DLLs (version-agnostic; the cp311 tag is
-  # irrelevant — we take only the DLLs).
-  msvcRuntimeWheel = pkgs.fetchurl {
-    url = "https://files.pythonhosted.org/packages/ce/92/5a10262c2a489d5854f96d69e287923d6f720c4935dd26634deb7a5426e9/msvc_runtime-14.44.35112-cp311-cp311-win_amd64.whl";
-    hash = "sha256-q6f75xiX0l7VP7t/OR6fUCiTeKipriGLoYUwxmNEg5E=";
-  };
+  # → bundle these redistributable DLLs into the python root. Pin is shared with
+  # the llmfit windows build (which ships vcruntime140*.dll beside llmfit.exe).
+  msvcRuntimeWheel = (import ./msvc-runtime.nix { inherit pkgs; }).wheel;
 in
 derivation {
   inherit system;
