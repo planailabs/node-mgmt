@@ -37,7 +37,7 @@ ALLTGTS := $(TARGETS)
 # NB: '#' starts a Make comment — escape it (\#) so the flake attr survives.
 XTASK := nix run .\#xtask --
 
-.PHONY: all dev ui download download-curl vendor-lock update ollama openwebui wheel \
+.PHONY: all dev ui download download-curl vendor-lock update update-deps ollama openwebui wheel \
         runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed models test \
         test-usb test-vm test-nixos test-clean test-mac test-win test-all clean help
 
@@ -81,6 +81,9 @@ vendor-lock: ## regenerate vendor.lock.json (run when usb.lock bumps)
 
 update: ## regenerate ALL locks after bumping usb.lock (vendor + uv + npm)
 	./scripts/update-locks.sh
+
+update-deps: ## bump ollama/open-webui/llmfit/pbs/python to latest + regen locks
+	./scripts/update-deps.sh
 
 # legacy curl-based fetch (no Nix); FODs (make download) are preferred
 download-curl: ollama openwebui
