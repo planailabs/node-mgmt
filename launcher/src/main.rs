@@ -358,11 +358,21 @@ fn maybe_run_in_fhs(exe: &Path, comp: Option<&Path>, spinner: &SpinnerHandle) ->
 fn fhs_store_mode(bwrap: &Path) -> &'static str {
     let probe = cache_root().join("ovl-probe");
     let low = probe.join("low");
+    let low2 = probe.join("low2");
     let _ = fs::create_dir_all(&low);
+    let _ = fs::create_dir_all(&low2);
     let _ = fs::write(low.join("marker"), b"ok");
+    // `--ro-overlay` requires at least TWO `--overlay-src` layers — and the real
+    // usage unions the FHS-closure store with the host /nix/store (two srcs).
+    // Probing with a SINGLE src always errors ("--ro-overlay requires at least
+    // two --overlay-src") and wrongly reports "bind" — which then can't create
+    // mountpoints on the read-only host /nix/store ("Can't mkdir … Read-only file
+    // system"). Probe with two layers so it matches reality.
     let ok = Command::new(bwrap)
         .args(["--ro-bind", "/", "/", "--overlay-src"])
         .arg(&low)
+        .arg("--overlay-src")
+        .arg(&low2)
         .args(["--ro-overlay", "/mnt", "cat", "/mnt/marker"])
         .output()
         .map(|o| o.status.success() && o.stdout == b"ok")
