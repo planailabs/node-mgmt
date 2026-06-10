@@ -254,10 +254,46 @@ pub async fn check_and_predownload(up: Handle) {
             continue;
         }
         crate::log(&format!("update: [{}/{}] downloading {} ({})", i + 1, total, e.path, human_bytes(size)));
-        let mut res = net::download_to(&file_url, &dest, &sha, size, true).await;
+        // Steady byte-level progress: download_to reports cumulative bytes for THIS
+        // file; we publish `done_bytes (finished files) + this file's bytes` so the
+        // bar advances within a file, not just once per file. Throttled (~150ms) and
+        // monotonic so the lock isn't hammered per chunk and the bar never rewinds.
+        let progress = {
+            let up = up.clone();
+            let remote = remote.clone();
+            let base = done_bytes;
+            let mut last = std::time::Instant::now();
+            let mut peak = 0u64;
+            move |file_bytes: u64| {
+                let file_bytes = file_bytes.min(size).max(peak);
+                peak = file_bytes;
+                if last.elapsed().as_millis() < 150 {
+                    return;
+                }
+                last = std::time::Instant::now();
+                let live = (base + file_bytes).min(total_bytes);
+                let rate = (live as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
+                up.set(downloading(i as u64, total, live, total_bytes, rate, &remote));
+            }
+        };
+        let mut res = net::download_to(&file_url, &dest, &sha, size, true, progress).await;
         if let Err(err) = &res {
             crate::log(&format!("update: [{}/{}] {} interrupted ({err}); retrying fresh", i + 1, total, e.path));
-            res = net::download_to(&file_url, &dest, &sha, size, false).await; // retry fresh
+            // Retry fresh — keep showing the finished-files baseline as it re-streams.
+            let up2 = up.clone();
+            let remote2 = remote.clone();
+            let base = done_bytes;
+            let mut last = std::time::Instant::now();
+            let progress = move |file_bytes: u64| {
+                if last.elapsed().as_millis() < 150 {
+                    return;
+                }
+                last = std::time::Instant::now();
+                let live = (base + file_bytes.min(size)).min(total_bytes);
+                let rate = (live as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
+                up2.set(downloading(i as u64, total, live, total_bytes, rate, &remote2));
+            };
+            res = net::download_to(&file_url, &dest, &sha, size, false, progress).await;
         }
         if let Err(err) = res {
             crate::log(&format!("update: [{}/{}] {} FAILED: {err}", i + 1, total, e.path));

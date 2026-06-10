@@ -48,7 +48,19 @@ fn hex(d: &[u8]) -> String {
 /// via HTTP Range when `resume` and a partial exists), then renames into place on a
 /// verified hash. `expected_sha` empty skips verification. Same-dir rename = the
 /// closest thing to atomic on the local cache fs.
-pub async fn download_to(url: &str, dest: &Path, expected_sha: &str, _expected_size: u64, resume: bool) -> Result<()> {
+///
+/// `on_progress` is called as bytes land — with the cumulative bytes present for
+/// THIS file (the resumed `.part` start plus everything streamed so far, capped so
+/// it never exceeds the file). It's invoked per network chunk, so the UI can show
+/// steady byte-level progress within a file instead of one jump per completed file.
+pub async fn download_to(
+    url: &str,
+    dest: &Path,
+    expected_sha: &str,
+    _expected_size: u64,
+    resume: bool,
+    mut on_progress: impl FnMut(u64),
+) -> Result<()> {
     let part = part_path(dest);
     if let Some(parent) = part.parent() {
         tokio::fs::create_dir_all(parent).await.ok();
@@ -84,11 +96,15 @@ pub async fn download_to(url: &str, dest: &Path, expected_sha: &str, _expected_s
         .truncate(start == 0)
         .open(&part)
         .await?;
+    let mut got: u64 = start;
+    on_progress(got); // seed the resumed baseline so the bar doesn't start at 0
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         hasher.update(&chunk);
         file.write_all(&chunk).await?;
+        got += chunk.len() as u64;
+        on_progress(got);
     }
     file.flush().await?;
     drop(file);
