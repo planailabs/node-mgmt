@@ -68,9 +68,16 @@ pkgs.mkShell {
     # marker the Makefile guards on (see Makefile)
     export PLANAI_DEVSHELL=1
 
-    if [ -f .gitmodules ] && [ ! -e third_party/plan-ai-design/assets/input.css ]; then
-      echo "==> initialising plan-ai-design submodule"
-      git submodule update --init --recursive third_party/plan-ai-design || true
+    # Submodules the build needs: plan-ai-design (SPA component lib) + mac-mgmt
+    # (mac-mgmt-services, the launcher's control-plane dep). Init whichever is missing.
+    if [ -f .gitmodules ]; then
+      [ -e third_party/plan-ai-design/assets/input.css ] || \
+        { echo "==> initialising plan-ai-design submodule"; git submodule update --init --recursive third_party/plan-ai-design || true; }
+      # --recursive: mac-mgmt has its own nested submodules (memvault → design) that
+      # nix's self.submodules fetch insists on, though the launcher only uses the
+      # self-contained mac-mgmt-services crate.
+      [ -e third_party/mac-mgmt/mac-mgmt-services/Cargo.toml ] || \
+        { echo "==> initialising mac-mgmt submodule"; git submodule update --init --recursive third_party/mac-mgmt || true; }
     fi
     if [ -f usb.lock ]; then
       echo "plan-ai-usb-minimal — pinned versions:"

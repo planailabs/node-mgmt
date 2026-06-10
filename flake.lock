@@ -18,24 +18,6 @@
         "type": "github"
       }
     },
-    "mac-mgmt": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1780868779,
-        "narHash": "sha256-70v6Nvtg0sZAAncDYuSFc4lAZJPvOT4OafXqxc/6plc=",
-        "ref": "trunk",
-        "rev": "ea420ee4443e91c667422bd4b368e6b763ef8e46",
-        "revCount": 2236,
-        "type": "git",
-        "url": "ssh://git@git.plan.ai/plan-ai/mac-mgmt"
-      },
-      "original": {
-        "ref": "trunk",
-        "rev": "ea420ee4443e91c667422bd4b368e6b763ef8e46",
-        "type": "git",
-        "url": "ssh://git@git.plan.ai/plan-ai/mac-mgmt"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780243769,
@@ -55,7 +37,6 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "mac-mgmt": "mac-mgmt",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

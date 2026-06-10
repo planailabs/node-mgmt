@@ -1,3 +1,6 @@
 [submodule "third_party/plan-ai-design"]
 	path = third_party/plan-ai-design
 	url = https://git.plan.ai/plan-ai/design.git
+[submodule "third_party/mac-mgmt"]
+	path = third_party/mac-mgmt
+	url = https://git.plan.ai/plan-ai/mac-mgmt.git

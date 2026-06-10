@@ -10,17 +10,14 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # mac-mgmt provides mac-mgmt-services (the cross-platform process supervisor the
-    # launcher's control plane drives). flake=false: we consume the crate source,
-    # copied into the launcher's vendor/ at build time. Pinned by rev for
-    # reproducibility; bump after landing changes in mac-mgmt.
-    mac-mgmt = {
-      url = "git+ssh://git@git.plan.ai/plan-ai/mac-mgmt?ref=trunk&rev=ea420ee4443e91c667422bd4b368e6b763ef8e46";
-      flake = false;
-    };
-    # Include git submodules in the flake source — the SPA build needs
-    # third_party/plan-ai-design (the shared Dioxus component library), which is a
-    # submodule and would otherwise be excluded from the flake source tree.
+    # Include git submodules in the flake source. The SPA build needs
+    # third_party/plan-ai-design (the shared Dioxus component library), and the
+    # launcher needs third_party/mac-mgmt (mac-mgmt-services — the cross-platform
+    # process supervisor its control plane drives); both are git submodules, pinned by
+    # commit, that would otherwise be excluded from the flake source tree. Vendoring
+    # mac-mgmt as a submodule (rather than a flake input) lets the launcher build with
+    # plain `cargo build` outside the flake too. Bump the submodule after landing
+    # changes in mac-mgmt.
     self.submodules = true;
   };
 
@@ -28,7 +25,7 @@
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, mac-mgmt }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
@@ -122,13 +119,13 @@
         };
         # registry deps for the launcher's Cargo.lock (tokio, interprocess, …),
         # vendored offline. The mac-mgmt-services path dep is supplied separately
-        # (copied from the mac-mgmt input into vendor/ in the build).
+        # (the third_party/mac-mgmt submodule, copied beside src/ in the build).
         launcherVendor = pkgs.rustPlatform.importCargoLock {
           lockFile = ./launcher/Cargo.lock;
         };
         # native launcher cross-compiled via cargo-zigbuild. It now carries deps
         # (the control plane), so the build vendors crates.io (launcherVendor) and
-        # copies mac-mgmt-services from the mac-mgmt input into vendor/.
+        # copies mac-mgmt-services from the third_party/mac-mgmt submodule.
         launcherFor = { zigTarget, outDir }:
           let
             # The splash spinner for the MATCHING target, embedded into the launcher
@@ -170,17 +167,19 @@
             })
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
-              # path deps (../crates/*): copied as a sibling of src/ so Cargo resolves them.
+              # path deps copied as siblings of src/ so Cargo's relative paths resolve:
+              #   ../crates/* and ../third_party/mac-mgmt/mac-mgmt-services (a git
+              #   submodule — self.submodules brings it into the flake source; only that
+              #   self-contained crate subdir is needed).
               cp -r ${./crates} crates && chmod -R u+w crates
+              mkdir -p third_party/mac-mgmt
+              cp -r ${./third_party/mac-mgmt}/mac-mgmt-services third_party/mac-mgmt/mac-mgmt-services
+              chmod -R u+w third_party
               cp -r ${./launcher}/. src && chmod -R u+w src && cd src
               # the SPA source isn't part of the launcher crate build; the built
               # web assets come from the `spa` derivation, embedded below.
               rm -rf spa-src
               rm -rf spa && cp -r ${spa} spa && chmod -R u+w spa
-              # path dep: the standalone mac-mgmt-services crate from the input
-              rm -rf vendor && mkdir -p vendor
-              cp -r ${mac-mgmt}/mac-mgmt-services vendor/mac-mgmt-services
-              chmod -R u+w vendor
               # crates.io deps from the vendored cargo lock
               mkdir -p .cargo
               printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${launcherVendor}" > .cargo/config.toml
