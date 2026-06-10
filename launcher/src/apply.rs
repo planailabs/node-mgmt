@@ -27,21 +27,32 @@ pub fn run(up: &update::Updater) -> bool {
     write_journal(&root, &pending.staging, &pending.remote.commit);
     let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.kept, Some(up));
     let _ = std::fs::remove_file(journal_path(&root));
+    // The staged update is now on the drive — drop the pendrive "in flight" marker
+    // so the next launch doesn't try to re-apply it.
+    update::clear_pending_marker();
     ok
 }
 
-/// On startup: if a prior apply was interrupted, finish it (idempotent) when the
-/// staging is still present; otherwise drop the stale journal + orphan temps and
-/// keep running the intact old version.
+/// On startup: finish any update that a prior run left unapplied — whether it was
+/// interrupted mid-apply (the journal) OR was fully staged-and-ready but never
+/// applied because the process exited first (the pendrive marker, e.g. after a
+/// busy-mount teardown or a crash between download and apply). Both point at the
+/// staging folder; apply is idempotent + crash-safe, so re-running is safe. When
+/// the staging is gone, drop the stale markers + orphan temps and keep the intact
+/// old version (a fresh download will re-stage it).
 pub fn resume_if_interrupted() {
     let root = paths::portable_root();
     let jp = journal_path(&root);
-    let Ok(txt) = std::fs::read_to_string(&jp) else {
+    let mp = update::pending_marker_path();
+    // Prefer the apply journal (mid-apply); fall back to the staged-ready marker.
+    let marker = if jp.exists() { Some(jp.clone()) } else if mp.exists() { Some(mp.clone()) } else { None };
+    let Some(marker) = marker else {
         cleanup_orphans(&root);
         return;
     };
-    let staging = serde_json::from_str::<serde_json::Value>(&txt)
+    let staging = std::fs::read_to_string(&marker)
         .ok()
+        .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
         .and_then(|v| v.get("staging").and_then(|s| s.as_str()).map(PathBuf::from));
     let remote = staging
         .as_ref()
@@ -49,14 +60,16 @@ pub fn resume_if_interrupted() {
         .and_then(|s| Manifest::from_json(&s).ok());
     match (staging, remote) {
         (Some(staging), Some(remote)) if staging.exists() => {
-            crate::log("resuming interrupted update apply");
+            crate::log("resuming staged update apply (from pendrive marker)");
             let kept = update::read_platforms();
             apply_plan(&root, &staging, &remote, &kept, None);
             let _ = std::fs::remove_file(&jp);
+            update::clear_pending_marker();
         }
         _ => {
-            crate::log("stale update journal — staging gone; keeping current version");
+            crate::log("stale update marker — staging gone; keeping current version");
             let _ = std::fs::remove_file(&jp);
+            update::clear_pending_marker();
             cleanup_orphans(&root);
         }
     }

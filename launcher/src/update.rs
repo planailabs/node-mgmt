@@ -4,7 +4,7 @@
 //! runtime shuts down. Manifest schema + diff + classification are shared with the
 //! build tool via `plan-ai-manifest` (one source of truth).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -101,6 +101,35 @@ fn staging_dir(commit: &str) -> PathBuf {
     cache_root().join("update").join(key)
 }
 
+/// Persistent "update in flight" marker on the PENDRIVE (portable root), pointing
+/// at the staging folder. Unlike the in-memory `Pending` (lost on exit) and the
+/// cache-local staging (may be cleared per-machine), this lives on the drive that
+/// travels with the user — so a download/apply interrupted by a crash, power loss,
+/// or a busy-mount teardown is detected and retried/resumed on the next launch
+/// (`apply::resume_if_interrupted`). Written when the delta is staged + ready;
+/// cleared once applied (or when already up to date).
+pub fn pending_marker_path() -> PathBuf {
+    paths::portable_root().join(".update-pending.json")
+}
+
+/// Record a staged-and-ready update on the pendrive so a restart applies it.
+pub fn write_pending_marker(commit: &str, version: &str, staging: &Path) {
+    let _ = std::fs::write(
+        pending_marker_path(),
+        serde_json::json!({
+            "commit": commit,
+            "version": version,
+            "staging": staging.to_string_lossy(),
+        })
+        .to_string(),
+    );
+}
+
+/// Clear the pendrive marker (update applied, or nothing to do).
+pub fn clear_pending_marker() {
+    let _ = std::fs::remove_file(pending_marker_path());
+}
+
 async fn fetch_remote(url: &str) -> anyhow::Result<Manifest> {
     let base = url.trim_end_matches('/');
     let json = net::get_string(&format!("{base}/manifest.json")).await?;
@@ -178,6 +207,7 @@ pub async fn check_and_predownload(up: Handle) {
     let plan = manifest::diff(local.as_ref(), &remote, &kept);
     if plan.to_download.is_empty() && plan.to_delete.is_empty() {
         crate::log(&format!("update: already up to date (version {})", remote.version));
+        clear_pending_marker();
         up.set(UpdateStatus { state: UpdateState::Idle, version: remote.version, commit: remote.commit, ..UpdateStatus::idle() });
         return;
     }
@@ -212,6 +242,17 @@ pub async fn check_and_predownload(up: Handle) {
         let file_url = format!("{base}/files/{}", e.path);
         let sha = e.sha256.clone().unwrap_or_default();
         let size = e.size.unwrap_or(0);
+        // Resume across launches: a file fully staged by a prior (interrupted) run
+        // has been renamed off its `.part`, so download_to would re-fetch it whole.
+        // Skip it when it's already present and its hash matches — only partial or
+        // missing files are (re)downloaded (download_to resumes those via `.part`).
+        if !sha.is_empty() && dest.exists() && manifest::sha256_file(&dest).map(|g| g == sha).unwrap_or(false) {
+            crate::log(&format!("update: [{}/{}] {} already staged — skipping", i + 1, total, e.path));
+            done_bytes += size;
+            let rate = (done_bytes as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
+            up.set(downloading(i as u64 + 1, total, done_bytes, total_bytes, rate, &remote));
+            continue;
+        }
         crate::log(&format!("update: [{}/{}] downloading {} ({})", i + 1, total, e.path, human_bytes(size)));
         let mut res = net::download_to(&file_url, &dest, &sha, size, true).await;
         if let Err(err) = &res {
@@ -233,6 +274,11 @@ pub async fn check_and_predownload(up: Handle) {
         "update: staged {} file(s) ({}) — ready to apply version {} (commit {})",
         total, human_bytes(done_bytes), remote.version, short(&remote.commit),
     ));
+    // Persist the pendrive marker BEFORE announcing Ready: if the apply is then
+    // interrupted (crash, power loss, a busy-mount teardown), the next launch finds
+    // the marker and applies the already-staged delta (apply::resume_if_interrupted)
+    // without needing the in-memory Pending or the network.
+    write_pending_marker(&remote.commit, &remote.version, &staging);
     *up.pending.lock().unwrap() = Some(Pending { staging, remote: remote.clone(), kept });
     up.set(UpdateStatus {
         state: UpdateState::Ready,
