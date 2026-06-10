@@ -1411,7 +1411,7 @@ fn main() {
         // Daemon mode: connect to the daemon's in-process supervisor socket.
         // Dev mode: start the launcher's own supervisor + register services.
         let client = match &usbd_started {
-            Some((_home, sock)) => {
+            Some((_home, sock, _child)) => {
                 match mac_mgmt_services::Client::connect(sock, std::time::Duration::from_secs(30)).await {
                     Ok(c) => { log("control: usb daemon owns the supervisor"); Ok(c) }
                     Err(e) => Err(format!("usb daemon socket: {e}")),
@@ -1486,14 +1486,23 @@ fn main() {
     };
 
     // Final cleanup: close the splash spinner if it somehow outlived the session
-    // (e.g. Electron exited before signalling), then stop the supervisor (it stops
-    // its managed children on shutdown), the llmfit serve, and the component mounts.
+    // (e.g. Electron exited before signalling), then stop the control plane + its
+    // managed services, the llmfit serve, and the component mounts — IN THAT ORDER,
+    // so nothing is still executing from a mount when we unmount it (otherwise the
+    // unmount hits "device busy" and we fall back to a lazy detach).
     kill_spinner(&spinner);
-    rt.block_on(async {
-        if let Ok(mut c) = mac_mgmt_services::Client::connect(&socket, std::time::Duration::from_secs(5)).await {
-            let _ = c.shutdown().await;
-        }
-    });
+    match usbd_started {
+        // usbd mode: the daemon owns the supervisor + spawn-from-mount services.
+        // SIGTERM it and wait — it stops its services (which run from the mounted
+        // runtime/ollama trees) and exits, releasing every reference into the pool.
+        Some((_home, _sock, child)) => usbd::stop(child),
+        // dev mode: the launcher's own in-process supervisor — stop it via its socket.
+        None => rt.block_on(async {
+            if let Ok(mut c) = mac_mgmt_services::Client::connect(&socket, std::time::Duration::from_secs(5)).await {
+                let _ = c.shutdown().await;
+            }
+        }),
+    }
     if let Some(mut c) = llmfit_child {
         let _ = c.kill();
         let _ = c.wait();

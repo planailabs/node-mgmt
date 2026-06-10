@@ -53,6 +53,11 @@ sha2 = "0.10"
 # bytes-stream helpers for reqwest streamed downloads
 futures-util = "0.3"
 
+# SIGTERM the usb daemon so it stops its services + exits before we unmount the
+# component pool (no busy-unmount). Unix-only; Windows uses Child::kill.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 opt-level = "z"
 lto = true

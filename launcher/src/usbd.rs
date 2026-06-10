@@ -13,7 +13,7 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 
 use crate::log;
 
@@ -92,12 +92,13 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
     }
 }
 
-/// Spawn the daemon and set `PLANAI_USBD_URL`. Returns the daemon's home +
-/// supervisor socket so the caller can connect a status `Client`.
+/// Spawn the daemon and set `PLANAI_USBD_URL`. Returns the daemon's home,
+/// supervisor socket, and child handle so the caller can connect a status
+/// `Client` and later stop the daemon (see `stop`).
 ///
 /// Call BEFORE the tokio runtime (single-threaded) — it sets env the daemon
 /// child inherits.
-pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf)> {
+pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
     let home = crate::cache_root().join("usbd-home");
     if let Err(e) = std::fs::create_dir_all(&home) {
         log(&format!("usbd: create home failed: {e}"));
@@ -119,16 +120,64 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf)> {
         .arg("--control-port")
         .arg(port.to_string());
     match cmd.spawn() {
-        Ok(_child) => {
+        Ok(child) => {
             log(&format!(
                 "usbd: spawned daemon (home={}, control=http://[::1]:{port})",
                 home.display()
             ));
-            Some((home.clone(), socket_path(&home)))
+            Some((home.clone(), socket_path(&home), child))
         }
         Err(e) => {
             log(&format!("usbd: spawn failed: {e}"));
             None
+        }
+    }
+}
+
+/// Stop the daemon before the launcher unmounts the component pool.
+///
+/// The daemon's SIGTERM handler shuts down its managed services (ollama /
+/// open-webui / memvault — which run from the mounted runtime/ollama trees) and
+/// then exits, releasing every reference into the mounts (incl. the daemon's own
+/// executable, mmap'd from the usbd mount). We wait for it so the subsequent
+/// `fusermount -u` / `hdiutil detach` succeeds on the first try instead of
+/// hitting "device busy" and falling back to a lazy unmount. Hard-kills as a last
+/// resort if it doesn't exit within the grace window.
+pub fn stop(mut child: Child) {
+    // Already gone?
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: `child` is our direct descendant; SIGTERM asks for graceful
+        // shutdown (the daemon stops its services, then exits).
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    // Wait for graceful service teardown (the supervisor SIGTERMs each service,
+    // then SIGKILLs after its own grace period), bounded so we never hang here.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                log("usbd: daemon stopped");
+                return;
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            _ => {
+                log("usbd: daemon did not exit in time — killing");
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
         }
     }
 }
