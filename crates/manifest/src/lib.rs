@@ -31,13 +31,20 @@ pub fn current_platform() -> &'static str {
 /// The build targets this manifest scheme knows, as drive-path group segments.
 pub const KNOWN_TARGET_KEYS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", "mac-arm64"];
 
-/// A manifest entry: a file or a directory in the drive layout, tagged with the
-/// platform(s) that need it.
+/// A manifest entry: a file, a directory, or a zip-component in the drive layout,
+/// tagged with the platform(s) that need it.
+///
+/// A `zip` entry is a single archive that the launcher downloads and unpacks on
+/// update — used for Windows components (otherwise thousands of individual files).
+/// The archive's content lives at `path` (`…/foo.zip`) on the update server, but on
+/// the burned USB image the zip is already UNPACKED into `target` and removed (the
+/// manifest still carries the zip entry, identified by the archive's sha, so a later
+/// update can diff against it). `target` is wiped before each unpack.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub path: String,
     #[serde(rename = "type")]
-    pub kind: String, // "file" | "dir"
+    pub kind: String, // "file" | "dir" | "zip"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,11 +54,18 @@ pub struct Entry {
     /// "linux" | "mac" | "win" | "all" (all = every platform needs it).
     #[serde(default)]
     pub platforms: Vec<String>,
+    /// For a `zip` entry: the drive-relative folder it unpacks into (wiped first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 impl Entry {
     pub fn is_dir(&self) -> bool {
         self.kind == "dir"
+    }
+    /// A zip-component (downloaded as one archive, unpacked into `target`).
+    pub fn is_zip(&self) -> bool {
+        self.kind == "zip"
     }
     /// Does any kept platform need this entry? ("all" matches everything.)
     pub fn wanted_by(&self, kept: &[String]) -> bool {
@@ -207,16 +221,23 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Entry>) -> io::Result<()> {
         }
         let platforms = classify(&rel);
         if md.is_dir() {
-            out.push(Entry { path: rel, kind: "dir".into(), sha256: None, size: None, exec: false, platforms });
+            out.push(Entry { path: rel, kind: "dir".into(), sha256: None, size: None, exec: false, platforms, target: None });
             walk(root, &path, out)?;
         } else {
+            // A `.zip` is a zip-component: a single archive the launcher unpacks into
+            // a target folder (path minus the `.zip`). Used for Windows components.
+            let (kind, target) = match rel.strip_suffix(".zip") {
+                Some(stem) => ("zip", Some(stem.to_string())),
+                None => ("file", None),
+            };
             out.push(Entry {
                 path: rel.clone(),
-                kind: "file".into(),
+                kind: kind.into(),
                 sha256: Some(sha256_file(&path)?),
                 size: Some(md.len()),
                 exec: is_exec(&md),
                 platforms,
+                target,
             });
         }
     }
@@ -241,6 +262,9 @@ pub struct Plan {
     pub to_download: Vec<Entry>,
     pub to_delete: Vec<String>,
     pub to_mkdir: Vec<String>,
+    /// Target folders of zip-components that are no longer wanted (a pruned platform):
+    /// the launcher wipes each (its unpacked files aren't individually tracked).
+    pub to_wipe_dirs: Vec<String>,
     pub total_bytes: u64,
 }
 
@@ -256,6 +280,19 @@ mod tests {
             size: Some(1),
             exec: false,
             platforms: plats.iter().map(|s| s.to_string()).collect(),
+            target: None,
+        }
+    }
+
+    fn zip(path: &str, sha: &str, plats: &[&str]) -> Entry {
+        Entry {
+            path: path.into(),
+            kind: "zip".into(),
+            sha256: Some(sha.into()),
+            size: Some(1),
+            exec: false,
+            platforms: plats.iter().map(|s| s.to_string()).collect(),
+            target: Some(path.strip_suffix(".zip").unwrap().to_string()),
         }
     }
 
@@ -339,6 +376,52 @@ mod tests {
         let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
         assert_eq!(plan.to_download.len(), 1);
     }
+
+    #[test]
+    fn zip_entry_downloads_when_changed_and_carries_target() {
+        let local = manifest(vec![zip("components/win-x64/runtime-win-x64.zip", "old", &["win-x64"])]);
+        let remote = manifest(vec![zip("components/win-x64/runtime-win-x64.zip", "new", &["win-x64"])]);
+        let plan = diff(Some(&local), &remote, &["win-x64".into()]);
+        assert_eq!(plan.to_download.len(), 1);
+        let e = &plan.to_download[0];
+        assert!(e.is_zip());
+        assert_eq!(e.target.as_deref(), Some("components/win-x64/runtime-win-x64"));
+        assert!(plan.to_wipe_dirs.is_empty()); // a changed zip wipes its target on apply, not via to_wipe_dirs
+    }
+
+    #[test]
+    fn zip_entry_unchanged_is_skipped() {
+        let local = manifest(vec![zip("components/win-x64/app-win-x64.zip", "same", &["win-x64"])]);
+        let remote = manifest(vec![zip("components/win-x64/app-win-x64.zip", "same", &["win-x64"])]);
+        let plan = diff(Some(&local), &remote, &["win-x64".into()]);
+        assert!(plan.to_download.is_empty());
+        assert!(plan.to_wipe_dirs.is_empty());
+    }
+
+    #[test]
+    fn pruned_zip_platform_wipes_target_not_delete() {
+        // A win drive's update.json carries a win zip; on a linux-only machine it's
+        // pruned by wiping its unpacked target folder (the .zip file isn't on disk,
+        // and its unpacked files aren't individually tracked, so to_delete is wrong).
+        let local = manifest(vec![
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            zip("components/win-x64/runtime-win-x64.zip", "b", &["win-x64"]),
+        ]);
+        let remote = manifest(vec![
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            zip("components/win-x64/runtime-win-x64.zip", "b", &["win-x64"]),
+        ]);
+        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
+        assert!(plan.to_download.is_empty());
+        assert!(plan.to_delete.is_empty());
+        assert_eq!(plan.to_wipe_dirs, vec!["components/win-x64/runtime-win-x64".to_string()]);
+    }
+
+    #[test]
+    fn classify_zip_component_by_group() {
+        assert_eq!(classify("components/win-x64/runtime-win-x64.zip"), vec!["win-x64"]);
+        assert_eq!(classify("components/win-x64/app-win-x64.zip"), vec!["win-x64"]);
+    }
 }
 
 /// Diff `local` (what's on the drive; None ⇒ bootstrap) against `remote` for the
@@ -354,6 +437,8 @@ pub fn diff(local: Option<&Manifest>, remote: &Manifest, kept: &[String]) -> Pla
             plan.to_mkdir.push(e.path.clone());
             continue;
         }
+        // Files AND zip-components download by sha (a changed zip → re-download the
+        // whole archive; the launcher wipes + re-unpacks its target on apply).
         let unchanged = local.and_then(|l| l.file(&e.path)).is_some_and(|cur| cur.sha256 == e.sha256 && cur.size == e.size);
         if !unchanged {
             plan.total_bytes += e.size.unwrap_or(0);
@@ -366,10 +451,18 @@ pub fn diff(local: Option<&Manifest>, remote: &Manifest, kept: &[String]) -> Pla
                 continue;
             }
             let remote_has = remote.file(&e.path).is_some_and(|r| r.wanted_by(kept));
-            // Delete if the remote no longer ships it, or no kept platform wants it
-            // (pruning another platform's files to free space).
+            // Remove if the remote no longer ships it, or no kept platform wants it
+            // (pruning another platform's components to free space).
             if !remote_has || !e.wanted_by(kept) {
-                plan.to_delete.push(e.path.clone());
+                if e.is_zip() {
+                    // The zip itself isn't on the drive (unpacked); wipe its target
+                    // folder instead (its files aren't individually tracked).
+                    if let Some(t) = &e.target {
+                        plan.to_wipe_dirs.push(t.clone());
+                    }
+                } else {
+                    plan.to_delete.push(e.path.clone());
+                }
             }
         }
     }
