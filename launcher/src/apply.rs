@@ -86,11 +86,11 @@ fn write_journal(root: &Path, staging: &Path, commit: &str) {
 /// then commit the manifest last. `up` (when present) drives the progress splash.
 fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], up: Option<&update::Updater>) -> bool {
     let plan = manifest::diff(update::load_local().as_ref(), remote, kept);
-    let total = (plan.to_download.len() + plan.to_delete.len()) as u64;
+    let total = (plan.to_download.len() + plan.to_delete.len() + plan.to_wipe_dirs.len()) as u64;
     let commit = remote.commit.get(..8).unwrap_or(&remote.commit);
     crate::log(&format!(
-        "apply: placing {} file(s) + {} deletion(s) onto {} -> version {} (commit {})",
-        plan.to_download.len(), plan.to_delete.len(), root.display(), remote.version, commit,
+        "apply: placing {} item(s) + {} deletion(s) + {} wipe(s) onto {} -> version {} (commit {})",
+        plan.to_download.len(), plan.to_delete.len(), plan.to_wipe_dirs.len(), root.display(), remote.version, commit,
     ));
     let total_bytes: u64 = plan.to_download.iter().map(|e| e.size.unwrap_or(0)).sum();
     let mut splash = crate::show_splash(crate::SplashOpts { text: &crate::i18n::t("applying-update"), progress: true });
@@ -128,16 +128,42 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], u
             continue;
         }
         let src = staging.join(&e.path);
-        let dest = root.join(&e.path);
         if !src.exists() {
             crate::log(&format!("apply: staged file missing, skipping {}", e.path));
             continue;
         }
-        if let Err(err) = place_file(&src, &dest, e.sha256.as_deref(), e.exec, me.as_deref()) {
-            crate::log(&format!("apply: {} failed: {err}", e.path));
+        if e.is_zip() {
+            // Zip-component: wipe the target folder, then unpack the staged archive
+            // into it. The download already sha-verified the zip (net::download_to).
+            match e.target.as_deref() {
+                Some(t) if manifest::is_safe_path(t) => {
+                    let target = root.join(t);
+                    let _ = std::fs::remove_dir_all(&target);
+                    if let Err(err) = unpack_zip(&src, &target) {
+                        crate::log(&format!("apply: unzip {} -> {t} failed: {err}", e.path));
+                    }
+                }
+                _ => crate::log(&format!("apply: zip {} has no safe target — skipping", e.path)),
+            }
+        } else {
+            let dest = root.join(&e.path);
+            if let Err(err) = place_file(&src, &dest, e.sha256.as_deref(), e.exec, me.as_deref()) {
+                crate::log(&format!("apply: {} failed: {err}", e.path));
+            }
         }
         done += 1;
         done_bytes += e.size.unwrap_or(0);
+        tick(done, done_bytes, &mut splash, up, &mut next_log);
+    }
+
+    // Wipe target folders of pruned zip-components (another platform's, no longer
+    // wanted) — their unpacked files aren't individually tracked, so a per-file
+    // delete can't reach them.
+    for d in &plan.to_wipe_dirs {
+        if manifest::is_safe_path(d) {
+            let _ = std::fs::remove_dir_all(root.join(d));
+        }
+        done += 1;
         tick(done, done_bytes, &mut splash, up, &mut next_log);
     }
 
@@ -206,6 +232,18 @@ fn place_file(src: &Path, dest: &Path, sha: Option<&str>, exec: bool, me: Option
     Ok(())
 }
 
+/// Unpack a zip-component archive into `dest` (already wiped by the caller). Uses
+/// the pure-Rust `zip` crate so it cross-compiles with the rest of the launcher
+/// (static-musl / zig) — only ever exercised on Windows, where components ship as
+/// zips, but compiled on every target.
+fn unpack_zip(zip_path: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    let f = std::fs::File::open(zip_path)?;
+    let mut ar = zip::ZipArchive::new(f).map_err(|e| std::io::Error::other(format!("open zip: {e}")))?;
+    ar.extract(dest).map_err(|e| std::io::Error::other(format!("extract zip: {e}")))?;
+    Ok(())
+}
+
 fn with_ext(p: &Path, ext: &str) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
     s.push(".");
@@ -222,6 +260,50 @@ fn prune_empty_dirs(root: &Path, deleted: &[String]) {
         if manifest::is_safe_path(d) {
             let _ = std::fs::remove_dir(root.join(d)); // only succeeds if empty
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn unpack_zip_extracts_tree_and_wipe_is_clean() {
+        let base = std::env::temp_dir().join(format!("planai-ziptest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let zip_path = base.join("c.zip");
+
+        // Build a small deflate-compressed archive with the same `zip` crate the
+        // launcher reads with — proves the dependency + feature decompress correctly.
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut w = zip::ZipWriter::new(f);
+            let opts: zip::write::SimpleFileOptions =
+                zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            w.start_file("top.txt", opts).unwrap();
+            w.write_all(b"top").unwrap();
+            w.add_directory("sub", opts).unwrap();
+            w.start_file("sub/inner.txt", opts).unwrap();
+            w.write_all(b"inner").unwrap();
+            w.finish().unwrap();
+        }
+
+        // Pre-seed the target with a stale file the wipe-before-unpack must remove.
+        let target = base.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("STALE"), b"old").unwrap();
+
+        // Mirror apply's contract: wipe, then unpack.
+        let _ = std::fs::remove_dir_all(&target);
+        unpack_zip(&zip_path, &target).unwrap();
+
+        assert_eq!(std::fs::read_to_string(target.join("top.txt")).unwrap(), "top");
+        assert_eq!(std::fs::read_to_string(target.join("sub/inner.txt")).unwrap(), "inner");
+        assert!(!target.join("STALE").exists(), "wipe-before-unpack must drop stale files");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 
