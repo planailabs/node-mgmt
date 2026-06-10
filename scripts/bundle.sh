@@ -95,6 +95,9 @@ case "$TARGET" in
 esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
+# usbd: the plan.ai USB daemon (control plane). Linux only — built natively; on
+# win/mac the launcher falls back to its own supervisor (no usbd component).
+case "$TARGET" in linux-*|nixos-*) COMP_BASES="$COMP_BASES usbd" ;; esac
 # a component exists in this OS's format as a FILE (base.ext) or a DIR (windows)
 comp_present() { local base="$1" e; for e in $FMTS; do
   case "$e" in dir) [ -d "$COMP_SRC/$base" ] && return 0 ;; *) [ -f "$COMP_SRC/$base.$e" ] && return 0 ;; esac

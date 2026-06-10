@@ -149,13 +149,34 @@ impl ControlApi for RealApi {
     fn info(&self) -> impl Future<Output = Info> + Send {
         let gpu_json = self.gpu_json.clone();
         let llmfit_url = self.llmfit_url.clone();
-        let webui_url = self.webui_url.clone();
+        let mut webui_url = self.webui_url.clone();
+        let usbd_url = self.usbd_url.clone();
         async move {
+            let mut ollama_port = config::ollama_port();
+            let mut webui_port = config::webui_port();
+            // In daemon mode the daemon resolves the EFFECTIVE ports (after any
+            // collision fallback), so prefer what it reports — otherwise the
+            // WebUI iframe could point at a port the daemon didn't actually bind.
+            if let Some(base) = &usbd_url {
+                if let Ok(r) = proxy::get(base, "/info").await {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&r.body) {
+                        if let Some(p) = v.get("ollama_port").and_then(|x| x.as_u64()) {
+                            ollama_port = p as u16;
+                        }
+                        if let Some(p) = v.get("webui_port").and_then(|x| x.as_u64()) {
+                            webui_port = p as u16;
+                        }
+                        if let Some(u) = v.get("webui_url").and_then(|x| x.as_str()) {
+                            webui_url = u.to_string();
+                        }
+                    }
+                }
+            }
             Info {
                 webui_url,
                 llmfit_url,
-                ollama_port: config::ollama_port(),
-                webui_port: config::webui_port(),
+                ollama_port,
+                webui_port,
                 models_dir: paths::models_dir().to_string_lossy().into_owned(),
                 data_dir: paths::data_dir().to_string_lossy().into_owned(),
                 accel: Accel {

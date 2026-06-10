@@ -133,6 +133,10 @@ in
   # ow-assets: linux squashfs + mac dmg (source = the store-imported hf+nltk assets)
   "ow-assets-squashfs" = mkSqfs "ow-assets" (stores.ow-assets or (throw "ow-assets not imported"));
   "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
+  # usbd: the plan.ai USB daemon binary at the component root (mac-mgmt), so the
+  # launcher mounts usbd.squashfs at <dist>/usbd → PLANAI_RESOURCES/usbd/mac-mgmt.
+  # Source is the nix-built daemon (flake .#usbdComponent). Linux only for now.
+  "usbd-squashfs" = mkSqfs "usbd" (flake.packages.${builtins.currentSystem}.usbdComponent);
   # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
   # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
   "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));

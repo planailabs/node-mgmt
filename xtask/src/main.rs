@@ -309,6 +309,16 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     comp_stamps.push(stamp("comp-ow-assets-sqfs"));
     stamp_edge("comp-ow-assets-dmg", &ib_deps, "./scripts/import-build-component.sh ow-assets vendor/ow-assets ow-assets-dmg dist/components/ow-assets.dmg", "nix dmg: ow-assets");
     comp_stamps.push(stamp("comp-ow-assets-dmg"));
+    // usbd: the plan.ai USB daemon, packed as a squashfs IN NIX (flake
+    // .#usbdComponent → `mac-mgmt` at the root). Linux only — the launcher spawns
+    // it as the control plane; other OSes fall back to the launcher's own
+    // supervisor, so no usbd component is shipped there.
+    if targets.iter().any(|t| target_os(t) == "linux") {
+        stamp_edge("comp-usbd", &nix_comp_srcs,
+            "./scripts/nix-component.sh usbd-squashfs dist/components/usbd.squashfs",
+            "nix squashfs: usbd");
+        comp_stamps.push(stamp("comp-usbd"));
+    }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
 

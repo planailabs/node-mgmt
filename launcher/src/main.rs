@@ -22,6 +22,7 @@ mod paths;
 mod proxy;
 mod serve;
 mod update;
+mod usbd;
 
 // Embedded static tools (non-empty only on linux; see build.rs).
 const SQUASHFUSE_LL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/squashfuse_ll"));
@@ -1302,6 +1303,16 @@ fn main() {
                     Err(e) => log(&format!("app: {e}")),
                 }
             }
+            // The plan.ai USB daemon (usbd.squashfs → dist/usbd/mac-mgmt): the
+            // launcher spawns it as the control plane (usbd::resolve_bin finds it
+            // under PLANAI_RESOURCES). Optional — absent in dev / older bundles,
+            // where the launcher falls back to its own supervisor.
+            if comp.join("usbd.squashfs").exists() || comp.join("usbd").is_dir() {
+                match provide(comp, "usbd", &dist.join("usbd"), &tools, force_extract) {
+                    Ok(k) => mounts.push(Mount { dest: dist.join("usbd"), kind: k }),
+                    Err(e) => log(&format!("usbd: {e}")),
+                }
+            }
             std::env::set_var("PLANAI_RESOURCES", &dist);
             // Electron's node loader finds the shared pool via this (it no longer
             // sits beside the running app — the app runs from <cache>/dist/app).
@@ -1367,11 +1378,18 @@ fn main() {
         }
     };
 
-    // Rust control plane (phase 5): start the supervisor + register ollama +
-    // open-webui, then serve the embedded Dioxus SPA + control API over
-    // localhost. Electron becomes a thin webview that loads PLANAI_UI_URL — the
-    // node supervisor/loader/renderer are gone. The server tasks run on this
-    // runtime (kept alive for the whole electron session).
+    // Rust control plane: prefer the plan.ai USB daemon (`mac-mgmt usbd`) when a
+    // usbd component is shipped — it owns the mac-mgmt-services supervisor + the
+    // spawn-from-mount services AND adds heartbeat / probe / relay / config-sync.
+    // The launcher then connects to the daemon's supervisor socket for status and
+    // proxies /api/config* to its control port (PLANAI_USBD_URL). Without a usbd
+    // binary (plain cargo/dev), fall back to the launcher's own supervisor.
+    // Electron is a thin webview that loads PLANAI_UI_URL.
+    //
+    // Spawn the daemon BEFORE the runtime (single-threaded) so the env it
+    // inherits (PLANAI_*) is set safely.
+    let usbd_started = usbd::resolve_bin().and_then(|bin| usbd::spawn(&bin));
+
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => { log(&format!("runtime: {e}")); teardown(&mounts); std::process::exit(1); }
@@ -1379,7 +1397,18 @@ fn main() {
     let socket = supervisor_socket_path();
     let self_exe = exe.clone();
     rt.block_on(async {
-        match control::start_stack(&self_exe, &socket).await {
+        // Daemon mode: connect to the daemon's in-process supervisor socket.
+        // Dev mode: start the launcher's own supervisor + register services.
+        let client = match &usbd_started {
+            Some((_home, sock)) => {
+                match mac_mgmt_services::Client::connect(sock, std::time::Duration::from_secs(30)).await {
+                    Ok(c) => { log("control: usb daemon owns the supervisor"); Ok(c) }
+                    Err(e) => Err(format!("usb daemon socket: {e}")),
+                }
+            }
+            None => control::start_stack(&self_exe, &socket).await.map_err(|e| e.to_string()),
+        };
+        match client {
             Ok(client) => {
                 let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
                 match serve::run_server(client, port, spinner.clone(), updater.clone(), apply_requested.clone(), electron.clone()).await {

@@ -368,10 +368,74 @@
           cp ${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs  "$out/bin/unsquashfs"
           chmod +x "$out/bin/"*
         '';
+
+        # The plan.ai USB daemon (`mac-mgmt usbd`): the reduced phone-home control
+        # plane the launcher spawns (it owns the supervisor + spawn-from-mount
+        # services + heartbeat/probe/relay/config-sync). Built NATIVELY for the
+        # host — the linux `make test-nixos` runs it; win/mac usbd shipping is a
+        # follow-up (the launcher falls back to its own supervisor there). The
+        # daemon has a large dep tree (libp2p/memvault/russh), so the first build
+        # is slow; the git-dep hashes come from mac-mgmt's own extra-hashes.nix.
+        # memvault's build.rs embeds a precompiled wasm "extract guest"; building it
+        # at daemon-build time fails in the sandbox (needs the wasm target + offline
+        # cargo). mac-mgmt's own build sidesteps this by passing a prebuilt wasm via
+        # MEMVAULT_EXTRACT_GUEST_WASM — replicate that here (same as its overlay.nix).
+        memvaultExtractGuestWasm = wasmRustPlatform.buildRustPackage {
+          pname = "memvault-extract-guest-wasm";
+          version = "0.1.0";
+          src = ./third_party/mac-mgmt/memvault;
+          cargoLock = {
+            lockFile = ./third_party/mac-mgmt/memvault/Cargo.lock;
+            outputHashes = import ./third_party/mac-mgmt/memvault/extra-hashes.nix;
+          };
+          nativeBuildInputs = [ pkgs.lld ];
+          cargoBuildFlags = [ "-p" "memvault-extract-guest" "--target" "wasm32-unknown-unknown" ];
+          doCheck = false;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p $out
+            cp target/wasm32-unknown-unknown/release/memvault_extract_guest.wasm \
+              $out/memvault_extract_guest.wasm
+            runHook postInstall
+          '';
+        };
+        usbd = pkgs.rustPlatform.buildRustPackage {
+          pname = "mac-mgmt-usbd";
+          version = "0.1.0";
+          src = ./third_party/mac-mgmt;
+          cargoLock = {
+            lockFile = ./third_party/mac-mgmt/Cargo.lock;
+            outputHashes = import ./third_party/mac-mgmt/extra-hashes.nix;
+          };
+          buildAndTestSubdir = "daemon";
+          buildNoDefaultFeatures = true;
+          buildFeatures = [ "usbd" ];
+          doCheck = false;
+          cargoBuildFlags = [ "--bin" "mac-mgmt" ];
+          # nodejs + tailwindcss_3: memvault-web's build.rs runs `npm run
+          # tailwind:build` (the `memvault` feature pulls memvault-web). Matches
+          # mac-mgmt's own overlay.nix daemon build inputs.
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3 ];
+          buildInputs = [ pkgs.openssl ];
+          PROTOC = "${pkgs.protobuf}/bin/protoc";
+          env.GIT_SHA = "usbd-dev";
+          env.MEMVAULT_EXTRACT_GUEST_WASM = "${memvaultExtractGuestWasm}/memvault_extract_guest.wasm";
+        };
+        # `usbd` packaged as a launcher component: the binary at the component
+        # ROOT (`mac-mgmt`), so when the launcher mounts `usbd.squashfs` at
+        # `<dist>/usbd/` the daemon lands at `PLANAI_RESOURCES/usbd/mac-mgmt` —
+        # exactly where `usbd::resolve_bin()` looks. Packed into a squashfs by the
+        # bundle like the other components (runtime/ollama/ow-assets).
+        usbdComponent = pkgs.runCommand "plan-ai-usbd-component" { } ''
+          mkdir -p "$out"
+          cp ${usbd}/bin/mac-mgmt "$out/mac-mgmt"
+          chmod +x "$out/mac-mgmt"
+        '';
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
+          inherit usbd usbdComponent;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
