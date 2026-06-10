@@ -39,3 +39,4 @@ __pycache__/
 # store-import build layer: per-import records (dist/ is ignored) + indirect GC
 # roots are machine-specific. nix/stores.nix is committed (it just reads the records).
 /.nix-gcroots/
+/launcher/spa-src/assets/tailwind.css

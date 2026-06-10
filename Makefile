@@ -71,7 +71,7 @@ ui: ## preview the SPA against the mock backend (dx serve + mock API on :9999)
 	    -o assets/tailwind.css --config tailwind.config.js ) ; \
 	  cargo run --manifest-path mock-server/Cargo.toml & \
 	  trap 'kill %1 2>/dev/null' EXIT INT TERM ; \
-	  ( cd launcher/spa-src && dx serve )
+	  ( cd launcher/spa-src && dx serve | cat )
 
 download: ## materialise vendored downloads from Nix FODs (cached) into vendor/
 	$(XTASK) build download
