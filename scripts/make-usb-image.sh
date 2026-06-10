@@ -4,14 +4,17 @@
 # each file stays under FAT32's 4 GiB per-file limit, so a plain FAT32 image (no
 # exFAT, no splitting) holds everything and reads on every OS.
 #
-# Two stages (the migration shape — see nix/builds.nix `usb-image`):
-#   1. IMPERATIVE here: assemble a drive-root DIR with exactly the on-disk layout
+# Two stages:
+#   1. IMPERATIVE: assemble a drive-root DIR with exactly the on-disk layout
 #      (launchers + components/<os>/ + models + update.json + platforms.json +
 #      README), generate the update manifest (xtask), enforce the FAT32 4 GiB guard.
-#   2. PURE nix: store-import the drive-root, then the `usb-image` runCommand
-#      mkfs.vfat + mcopy's it into the image OFFLINE (userspace mtools — no VM, no
-#      sudo). nix owns the build + content-addressed cache; a changed drive-root
-#      (new launcher/component/model) → new store path → rebuild.
+#   2. IMPERATIVE (outside the nix store): mkfs.vfat + mcopy the drive-root into the
+#      image OFFLINE with the PINNED userspace mtools/dosfstools from the flake
+#      (.#usb-image-tools) — no VM, no sudo. We deliberately do NOT store-import the
+#      drive-root: it's launchers + components + multi-GB seeded models, and a
+#      `nix store add-path` would duplicate ALL of it into /nix/store. The image is
+#      a pure file transform of a folder we already have on disk, so packing it in
+#      place avoids that heap of duplicated data. Only the tools come from nix.
 #
 # Usage: scripts/make-usb-image.sh [out.img] [--label NAME] [--size-mb N]
 #   --label/--size-mb are accepted for back-compat but ignored: the volume is
@@ -125,9 +128,24 @@ esac; done
 printf '%s\n' "${PLATS[@]}" | jq -Rsc '{platforms: (split("\n") | map(select(length>0)))}' > "$DRIVE/platforms.json"
 log "platforms.json -> drive root ($(jq -c .platforms "$DRIVE/platforms.json"))"
 
-# --- stage 2: store-import the drive-root + pack the image in nix -----------
-# import-build-component.sh: store-import drive-root -> nix-build usb-image (which
-# reads stores.drive-root) -> copy the real .img out of the store to $OUT.
+# --- stage 2: pack the FAT32 image directly, OUTSIDE the nix store -----------
+# Realise the pinned tools once (cached after the first build), then mkfs.vfat +
+# mcopy the on-disk drive-root straight into the image. No store-import → the big
+# drive-root never lands in /nix/store. Size = drive-root + 15% + 128M slack.
 mkdir -p "$(dirname "$OUT")"
-"$SCRIPT_DIR/import-build-component.sh" drive-root "$DRIVE" usb-image "$OUT"
+log "realising pinned FAT32 tools (.#usb-image-tools) …"
+TOOLS="$(cd "$REPO_ROOT" && nix build --no-link --print-out-paths .#usb-image-tools)"
+[ -x "$TOOLS/bin/mkfs.vfat" ] && [ -x "$TOOLS/bin/mcopy" ] || die "usb-image-tools missing mkfs.vfat/mcopy"
+
+bytes=$(du -sb "$DRIVE" | cut -f1)
+mb=$(( bytes / 1048576 * 115 / 100 + 128 ))
+log "FAT32 image: ${mb}MB from drive-root $(du -sh "$DRIVE" | cut -f1) -> $OUT"
+rm -f "$OUT"
+"$TOOLS/bin/truncate" -s "${mb}M" "$OUT"
+"$TOOLS/bin/mkfs.vfat" -F 32 -n PLANAI "$OUT" >/dev/null
+# Copy the drive-root CONTENTS (not the dir) to the image root. `*` skips dotfiles —
+# the drive-root has none. mcopy -s recurses incl. empty dirs.
+"$TOOLS/bin/mcopy" -i "$OUT" -s -Q -b "$DRIVE"/* ::/
+"$TOOLS/bin/mmd" -i "$OUT" ::/data 2>/dev/null || true
+echo "contents:"; "$TOOLS/bin/mdir" -i "$OUT" :: 2>/dev/null | sed 's/^/    /' || true
 log "done — burn with:  sudo dd if=$OUT of=/dev/sdX bs=4M status=progress conv=fsync"

@@ -542,6 +542,14 @@
           spinner-linux-arm64 = spinnerFor { zigTarget = "aarch64-unknown-linux-gnu"; outDir = "aarch64-unknown-linux-gnu"; };
           spinner-win-x64   = spinnerFor { zigTarget = "x86_64-pc-windows-gnu";    outDir = "x86_64-pc-windows-gnu"; };
           spinner-mac-arm64 = spinnerFor { zigTarget = "aarch64-apple-darwin";     outDir = "aarch64-apple-darwin"; };
+          # Pinned userspace FAT32 tooling for make-usb-image.sh. The image is packed
+          # OUTSIDE the nix store (mkfs.vfat + mcopy run against the on-disk drive-root)
+          # so the multi-GB drive-root — launchers + components + seeded models — is
+          # never `nix store add-path`'d into /nix/store. Only these tools are pinned.
+          usb-image-tools = pkgs.buildEnv {
+            name = "usb-image-tools";
+            paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils ];
+          };
         } // runtimes
           # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;
           # add the attr only when the asset is in vendor.lock.json so a missing arm64
