@@ -242,7 +242,7 @@ fn is_nixos() -> bool {
 // unmount everything after the sandboxed app exits. Returns the child's exit code, or
 // None when the FHS path doesn't apply / can't be set up (caller then runs bare).
 #[cfg(target_os = "linux")]
-fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32> {
+fn maybe_run_in_fhs(exe: &Path, comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32> {
     // Skip in dev (nixpkgs Electron + staged dist/, no generic binaries to sandbox)
     // and once already inside; only the prod NixOS path needs the FHS.
     if std::env::var_os("PLANAI_FHS_REEXEC").is_some()
@@ -306,7 +306,11 @@ fn maybe_run_in_fhs(comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32>
     kill_spinner(spinner);
     let mode = fhs_store_mode(&bwrap);
     log(&format!("NixOS FHS: entering sandbox (store provided via {mode})"));
-    let self_exe = std::env::current_exe().unwrap_or_default();
+    // Use the exe path captured at startup, NOT a fresh current_exe(): first-run
+    // provisioning may have just self-replaced this binary, so /proc/self/exe now
+    // reads "<path> (deleted)" — an invalid path the wrapper can't exec. The startup
+    // path still resolves to the (freshly placed) launcher.
+    let self_exe = exe.to_path_buf();
     let mut cmd = Command::new(&bwrap);
     cmd.args(["--dev-bind", "/", "/"]); // expose host (incl. host /nix/store + the FUSE-mounted components)
     if mode == "overlay" {
@@ -1325,7 +1329,7 @@ fn main() {
     if !in_fhs {
         // maybe_run_in_fhs closes the NixOS progress dialog itself, right before it
         // launches the sandboxed Electron (the FHS child can't reach it afterwards).
-        if let Some(code) = maybe_run_in_fhs(comp_dir.as_deref(), &spinner) {
+        if let Some(code) = maybe_run_in_fhs(&exe, comp_dir.as_deref(), &spinner) {
             teardown(&mounts);
             flush_drive(); // after unmount: persist the USB + "safe to unplug"
             std::process::exit(code);
