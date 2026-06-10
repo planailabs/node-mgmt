@@ -62,10 +62,11 @@ case "$TARGET" in
 esac
 # Component FORMAT this OS's loader consumes (it picks this from its group dir):
 #   linux/nixos = squashfs (mount via squashfuse / extract via unsquashfs)
-#   macOS = dmg (hdiutil mount)  ;  windows = dir (pre-extracted, used in place)
+#   macOS = dmg (hdiutil mount)  ;  windows = zip (one archive; the launcher unpacks
+#   it on update, the burned image carries it already unpacked)
 case "$TARGET" in
   linux-*|nixos-*) FMTS="squashfs"; ;;
-  win-*)           FMTS="dir";      ;;
+  win-*)           FMTS="zip";      ;;
   mac-*)           FMTS="dmg";      ;;
   *)               FMTS="tar.gz";   ;;
 esac
@@ -278,7 +279,7 @@ place_standalone_launcher() {  # <flake-attr> <binary-in-store> <shipped-name>
 
 # Emit the Electron app itself as a component (app-$TARGET) in THIS OS's format,
 # into the shipped pool — the launcher mounts/links it and runs Electron from it
-# (parity with runtime/ollama/ow-assets). linux=squashfs, win=dir, mac=hfsplus dmg.
+# (parity with runtime/ollama/ow-assets). linux=squashfs, win=zip, mac=hfsplus dmg.
 #
 # electron-builder/@electron/packager produce the unpacked tree IMPURELY (downloads
 # + helper patching). So we store-import that tree (already signed, for mac) and let
@@ -291,8 +292,12 @@ emit_app_component() {  # <src>  (electron unpacked dir; for mac a dir holding p
   local src="$1" name="app-$TARGET" cdst="$OUT/components/$GROUP"; mkdir -p "$cdst"
   case "$FMTS" in
     squashfs) "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-squashfs" "$cdst/$name.squashfs" ;;
-    dir)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dir"      "$cdst/$name" ;;
     dmg)      "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dmg"      "$cdst/$name.dmg" ;;
+    # win: nix materialises the app dir (cached, content-addressed); we then pack it
+    # into ONE zip the launcher unpacks on update (image carries it unpacked).
+    zip)      local tmp; tmp="$(mktemp -d)"
+              "$SCRIPT_DIR/import-build-component.sh" "$name" "$src" "$name-dir" "$tmp/$name"
+              pack_zip "$tmp/$name" "$cdst/$name.zip"; rm -rf "$tmp" ;;
     *) die "no app-component format for FMTS=$FMTS" ;;
   esac
   log "app component (nix) -> $name [$FMTS]"

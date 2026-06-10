@@ -19,23 +19,24 @@ OUT="$DIST_DIR/components"; mkdir -p "$OUT"
 
 # which formats a component ships in (drives the per-OS bundle staging):
 #   linux/nixos = squashfs (mounted/extracted) ; macOS = dmg (hdiutil mount) ;
-#   windows = pre-extracted dir (used in place). No .tar.gz is produced anymore.
+#   windows = zip (one archive; the launcher unpacks on update, the image carries it
+#   unpacked). No pre-extracted dir / .tar.gz is produced anymore.
 fmts_for() { case "$1" in
   *linux-*|*nixos-*) echo sqfs ;;
-  *windows-*|*win-*) echo dir ;;
+  *windows-*|*win-*) echo zip ;;
   *darwin*|*mac-*)   echo dmg ;;
-  ow-assets)         echo "dir" ;;           # win(dir) only; linux squashfs + mac dmg are built in nix (import-build-component.sh)
+  ow-assets)         echo "zip" ;;           # win(zip) only; linux squashfs + mac dmg are built in nix (import-build-component.sh)
   *)                 echo gz ;;
 esac; }
 
-# emit a directory as one or more component formats (fmt in gz|sqfs|dmg|dir).
+# emit a directory as one or more component formats (fmt in gz|sqfs|dmg|zip).
 emit() { local dir="$1" name="$2"; shift 2; local f
   for f in "$@"; do case "$f" in
     gz)   pack_gz "$dir" "$OUT/$name.tar.gz";   log "+ $name.tar.gz ($(du -h "$OUT/$name.tar.gz" | cut -f1))" ;;
     sqfs) pack_squashfs "$dir" "$OUT/$name.squashfs"; log "+ $name.squashfs ($(du -h "$OUT/$name.squashfs" | cut -f1)) [squashfs]" ;;
     dmg)  if pack_dmg "$dir" "$OUT/$name.dmg"; then log "+ $name.dmg ($(du -h "$OUT/$name.dmg" | cut -f1))"
           else [ -f "$OUT/$name.tar.gz" ] || { pack_gz "$dir" "$OUT/$name.tar.gz"; log "+ $name.tar.gz (dmg fallback)"; }; fi ;;
-    dir)  pack_dir "$dir" "$OUT/$name"; log "+ $name/ (dir, $(du -sh "$OUT/$name" | cut -f1))" ;;
+    zip)  pack_zip "$dir" "$OUT/$name.zip"; log "+ $name.zip ($(du -h "$OUT/$name.zip" | cut -f1)) [zip]" ;;
   esac; done; }
 
 case "$NAME" in

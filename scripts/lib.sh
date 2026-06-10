@@ -148,6 +148,16 @@ pack_dir() {  # <srcdir> <out-dir>   (pre-extracted; used in place on windows/FA
   local src="$1" out="$2" tmp="$2.tmp.$$"
   rm -rf "$tmp"; mkdir -p "$tmp"; cp -a "$src/." "$tmp/"; rm -rf "$out"; mv -f "$tmp" "$out"
 }
+# Windows component delivery format: ONE .zip the launcher downloads + unpacks on
+# update (vs thousands of individually-tracked files). The burned image carries it
+# UNPACKED — make-usb-image.sh expands + removes the zip after the manifest is built.
+pack_zip() {  # <srcdir> <out.zip>
+  need zip; local src="$1" out="$2" tmp="$2.tmp.$$"; rm -f "$tmp"
+  # Deterministic-ish: add entries in sorted order, drop extra file attributes (-X).
+  # Follows symlinks (stores their content) so the archive unpacks cleanly on Windows.
+  ( cd "$src" && find . -mindepth 1 | LC_ALL=C sort | zip -q -X -@ "$tmp" )
+  mv -f "$tmp" "$out"
+}
 # raw HFS+ image macOS mounts via hdiutil, compressed to a UDIF dmg (Finder-
 # mountable, ~3x smaller) via libdmg-hfsplus. Needs mkfs.hfsplus (hfsprogs) + a
 # sudo loop-mount. Returns non-zero ONLY when no dmg could be produced (no

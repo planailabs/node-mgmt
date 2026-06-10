@@ -548,7 +548,9 @@
           # never `nix store add-path`'d into /nix/store. Only these tools are pinned.
           usb-image-tools = pkgs.buildEnv {
             name = "usb-image-tools";
-            paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils ];
+            # unzip: the image carries Windows components UNPACKED, so make-usb-image.sh
+            # expands the per-component .zip into its target folder + removes the zip.
+            paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils pkgs.unzip ];
           };
         } // runtimes
           # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;

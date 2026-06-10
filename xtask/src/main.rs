@@ -314,16 +314,17 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     // cross-compiled via cargo-zigbuild — see flake `usbdFor`). Per-TARGET in the
     // shared pool (usbd-<target>) so two linux arches don't collide; bundle.sh
     // renames the matching one to the fixed `usbd` in each OS group dir. Per-OS
-    // format like the other components: linux squashfs, mac dmg, win dir.
+    // format like the other components: linux squashfs, mac dmg, win zip (built from
+    // the `-dir` attr, then packed — nix-component.sh zips when the out ends .zip).
     for t in targets {
-        let (fmt, out) = match target_os(t) {
+        let (attr_fmt, out) = match target_os(t) {
             "linux" => ("squashfs", format!("dist/components/usbd-{t}.squashfs")),
             "mac" => ("dmg", format!("dist/components/usbd-{t}.dmg")),
-            _ => ("dir", format!("dist/components/usbd-{t}")),
+            _ => ("dir", format!("dist/components/usbd-{t}.zip")),
         };
         stamp_edge(&format!("comp-usbd-{t}"), &nix_comp_srcs,
-            &format!("./scripts/nix-component.sh usbd-{t}-{fmt} {out}"),
-            &format!("nix {fmt}: usbd-{t}"));
+            &format!("./scripts/nix-component.sh usbd-{t}-{attr_fmt} {out}"),
+            &format!("nix component: usbd-{t}"));
         comp_stamps.push(stamp(&format!("comp-usbd-{t}")));
     }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).

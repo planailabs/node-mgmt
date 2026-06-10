@@ -137,6 +137,23 @@ log "realising pinned FAT32 tools (.#usb-image-tools) …"
 TOOLS="$(cd "$REPO_ROOT" && nix build --no-link --print-out-paths .#usb-image-tools)"
 [ -x "$TOOLS/bin/mkfs.vfat" ] && [ -x "$TOOLS/bin/mcopy" ] || die "usb-image-tools missing mkfs.vfat/mcopy"
 
+# Windows components ship as .zip in the update tarball, but the burned image carries
+# them UNPACKED. The manifest (update.json) was generated above WITH the zip entries
+# (so the launcher can diff against them on update); now expand each component zip into
+# its target folder (path minus .zip), wiping it first, and remove the zip — the image
+# then holds only the unpacked tree. (Linux/mac components are single squashfs/dmg
+# files and stay as-is; only Windows produces zips.)
+shopt -s globstar nullglob
+for z in "$DRIVE"/components/**/*.zip; do
+  [ -f "$z" ] || continue
+  tgt="${z%.zip}"
+  log "unpack $(basename "$z") -> ${tgt#"$DRIVE/"}"
+  rm -rf "$tgt"; mkdir -p "$tgt"
+  "$TOOLS/bin/unzip" -qo "$z" -d "$tgt" || die "unzip failed: $z"
+  rm -f "$z"
+done
+shopt -u globstar nullglob
+
 bytes=$(du -sb "$DRIVE" | cut -f1)
 mb=$(( bytes / 1048576 * 115 / 100 + 128 ))
 log "FAT32 image: ${mb}MB from drive-root $(du -sh "$DRIVE" | cut -f1) -> $OUT"

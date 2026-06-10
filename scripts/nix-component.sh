@@ -19,7 +19,14 @@ P="$(cd "$REPO_ROOT" && nix build -L --impure -f nix/builds.nix "$ATTR" --no-lin
 mkdir -p "$(dirname "$OUT")"
 # copy the real file/dir out of the read-only store so bundle/image can read it.
 # dir components (used in place on FAT32) need a writable recursive copy.
-if [ -d "$P" ]; then
+if [ "${OUT##*.}" = zip ]; then
+  # Windows component delivery: the nix attr builds the component DIR; pack it as one
+  # .zip OUTSIDE the store (the launcher unpacks it on update; the image unpacks +
+  # removes it). The big dir never lands in /nix/store beyond the cached attr build.
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  cp -rL "$P" "$tmp/c"; chmod -R u+w "$tmp/c"
+  pack_zip "$tmp/c" "$OUT"
+elif [ -d "$P" ]; then
   rm -rf "$OUT"; cp -rL "$P" "$OUT"; chmod -R u+w "$OUT"
 else
   cp -fL "$P" "$OUT"
