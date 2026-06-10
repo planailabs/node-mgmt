@@ -75,3 +75,30 @@ pub async fn info() -> Result<Info, String> {
 pub async fn status() -> Result<Vec<ServiceStatus>, String> {
     get("/api/status").await
 }
+
+// --- config plane: schema-driven, opaque Value (standards §2 exception) -----
+
+/// The stored config the editor edits.
+pub async fn config() -> Result<Value, String> {
+    get_json("/api/config").await
+}
+
+/// The JSON Schema that drives the editor's form (the reduced UsbConfig schema).
+pub async fn config_schema() -> Result<Value, String> {
+    get_json("/api/config/schema").await
+}
+
+/// Persist + live-apply an edited config (PUT). The daemon validates against
+/// UsbConfig and returns `{ok, applied, …}`, or `422 {error}` on failure.
+pub async fn set_config(body: Value) -> Result<Value, String> {
+    let resp = Request::put("/api/config")
+        .json(&body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.ok() {
+        return Err(err_message(resp).await);
+    }
+    resp.json::<Value>().await.map_err(|e| e.to_string())
+}

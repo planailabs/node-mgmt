@@ -6,6 +6,7 @@ chrome-tagline = usb · offline
 tab-dashboard = Dashboard
 tab-models = Models
 tab-webui = Open WebUI
+tab-config = Config
 btn-report-issue = Report issue
 webui-not-ready = Open-WebUI is not ready yet.
 

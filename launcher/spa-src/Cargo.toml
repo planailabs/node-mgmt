@@ -28,6 +28,11 @@ plan-ai-design = { path = "../../third_party/plan-ai-design" }
 # the SPA deserializes into the exact types the backends serialize. See
 # standards/control-api.md.
 plan-ai-control-api = { path = "../../crates/control-api", default-features = false }
+# the shared schema-driven config editor (same component the mac-mgmt server +
+# overview use) — the Config tab reuses it instead of a bespoke form. Pulls
+# mac-mgmt-common (for ModelSource); compiles to wasm (the server renders it via
+# SSR). Its dioxus/dioxus-i18n come from the forks the [patch] below redirects.
+mac-mgmt-config-ui = { path = "../../third_party/mac-mgmt/config-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unic-langid = { version = "0.9", features = ["macros"] }

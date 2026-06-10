@@ -14,6 +14,7 @@ use plan_ai_design::theme_toggle::{
 use plan_ai_design::{Button, ButtonSize, ButtonVariant};
 
 use crate::api::{self, Info, ServiceState, ServiceStatus};
+use crate::config::ConfigView;
 use crate::dashboard::Dashboard;
 use crate::models::Models;
 
@@ -22,6 +23,7 @@ pub enum Tab {
     Dashboard,
     Models,
     WebUi,
+    Config,
 }
 
 /// State shared across views (provided via context; signals are Copy).
@@ -48,12 +50,26 @@ impl AppState {
 pub fn App() -> Element {
     let mut i18n = use_init_i18n(|| {
         // Concatenate the shared plan-ai-design FTL (theme toggle, language
-        // picker, data table) with this app's own FTL so `t!` resolves both.
+        // picker, data table), the shared config-editor FTL (the Config tab
+        // reuses mac_mgmt_config_ui::ConfigEditor, whose `t!` keys live there),
+        // and this app's own FTL so `t!` resolves all three.
         let en: &'static str = Box::leak(
-            format!("{}\n{}", plan_ai_design::i18n::EN_US, include_str!("../i18n/en-US.ftl")).into_boxed_str(),
+            format!(
+                "{}\n{}\n{}",
+                plan_ai_design::i18n::EN_US,
+                mac_mgmt_config_ui::EN_US,
+                include_str!("../i18n/en-US.ftl"),
+            )
+            .into_boxed_str(),
         );
         let de: &'static str = Box::leak(
-            format!("{}\n{}", plan_ai_design::i18n::DE_DE, include_str!("../i18n/de-DE.ftl")).into_boxed_str(),
+            format!(
+                "{}\n{}\n{}",
+                plan_ai_design::i18n::DE_DE,
+                mac_mgmt_config_ui::DE_DE,
+                include_str!("../i18n/de-DE.ftl"),
+            )
+            .into_boxed_str(),
         );
         I18nConfig::new(langid!("en-US"))
             .with_locale(Locale::new_static(langid!("en-US"), en))
@@ -162,6 +178,7 @@ pub fn App() -> Element {
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
                     TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
                     TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
+                    TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
@@ -183,6 +200,7 @@ pub fn App() -> Element {
             // when it's torn out and re-mounted fresh on the next ready.
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
+            if tab == Tab::Config { ConfigView {} }
             div { class: "{webui_view_cls}",
                 if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
