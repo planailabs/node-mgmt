@@ -309,15 +309,22 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     comp_stamps.push(stamp("comp-ow-assets-sqfs"));
     stamp_edge("comp-ow-assets-dmg", &ib_deps, "./scripts/import-build-component.sh ow-assets vendor/ow-assets ow-assets-dmg dist/components/ow-assets.dmg", "nix dmg: ow-assets");
     comp_stamps.push(stamp("comp-ow-assets-dmg"));
-    // usbd: the plan.ai USB daemon, packed as a squashfs IN NIX (flake
-    // .#usbdComponent → `mac-mgmt` at the root). Linux only — the launcher spawns
-    // it as the control plane; other OSes fall back to the launcher's own
-    // supervisor, so no usbd component is shipped there.
-    if targets.iter().any(|t| target_os(t) == "linux") {
-        stamp_edge("comp-usbd", &nix_comp_srcs,
-            "./scripts/nix-component.sh usbd-squashfs dist/components/usbd.squashfs",
-            "nix squashfs: usbd");
-        comp_stamps.push(stamp("comp-usbd"));
+    // usbd: the plan.ai USB daemon, the control plane the launcher spawns on
+    // EVERY platform. Built in nix (linux-x64 native; win/mac/linux-arm64
+    // cross-compiled via cargo-zigbuild — see flake `usbdFor`). Per-TARGET in the
+    // shared pool (usbd-<target>) so two linux arches don't collide; bundle.sh
+    // renames the matching one to the fixed `usbd` in each OS group dir. Per-OS
+    // format like the other components: linux squashfs, mac dmg, win dir.
+    for t in targets {
+        let (fmt, out) = match target_os(t) {
+            "linux" => ("squashfs", format!("dist/components/usbd-{t}.squashfs")),
+            "mac" => ("dmg", format!("dist/components/usbd-{t}.dmg")),
+            _ => ("dir", format!("dist/components/usbd-{t}")),
+        };
+        stamp_edge(&format!("comp-usbd-{t}"), &nix_comp_srcs,
+            &format!("./scripts/nix-component.sh usbd-{t}-{fmt} {out}"),
+            &format!("nix {fmt}: usbd-{t}"));
+        comp_stamps.push(stamp(&format!("comp-usbd-{t}")));
     }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
@@ -372,6 +379,7 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     edges.push_str(&format!("build comp-ow-assets-dmg: phony {}\n", stamp("comp-ow-assets-dmg")));
     for t in targets {
         edges.push_str(&format!("build comp-runtime-{t}: phony {}\n", stamp(&format!("comp-runtime-{t}"))));
+        edges.push_str(&format!("build comp-usbd-{t}: phony {}\n", stamp(&format!("comp-usbd-{t}"))));
     }
     for k in ollama_keys {
         edges.push_str(&format!("build comp-ollama-{k}: phony {}\n", stamp(&format!("comp-ollama-{k}"))));
@@ -883,6 +891,7 @@ mod tests {
             .iter().map(|s| s.to_string()).collect();
         for t in &targets {
             expected.push(format!("comp-runtime-{t}"));
+            expected.push(format!("comp-usbd-{t}"));
             expected.push(format!("bundle-{t}"));
             expected.push(format!("runtime-{t}"));
         }

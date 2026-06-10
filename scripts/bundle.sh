@@ -95,9 +95,12 @@ case "$TARGET" in
 esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
-# usbd: the plan.ai USB daemon (control plane). Linux only — built natively; on
-# win/mac the launcher falls back to its own supervisor (no usbd component).
-case "$TARGET" in linux-*|nixos-*) COMP_BASES="$COMP_BASES usbd" ;; esac
+# usbd: the plan.ai USB daemon (control plane) ships on ALL platforms now — the
+# launcher hands service ownership to it everywhere; its own supervisor remains a
+# dead-code fallback only when the component is absent (plain dev builds). usbd is
+# handled specially (copy_usbd_into below), NOT via COMP_BASES: the pool holds a
+# per-TARGET file (usbd-<target>, so two linux arches don't collide), renamed to
+# the fixed `usbd` name the launcher resolves in each OS group dir.
 # a component exists in this OS's format as a FILE (base.ext) or a DIR (windows)
 comp_present() { local base="$1" e; for e in $FMTS; do
   case "$e" in dir) [ -d "$COMP_SRC/$base" ] && return 0 ;; *) [ -f "$COMP_SRC/$base.$e" ] && return 0 ;; esac
@@ -117,6 +120,7 @@ copy_comps_into() {  # <components-dir>
       *)   [ -f "$COMP_SRC/$base.$ext" ] && cp -u "$COMP_SRC/$base.$ext" "$cdst/" || true ;;
     esac
   done; done
+  copy_usbd_into "$cdst"
   # Per-OS manifest: each target owns its OWN group dir (components/<os>/), so there
   # are no cross-target races (no shared file) and the manifest is DECLARATIVE — it
   # lists exactly this OS's contents instead of a global scan. The launcher uses it
@@ -124,6 +128,19 @@ copy_comps_into() {  # <components-dir>
   write_os_manifest "$cdst"
   copy_llmfit_into "$cdst"
   log "components -> $cdst ($(du -sh "$cdst" | cut -f1))"
+}
+
+# Copy this target's usbd daemon (pool name usbd-<target>) into the group dir as
+# the fixed `usbd` name the launcher resolves (usbd.squashfs / usbd.dmg / usbd/).
+# Best-effort: absent in plain dev builds, where the launcher uses its supervisor.
+copy_usbd_into() {  # <components-dir>
+  local cdst="$1" ext
+  for ext in $FMTS; do
+    case "$ext" in
+      dir) [ -d "$COMP_SRC/usbd-$TARGET" ] && { rm -rf "$cdst/usbd"; cp -a "$COMP_SRC/usbd-$TARGET" "$cdst/usbd"; } || true ;;
+      *)   [ -f "$COMP_SRC/usbd-$TARGET.$ext" ] && cp -u "$COMP_SRC/usbd-$TARGET.$ext" "$cdst/usbd.$ext" || true ;;
+    esac
+  done
 }
 
 # Write the declarative manifest.json for this OS's component group (components/<os>/).

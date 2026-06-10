@@ -1313,11 +1313,12 @@ fn main() {
                     Err(e) => log(&format!("app: {e}")),
                 }
             }
-            // The plan.ai USB daemon (usbd.squashfs → dist/usbd/mac-mgmt): the
-            // launcher spawns it as the control plane (usbd::resolve_bin finds it
-            // under PLANAI_RESOURCES). Optional — absent in dev / older bundles,
-            // where the launcher falls back to its own supervisor.
-            if comp.join("usbd.squashfs").exists() || comp.join("usbd").is_dir() {
+            // The plan.ai USB daemon (usbd → dist/usbd/mac-mgmt[.exe]): the launcher
+            // spawns it as the control plane on every platform (usbd::resolve_bin
+            // finds it under PLANAI_RESOURCES). Ships as squashfs (linux) / dmg
+            // (mac) / dir (win). Optional — absent in dev / older bundles, where the
+            // launcher falls back to its own supervisor (kept as dead-code path).
+            if comp.join("usbd.squashfs").exists() || comp.join("usbd.dmg").exists() || comp.join("usbd").is_dir() {
                 match provide(comp, "usbd", &dist.join("usbd"), &tools, force_extract) {
                     Ok(k) => mounts.push(Mount { dest: dist.join("usbd"), kind: k }),
                     Err(e) => log(&format!("usbd: {e}")),

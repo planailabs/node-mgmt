@@ -50,6 +50,11 @@
           targets = [ "wasm32-unknown-unknown" ];
         };
         wasmRustPlatform = pkgs.makeRustPlatform { cargo = wasmToolchain; rustc = wasmToolchain; };
+        # Rust platform over the cross-target toolchain (rustToolchain carries the
+        # win/mac/linux std libs). Used to build the usb daemon for win/mac via
+        # cargo-zigbuild while letting buildRustPackage's cargoSetupHook vendor the
+        # registry + git deps (mac-mgmt pins a dioxus/swiftide fork) offline.
+        crossRustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
 
         # macOS SDK source (Cocoa headers + framework stubs) for cross-compiling
         # crates with native Apple deps — notify-rust's mac-notification-sys
@@ -439,11 +444,84 @@
           cp ${usbd}/bin/mac-mgmt "$out/mac-mgmt"
           chmod +x "$out/mac-mgmt"
         '';
+        # Cross-compiled usb daemon for win/mac, built with cargo-zigbuild like the
+        # launcher. macOS is Unix so the daemon source compiles unchanged; Windows
+        # required a Unix→Windows port in mac-mgmt (signals, PTY/FIFO, file modes,
+        # process exec — all `#[cfg(unix)]`-gated). cargoSetupHook (via cargoLock)
+        # vendors the registry + git deps offline; cargo-zigbuild supplies the
+        # cross C toolchain (ring/quinn build fine). Same feature set as the native
+        # `usbd` above: `usbd` (+ `future` when usb.lock enables it).
+        usbdFor = { rustTarget, exe, extraEnv ? { } }:
+          crossRustPlatform.buildRustPackage ({
+            pname = "mac-mgmt-usbd-${rustTarget}";
+            version = "0.1.0";
+            src = ./third_party/mac-mgmt;
+            cargoLock = {
+              lockFile = ./third_party/mac-mgmt/Cargo.lock;
+              outputHashes = import ./third_party/mac-mgmt/extra-hashes.nix;
+            };
+            doCheck = false;
+            # Disable cargo-auditable (on by default in nixpkgs' buildRustPackage):
+            # it injects `-Wl,--undefined=AUDITABLE_VERSION_INFO` to retain an embedded
+            # SBOM symbol, which zig's COFF (windows) and ELF (linux) linkers reject.
+            # The bin is reproducible from the pinned Cargo.lock anyway.
+            auditable = false;
+            nativeBuildInputs = [
+              pkgs.cargo-zigbuild pkgs.zig
+              pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3
+            ];
+            buildInputs = [ pkgs.openssl ];
+            PROTOC = "${pkgs.protobuf}/bin/protoc";
+            MEMVAULT_EXTRACT_GUEST_WASM = "${memvaultExtractGuestWasm}/memvault_extract_guest.wasm";
+            env.GIT_SHA = "usbd-dev";
+            buildPhase = ''
+              runHook preBuild
+              export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
+              cargo zigbuild --release --offline --target ${rustTarget} \
+                -p mac-mgmt --bin mac-mgmt \
+                --no-default-features --features usbd \
+                ${lib.optionalString futureEnabled "--features future"}
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/bin"
+              cp "target/${rustTarget}/release/${exe}" "$out/bin/${exe}"
+              runHook postInstall
+            '';
+          } // extraEnv);
+        usbd-win-x64 = usbdFor { rustTarget = "x86_64-pc-windows-gnu"; exe = "mac-mgmt.exe"; };
+        usbd-mac-arm64 = usbdFor {
+          rustTarget = "aarch64-apple-darwin"; exe = "mac-mgmt";
+          extraEnv = { SDKROOT = macosx-sdk; };
+        };
+        # linux-arm64: cross-compiled (the native `usbd` above covers the x86_64
+        # host). glibc like the native build — the daemon runs inside the launcher's
+        # FHS namespace on NixOS, where glibc is present.
+        usbd-linux-arm64 = usbdFor { rustTarget = "aarch64-unknown-linux-gnu"; exe = "mac-mgmt"; };
+        # Cross usbd packaged as launcher components (binary at the component ROOT,
+        # like `usbdComponent`), so the launcher finds `<usbd>/mac-mgmt[.exe]`.
+        usbdComponent-win-x64 = pkgs.runCommand "plan-ai-usbd-component-win-x64" { } ''
+          mkdir -p "$out"
+          cp ${usbd-win-x64}/bin/mac-mgmt.exe "$out/mac-mgmt.exe"
+        '';
+        usbdComponent-mac-arm64 = pkgs.runCommand "plan-ai-usbd-component-mac-arm64" { } ''
+          mkdir -p "$out"
+          cp ${usbd-mac-arm64}/bin/mac-mgmt "$out/mac-mgmt"
+          chmod +x "$out/mac-mgmt"
+        '';
+        usbdComponent-linux-arm64 = pkgs.runCommand "plan-ai-usbd-component-linux-arm64" { } ''
+          mkdir -p "$out"
+          cp ${usbd-linux-arm64}/bin/mac-mgmt "$out/mac-mgmt"
+          chmod +x "$out/mac-mgmt"
+        '';
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           inherit usbd usbdComponent;
+          inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
+          inherit usbdComponent-win-x64 usbdComponent-mac-arm64 usbdComponent-linux-arm64;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
           launcher-mac-arm64 = launcherFor { zigTarget = "aarch64-apple-darwin"; outDir = "aarch64-apple-darwin"; };
           # linux: STATIC musl → zero dynamic-loader deps, so the launcher runs on
@@ -472,5 +550,46 @@
             llmfit-linux-arm64 = llmfitBin (llmfitAsset "aarch64-unknown-linux-musl");
           };
         devShells.default = import ./nix/devshell.nix { inherit pkgs lib spaTools; };
+        # Windows cross-build harness for the usb daemon (`mac-mgmt usbd`). Exposes
+        # the same toolchain/env the nix `usbd` derivation uses, but interactive +
+        # incremental: `nix develop .#usbd-win` then run cargo-zigbuild against the
+        # daemon for x86_64-pc-windows-gnu. Used to drive the Unix→Windows port of
+        # mac-mgmt to a clean cross-compile before wiring a win usbd component.
+        devShells.usbd-win = pkgs.mkShell {
+          packages = [
+            rustToolchain pkgs.cargo-zigbuild pkgs.zig
+            pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3 pkgs.openssl
+          ];
+          PROTOC = "${pkgs.protobuf}/bin/protoc";
+          MEMVAULT_EXTRACT_GUEST_WASM = "${memvaultExtractGuestWasm}/memvault_extract_guest.wasm";
+          GIT_SHA = "usbd-dev";
+          shellHook = ''
+            export CARGO_TARGET_DIR="$PWD/dist/.usbd-win-target"
+            echo "usbd-win: cargo-zigbuild cross shell. Target dir: $CARGO_TARGET_DIR"
+            echo "  cd third_party/mac-mgmt && cargo zigbuild --release \\"
+            echo "    --target x86_64-pc-windows-gnu -p mac-mgmt --bin mac-mgmt \\"
+            echo "    --no-default-features --features usbd"
+          '';
+        };
+        # macOS cross-build harness for the usb daemon. macOS is Unix, so the
+        # daemon source compiles unchanged; this is purely a cross-compile via
+        # cargo-zigbuild + the Apple SDK (same SDKROOT the mac launcher uses).
+        devShells.usbd-mac = pkgs.mkShell {
+          packages = [
+            rustToolchain pkgs.cargo-zigbuild pkgs.zig
+            pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3
+          ];
+          PROTOC = "${pkgs.protobuf}/bin/protoc";
+          MEMVAULT_EXTRACT_GUEST_WASM = "${memvaultExtractGuestWasm}/memvault_extract_guest.wasm";
+          GIT_SHA = "usbd-dev";
+          SDKROOT = macosx-sdk;
+          shellHook = ''
+            export CARGO_TARGET_DIR="$PWD/dist/.usbd-mac-target"
+            echo "usbd-mac: cargo-zigbuild cross shell. Target dir: $CARGO_TARGET_DIR"
+            echo "  cd third_party/mac-mgmt && cargo zigbuild --release \\"
+            echo "    --target aarch64-apple-darwin -p mac-mgmt --bin mac-mgmt \\"
+            echo "    --no-default-features --features usbd"
+          '';
+        };
       });
 }

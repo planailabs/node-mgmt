@@ -133,10 +133,17 @@ in
   # ow-assets: linux squashfs + mac dmg (source = the store-imported hf+nltk assets)
   "ow-assets-squashfs" = mkSqfs "ow-assets" (stores.ow-assets or (throw "ow-assets not imported"));
   "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
-  # usbd: the plan.ai USB daemon binary at the component root (mac-mgmt), so the
-  # launcher mounts usbd.squashfs at <dist>/usbd → PLANAI_RESOURCES/usbd/mac-mgmt.
-  # Source is the nix-built daemon (flake .#usbdComponent). Linux only for now.
-  "usbd-squashfs" = mkSqfs "usbd" (flake.packages.${builtins.currentSystem}.usbdComponent);
+  # usbd: the plan.ai USB daemon binary at the component root (mac-mgmt[.exe]), so
+  # the launcher resolves <usbd>/mac-mgmt[.exe] under PLANAI_RESOURCES. Per-TARGET
+  # in the shared pool (like runtime-*) so two linux arches don't collide; bundle.sh
+  # renames the matching one to the fixed `usbd` name in each OS group dir. Per-OS
+  # formats: linux squashfs, mac dmg, win dir. Win/mac/linux-arm64 are cross-built
+  # (cargo-zigbuild — see flake `usbdFor`); linux-x64 is the native `usbd`.
+  "usbd-linux-x64-squashfs" = mkSqfs "usbd-linux-x64" (flake.packages.${builtins.currentSystem}.usbdComponent);
+  "usbd-linux-arm64-squashfs" = mkSqfs "usbd-linux-arm64" (flake.packages.${builtins.currentSystem}.usbdComponent-linux-arm64);
+  "usbd-mac-arm64-dmg" = mkDmg { name = "usbd-mac-arm64"; src = flake.packages.${builtins.currentSystem}.usbdComponent-mac-arm64; };
+  "usbd-win-x64-dir" = pkgs.runCommand "usbd-win-x64" { }
+    "mkdir -p $out && cp -a ${flake.packages.${builtins.currentSystem}.usbdComponent-win-x64}/. $out/";
   # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
   # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
   "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));
