@@ -24,4 +24,7 @@ if [ -d "$P" ]; then
 else
   cp -fL "$P" "$OUT"
 fi
-log "nix component -> $OUT ($(du -sh "$OUT" | cut -f1))"
+# --apparent-size: report the LOGICAL size. A plain `du` shows only blocks not shared
+# with the source, which on a CoW/reflinking fs (ZFS/btrfs) reads as ~0 right after the
+# copy — misleadingly tiny in the build log (e.g. "512" for a 1.5G squashfs).
+log "nix component -> $OUT ($(du -shL --apparent-size "$OUT" | cut -f1))"

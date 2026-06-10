@@ -1150,18 +1150,52 @@ fn main() {
     // already provisioned before re-exec).
     if !in_fhs && comp_dir.is_none() && update::load_local().is_none() {
         log("no components on the drive — provisioning from the update server");
-        // Indeterminate splash for the download; apply::run shows its own determinate
-        // splash while it copies the staged files onto the drive.
-        if let Some(s) = show_splash(SplashOpts { text: &i18n::t("provisioning"), progress: false }) {
+        // Determinate splash: a side thread drives the gauge from the updater's download
+        // status (file N of M) while the blocking download runs on this thread; apply::run
+        // then shows its own gauge for the copy-onto-drive phase. So provisioning shows
+        // real progress across both phases instead of an indeterminate spinner.
+        if let Some(s) = show_splash(SplashOpts { text: &i18n::t("provisioning"), progress: true }) {
             *spinner.lock().unwrap() = Some(s);
         }
+        let prog_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let prog = {
+            let up = updater.clone();
+            let sp = spinner.clone();
+            let stop = prog_stop.clone();
+            std::thread::spawn(move || {
+                let mut last = u8::MAX;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let st = up.status();
+                    if st.total > 0 {
+                        let pct = ((st.done * 100 / st.total) as u8).min(100);
+                        if pct != last {
+                            last = pct;
+                            if let Ok(mut g) = sp.lock() {
+                                if let Some(splash) = g.as_mut() {
+                                    splash.set_progress(pct);
+                                    splash.set_text(&i18n::t_args(
+                                        "provisioning-progress",
+                                        &[("done", st.done as i64), ("total", st.total as i64)],
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            })
+        };
         let provisioned = match tokio::runtime::Runtime::new() {
             Ok(boot_rt) => {
                 boot_rt.block_on(update::check_and_predownload(updater.clone()));
-                kill_spinner(&spinner); // close the download splash before apply's own
+                prog_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = prog.join();
+                kill_spinner(&spinner); // close the download gauge before apply's own
                 apply::run(&updater) // stages → drive (verified, atomic, commits update.json)
             }
             Err(e) => {
+                prog_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = prog.join();
                 log(&format!("bootstrap: runtime: {e}"));
                 false
             }

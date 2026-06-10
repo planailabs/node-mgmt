@@ -552,7 +552,8 @@ fn landing_404(base: &str) -> String {
     <ul class="dl">
       <li><a href="{base}/files/plan-ai.exe"><span>plan.ai for Windows</span><span class="os">plan-ai.exe</span></a></li>
       <li><a href="{base}/files/plan-ai.dmg"><span>plan.ai for macOS</span><span class="os">plan-ai.dmg</span></a></li>
-      <li><a href="{base}/files/plan-ai.linux.exe"><span>plan.ai for Linux</span><span class="os">plan-ai.linux.exe</span></a></li>
+      <li><a href="{base}/files/plan-ai.linux-x64.exe"><span>plan.ai for Linux (x64)</span><span class="os">plan-ai.linux-x64.exe</span></a></li>
+      <li><a href="{base}/files/plan-ai.linux-arm64.exe"><span>plan.ai for Linux (arm64)</span><span class="os">plan-ai.linux-arm64.exe</span></a></li>
     </ul>
     <footer>{base}</footer>
   </main>
