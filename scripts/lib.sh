@@ -152,7 +152,11 @@ pack_dir() {  # <srcdir> <out-dir>   (pre-extracted; used in place on windows/FA
 # update (vs thousands of individually-tracked files). The burned image carries it
 # UNPACKED — make-usb-image.sh expands + removes the zip after the manifest is built.
 pack_zip() {  # <srcdir> <out.zip>
-  need zip; local src="$1" out="$2" tmp="$2.tmp.$$"; rm -f "$tmp"
+  need zip; local src="$1" out="$2" tmp
+  # Resolve out to ABSOLUTE before the `cd "$src"` below (a relative out — e.g. from
+  # ninja — would otherwise be created relative to src and fail).
+  mkdir -p "$(dirname "$out")"; out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
+  tmp="$out.tmp.$$"; rm -f "$tmp"
   # Deterministic-ish: add entries in sorted order, drop extra file attributes (-X).
   # Follows symlinks (stores their content) so the archive unpacks cleanly on Windows.
   ( cd "$src" && find . -mindepth 1 | LC_ALL=C sort | zip -q -X -@ "$tmp" )
