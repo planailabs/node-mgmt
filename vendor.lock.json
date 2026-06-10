@@ -1,31 +1,31 @@
 {
   "ollama": {
-    "tag": "v0.30.6",
+    "tag": "v0.30.7",
     "assets": [
       {
         "name": "ollama-darwin.tgz",
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.6/ollama-darwin.tgz",
-        "sha256": "71a227934091757dd24994b4114f0c46039bd2b764537de97a2a0a74b626acc6"
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.7/ollama-darwin.tgz",
+        "sha256": "fa3b382e4b90c595e1f473c6df2cd1ecad270c4d04225f6b069e5b86a10f3d33"
       },
       {
         "name": "ollama-linux-amd64-rocm.tar.zst",
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.6/ollama-linux-amd64-rocm.tar.zst",
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.7/ollama-linux-amd64-rocm.tar.zst",
         "sha256": "84111d3694e7483b7bd9adc9d434b19cecb0bcff6799e2071b8a1f8f862c763e"
       },
       {
         "name": "ollama-linux-amd64.tar.zst",
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.6/ollama-linux-amd64.tar.zst",
-        "sha256": "a6d29b68cb7f74023ad1fbb86330d051ccdd1321a79ea12257b8b9409b095930"
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.7/ollama-linux-amd64.tar.zst",
+        "sha256": "88c110a6c9a9130e5ed0aa90f47e8ddb013cb638d834e11ddf1517615704d34c"
       },
       {
         "name": "ollama-linux-arm64.tar.zst",
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.6/ollama-linux-arm64.tar.zst",
-        "sha256": "71b45e45194cb5f2e8dec74e0c98ef2f2c464d1d422b87ff592a79ceab17cad2"
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.7/ollama-linux-arm64.tar.zst",
+        "sha256": "b4f1fbdbe67f22df7798609a67fcb8283d62292a221cfb55c9c067220deda62e"
       },
       {
         "name": "ollama-windows-amd64.zip",
-        "url": "https://github.com/ollama/ollama/releases/download/v0.30.6/ollama-windows-amd64.zip",
-        "sha256": "563f37062efba941e2cd689475a1156e23cca8aedec27bd33e05e44606b3c425"
+        "url": "https://github.com/ollama/ollama/releases/download/v0.30.7/ollama-windows-amd64.zip",
+        "sha256": "ce8169abfe48e05a865958391729ff14f297513ae67fdb4ec7b11a37b9c5b715"
       }
     ]
   },
@@ -65,31 +65,31 @@
     "sha256": "62ee09360bf45c5c2ea5ba8bf9d43cdc85755edb0c293ab90f1a845111e0cabb"
   },
   "llmfit": {
-    "tag": "v0.9.30",
+    "tag": "v0.9.31",
     "assets": [
       {
         "target": "x86_64-unknown-linux-musl",
         "ext": "tar.gz",
-        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-x86_64-unknown-linux-musl.tar.gz",
-        "sha256": "98b464373d1dac42ccd09af99cdd40f7c32f66285f86034b363f3100fec14484"
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.31/llmfit-v0.9.31-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "6faee7b2358e1f5dad1df565ec518e356f7879fe90be6ca715b1ac4506acc2fc"
       },
       {
         "target": "aarch64-unknown-linux-musl",
         "ext": "tar.gz",
-        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-aarch64-unknown-linux-musl.tar.gz",
-        "sha256": "9c50784f8f236dd80343c6636569a82437da8e852f20180efc0e29beec1bcd8c"
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.31/llmfit-v0.9.31-aarch64-unknown-linux-musl.tar.gz",
+        "sha256": "00096c357a974a18e62601a3879318c3dd8cfbd66d93036c56eff461b0bcd7dd"
       },
       {
         "target": "x86_64-pc-windows-msvc",
         "ext": "zip",
-        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-x86_64-pc-windows-msvc.zip",
-        "sha256": "ecf6ed89515339e881d113edfd04637ff6fd28a0cead04eabef9f7e495ba67e6"
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.31/llmfit-v0.9.31-x86_64-pc-windows-msvc.zip",
+        "sha256": "95701f05eaa7d1561704a83e68d8cc6d54c0cd74210be4aa056bd14660444543"
       },
       {
         "target": "aarch64-apple-darwin",
         "ext": "tar.gz",
-        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.30/llmfit-v0.9.30-aarch64-apple-darwin.tar.gz",
-        "sha256": "9197689f5ab566aecdaf928d779f089adce8435ebca3286cfb43c218928d6455"
+        "url": "https://github.com/AlexsJones/llmfit/releases/download/v0.9.31/llmfit-v0.9.31-aarch64-apple-darwin.tar.gz",
+        "sha256": "36e27d803fb740782dd6a64c7511e09f93864fe1cc5ecf986b9df850bb32dd69"
       }
     ]
   }

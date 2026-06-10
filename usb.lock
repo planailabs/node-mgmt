@@ -3,7 +3,7 @@
   "future": false,
   "ollama": {
     "repo": "ollama/ollama",
-    "version": "v0.30.6"
+    "version": "v0.30.7"
   },
   "openwebui": {
     "repo": "open-webui/open-webui",
@@ -11,7 +11,7 @@
   },
   "llmfit": {
     "repo": "AlexsJones/llmfit",
-    "version": "v0.9.30"
+    "version": "v0.9.31"
   },
   "python": "3.12.13",
   "pbs_release": "20260602",
