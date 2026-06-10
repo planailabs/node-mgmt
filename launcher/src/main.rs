@@ -1168,16 +1168,22 @@ fn main() {
                     let st = up.status();
                     if st.total > 0 {
                         let pct = ((st.done * 100 / st.total) as u8).min(100);
-                        if pct != last {
-                            last = pct;
-                            if let Ok(mut g) = sp.lock() {
-                                if let Some(splash) = g.as_mut() {
+                        if let Ok(mut g) = sp.lock() {
+                            if let Some(splash) = g.as_mut() {
+                                if pct != last {
                                     splash.set_progress(pct);
-                                    splash.set_text(&i18n::t_args(
-                                        "provisioning-progress",
-                                        &[("done", st.done as i64), ("total", st.total as i64)],
-                                    ));
+                                    last = pct;
                                 }
+                                // Text carries the throughput indicator (refreshed each
+                                // tick even when pct hasn't moved, so the rate stays live).
+                                let mut text = i18n::t_args(
+                                    "provisioning-progress",
+                                    &[("done", st.done as i64), ("total", st.total as i64)],
+                                );
+                                if st.rate_bps > 0 {
+                                    text.push_str(&format!(" — {}/s", update::human_bytes(st.rate_bps)));
+                                }
+                                splash.set_text(&text);
                             }
                         }
                     }

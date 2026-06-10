@@ -82,10 +82,20 @@ pub struct Info {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateStatus {
     pub state: UpdateState,
+    /// Files done / total (the unit the progress bar uses).
     #[serde(default)]
     pub done: u64,
     #[serde(default)]
     pub total: u64,
+    /// Bytes done / total + current throughput (bytes/sec) — the UI's throughput
+    /// indicator. Set during Downloading (network) and Applying (copy-onto-drive);
+    /// 0 otherwise.
+    #[serde(default)]
+    pub done_bytes: u64,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub rate_bps: u64,
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -100,6 +110,9 @@ impl UpdateStatus {
             state: UpdateState::Idle,
             done: 0,
             total: 0,
+            done_bytes: 0,
+            total_bytes: 0,
+            rate_bps: 0,
             version: String::new(),
             commit: String::new(),
             message: None,

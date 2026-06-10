@@ -74,15 +74,32 @@ fn write_journal(root: &Path, staging: &Path, commit: &str) {
 fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], up: Option<&update::Updater>) -> bool {
     let plan = manifest::diff(update::load_local().as_ref(), remote, kept);
     let total = (plan.to_download.len() + plan.to_delete.len()) as u64;
+    let commit = remote.commit.get(..8).unwrap_or(&remote.commit);
+    crate::log(&format!(
+        "apply: placing {} file(s) + {} deletion(s) onto {} -> version {} (commit {})",
+        plan.to_download.len(), plan.to_delete.len(), root.display(), remote.version, commit,
+    ));
+    let total_bytes: u64 = plan.to_download.iter().map(|e| e.size.unwrap_or(0)).sum();
     let mut splash = crate::show_splash(crate::SplashOpts { text: "Updating plan.ai…", progress: true });
     let mut done = 0u64;
-    let tick = |done: u64, splash: &mut Option<crate::Splash>, up: Option<&update::Updater>| {
+    let mut done_bytes = 0u64;
+    // Log a terminal progress line at most every ~5% (so a 60k-file windows apply
+    // shows movement without 60k lines); the splash gauge + SPA get every tick, incl.
+    // the throughput indicator (copy-onto-drive speed).
+    let mut next_log = 0u64;
+    let start = std::time::Instant::now();
+    let tick = |done: u64, done_bytes: u64, splash: &mut Option<crate::Splash>, up: Option<&update::Updater>, next_log: &mut u64| {
         let pct = if total == 0 { 100 } else { (done * 100 / total) as u8 };
         if let Some(s) = splash.as_mut() {
             s.set_progress(pct);
         }
+        let rate = (done_bytes as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
         if let Some(u) = up {
-            u.set_applying(done, total);
+            u.set_applying(done, total, done_bytes, total_bytes, rate);
+        }
+        if total > 0 && (done >= *next_log || done == total) {
+            crate::log(&format!("apply: {done}/{total} ({pct}%)"));
+            *next_log = done + (total / 20).max(1);
         }
     };
 
@@ -107,7 +124,8 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], u
             crate::log(&format!("apply: {} failed: {err}", e.path));
         }
         done += 1;
-        tick(done, &mut splash, up);
+        done_bytes += e.size.unwrap_or(0);
+        tick(done, done_bytes, &mut splash, up, &mut next_log);
     }
 
     for p in &plan.to_delete {
@@ -115,7 +133,7 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], u
             let _ = std::fs::remove_file(root.join(p));
         }
         done += 1;
-        tick(done, &mut splash, up);
+        tick(done, done_bytes, &mut splash, up, &mut next_log);
     }
     prune_empty_dirs(root, &plan.to_delete);
 
@@ -124,7 +142,10 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], u
     if let Some(s) = splash.take() {
         s.close();
     }
-    crate::log("update applied");
+    crate::log(&format!(
+        "update applied: version {} (commit {}) — {} placed, {} removed",
+        remote.version, commit, plan.to_download.len(), plan.to_delete.len(),
+    ));
     true
 }
 

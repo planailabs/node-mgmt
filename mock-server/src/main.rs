@@ -174,10 +174,16 @@ impl ControlApi for Mock {
     }
     fn update_status(&self) -> impl Future<Output = UpdateStatus> + Send {
         let m = self.s.lock().unwrap();
+        // Fake bytes/throughput (~32 MiB/file, ~12 MiB/s) so the dev SPA shows the
+        // throughput indicator during downloading/applying.
+        let active = matches!(m.update, UpdateState::Downloading | UpdateState::Applying);
         let st = UpdateStatus {
             state: m.update,
             done: m.upd_done,
             total: m.upd_total,
+            done_bytes: m.upd_done.saturating_mul(33_500_000),
+            total_bytes: m.upd_total.saturating_mul(33_500_000),
+            rate_bps: if active { 12_500_000 } else { 0 },
             version: "0.2.0".into(),
             commit: "deadbeefcafe".into(),
             message: None,

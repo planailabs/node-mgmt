@@ -184,6 +184,24 @@ pub fn Dashboard() -> Element {
     }
 }
 
+/// Human-readable byte size for the throughput indicator (1.5 GB, 640 MB, 12.3 MB).
+fn fmt_bytes(n: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut f = n as f64;
+    let mut i = 0usize;
+    while f >= 1024.0 && i < U.len() - 1 {
+        f /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else if f >= 100.0 {
+        format!("{f:.0} {}", U[i])
+    } else {
+        format!("{f:.1} {}", U[i])
+    }
+}
+
 /// Manual update check + apply + per-platform keep/prune (driven by /api/update/*
 /// and /api/platforms). Previewable against the mock server via `make ui`.
 #[allow(non_snake_case)]
@@ -211,10 +229,29 @@ fn UpdatesCard() -> Element {
     let state = s.state;
     let done = s.done;
     let total = s.total;
+    let done_bytes = s.done_bytes;
+    let total_bytes = s.total_bytes;
+    let rate_bps = s.rate_bps;
     let version = s.version.clone();
     drop(s);
     let pct: i64 = if total > 0 { (done * 100 / total) as i64 } else { 0 };
     let busy = matches!(state, UpdateState::Checking | UpdateState::Downloading | UpdateState::Applying);
+    // Throughput indicator (download / copy speed) — shown while transferring.
+    let transferring = matches!(state, UpdateState::Downloading | UpdateState::Applying);
+    let throughput = if transferring && (rate_bps > 0 || total_bytes > 0) {
+        let prog = if total_bytes > 0 {
+            format!("{} / {}", fmt_bytes(done_bytes), fmt_bytes(total_bytes))
+        } else {
+            fmt_bytes(done_bytes)
+        };
+        if rate_bps > 0 {
+            Some(format!("{} · {}/s", prog, fmt_bytes(rate_bps)))
+        } else {
+            Some(prog)
+        }
+    } else {
+        None
+    };
     let kept_now = kept.read().clone();
     let avail = available.read().clone();
 
@@ -249,6 +286,9 @@ fn UpdatesCard() -> Element {
                     },
                     UpdateState::Idle => rsx! { span { class: "td-muted", {t!("upd-idle")} } },
                 }}
+            }
+            if let Some(tp) = throughput {
+                div { class: "text-xs td-muted tabular-nums", "{tp}" }
             }
             div { class: "pt-2 border-t border-line space-y-2",
                 div { class: "label", {t!("platforms-title")} }
