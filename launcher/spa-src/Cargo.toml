@@ -32,7 +32,8 @@ plan-ai-control-api = { path = "../../crates/control-api", default-features = fa
 # overview use) — the Config tab reuses it instead of a bespoke form. Pulls
 # mac-mgmt-common (for ModelSource); compiles to wasm (the server renders it via
 # SSR). Its dioxus/dioxus-i18n come from the forks the [patch] below redirects.
-mac-mgmt-config-ui = { path = "../../third_party/mac-mgmt/config-ui" }
+# OPTIONAL: only pulled in by the `future` feature (the Config tab is gated).
+mac-mgmt-config-ui = { path = "../../third_party/mac-mgmt/config-ui", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unic-langid = { version = "0.9", features = ["macros"] }
@@ -46,6 +47,12 @@ futures-util = "0.3"
 wasm-bindgen-futures = "0.4"
 # getrandom on wasm needs the js backend (pulled in transitively).
 getrandom = { version = "0.2", features = ["js"] }
+
+[features]
+# Gate the Config tab (the schema-driven editor + its config-ui dep) behind an
+# opt-in feature. OFF by default: the shipped dashboard has Dashboard / Models /
+# Open-WebUI only. Matches the daemon's `future` feature (network parts).
+future = ["dep:mac-mgmt-config-ui"]
 
 [profile.release]
 opt-level = "s"

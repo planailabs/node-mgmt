@@ -14,6 +14,7 @@ use plan_ai_design::theme_toggle::{
 use plan_ai_design::{Button, ButtonSize, ButtonVariant};
 
 use crate::api::{self, Info, ServiceState, ServiceStatus};
+#[cfg(feature = "future")]
 use crate::config::ConfigView;
 use crate::dashboard::Dashboard;
 use crate::models::Models;
@@ -23,6 +24,8 @@ pub enum Tab {
     Dashboard,
     Models,
     WebUi,
+    /// The Config tab — gated behind the `future` feature.
+    #[cfg(feature = "future")]
     Config,
 }
 
@@ -54,21 +57,21 @@ pub fn App() -> Element {
         // reuses mac_mgmt_config_ui::ConfigEditor, whose `t!` keys live there),
         // and this app's own FTL so `t!` resolves all three.
         let en: &'static str = Box::leak(
-            format!(
-                "{}\n{}\n{}",
-                plan_ai_design::i18n::EN_US,
-                mac_mgmt_config_ui::EN_US,
-                include_str!("../i18n/en-US.ftl"),
-            )
+            {
+                #[cfg(feature = "future")]
+                { format!("{}\n{}\n{}", plan_ai_design::i18n::EN_US, mac_mgmt_config_ui::EN_US, include_str!("../i18n/en-US.ftl")) }
+                #[cfg(not(feature = "future"))]
+                { format!("{}\n{}", plan_ai_design::i18n::EN_US, include_str!("../i18n/en-US.ftl")) }
+            }
             .into_boxed_str(),
         );
         let de: &'static str = Box::leak(
-            format!(
-                "{}\n{}\n{}",
-                plan_ai_design::i18n::DE_DE,
-                mac_mgmt_config_ui::DE_DE,
-                include_str!("../i18n/de-DE.ftl"),
-            )
+            {
+                #[cfg(feature = "future")]
+                { format!("{}\n{}\n{}", plan_ai_design::i18n::DE_DE, mac_mgmt_config_ui::DE_DE, include_str!("../i18n/de-DE.ftl")) }
+                #[cfg(not(feature = "future"))]
+                { format!("{}\n{}", plan_ai_design::i18n::DE_DE, include_str!("../i18n/de-DE.ftl")) }
+            }
             .into_boxed_str(),
         );
         I18nConfig::new(langid!("en-US"))
@@ -178,7 +181,7 @@ pub fn App() -> Element {
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
                     TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
                     TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
-                    TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
+                    {config_tab_button(tab)}
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
@@ -200,7 +203,7 @@ pub fn App() -> Element {
             // when it's torn out and re-mounted fresh on the next ready.
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
-            if tab == Tab::Config { ConfigView {} }
+            {config_view(tab)}
             div { class: "{webui_view_cls}",
                 if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
@@ -210,6 +213,27 @@ pub fn App() -> Element {
             }
         }
     }
+}
+
+// The Config tab button + view are gated behind the `future` feature. Routed
+// through these helpers (rather than inline `#[cfg]` in rsx!) so the non-future
+// build never references the (absent) `Tab::Config` variant or `ConfigView`.
+#[cfg(feature = "future")]
+fn config_tab_button(tab: Tab) -> Element {
+    rsx! { TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true } }
+}
+#[cfg(not(feature = "future"))]
+fn config_tab_button(_tab: Tab) -> Element {
+    rsx! {}
+}
+
+#[cfg(feature = "future")]
+fn config_view(tab: Tab) -> Element {
+    rsx! { if tab == Tab::Config { ConfigView {} } }
+}
+#[cfg(not(feature = "future"))]
+fn config_view(_tab: Tab) -> Element {
+    rsx! {}
 }
 
 #[component]

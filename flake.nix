@@ -31,6 +31,13 @@
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         lib = pkgs.lib;
 
+        # Build-time toggle from usb.lock: when `"future": true`, the `future`
+        # cargo feature is enabled in the SPA (the Config tab) and the usb daemon
+        # (the network parts — heartbeat / relay / relay-ssh / server push / sync).
+        # Default false → a purely local stack with no config editing / phone-home.
+        usbLock = builtins.fromJSON (builtins.readFile ./usb.lock);
+        futureEnabled = usbLock.future or false;
+
         # rust toolchain with the cross-target std libs the launcher needs
         rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
           targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
@@ -91,7 +98,7 @@
             cd launcher/spa-src
             tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \
               -o assets/tailwind.css --config tailwind.config.js --minify
-            dx build --platform web --release
+            dx build --platform web --release ${lib.optionalString futureEnabled "--features future"}
             cd ../..
             runHook postBuild
           '';
@@ -409,7 +416,8 @@
           };
           buildAndTestSubdir = "daemon";
           buildNoDefaultFeatures = true;
-          buildFeatures = [ "usbd" ];
+          # `future` (usb.lock) adds the network parts (heartbeat/relay/sync).
+          buildFeatures = [ "usbd" ] ++ lib.optionals futureEnabled [ "future" ];
           doCheck = false;
           cargoBuildFlags = [ "--bin" "mac-mgmt" ];
           # nodejs + tailwindcss_3: memvault-web's build.rs runs `npm run
