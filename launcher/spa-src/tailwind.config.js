@@ -13,6 +13,9 @@ module.exports = {
   content: [
     './src/**/*.rs',
     '../../third_party/plan-ai-design/src/**/*.rs',
+    // The shared schema-driven config editor (used by the Konfiguration tab) —
+    // without this glob its utility classes are purged and the tab renders broken.
+    '../../third_party/mac-mgmt/config-ui/src/**/*.rs',
   ],
   safelist: ['td', 'th'],
   theme: {
