@@ -52,7 +52,9 @@ pub trait ControlApi: Send + Sync + 'static {
     fn update_check(&self) -> impl Future<Output = ()> + Send;
     fn update_apply(&self) -> impl Future<Output = ()> + Send;
     fn platforms(&self) -> impl Future<Output = Platforms> + Send;
-    fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send;
+    /// Persist the platform/feature selection. `features: None` keeps the current
+    /// enabled set.
+    fn set_platforms(&self, kept: Vec<String>, features: Option<Vec<String>>) -> impl Future<Output = ()> + Send;
 
     /// Proxy a GET/POST to the llmfit model-browser (real: reqwest; mock: fake).
     fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send;
@@ -144,7 +146,7 @@ async fn h_update_apply<T: ControlApi>(State(s): State<Arc<T>>) -> StatusCode {
 }
 async fn h_set_platforms<T: ControlApi>(State(s): State<Arc<T>>, Json(body): Json<SetPlatforms>) -> StatusCode {
     if !body.platforms.is_empty() {
-        s.set_platforms(body.platforms).await;
+        s.set_platforms(body.platforms, body.features).await;
     }
     StatusCode::NO_CONTENT
 }

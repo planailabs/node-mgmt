@@ -257,14 +257,21 @@ impl ControlApi for RealApi {
         async {}
     }
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
-        let kept = crate::update::read_platforms();
+        let sel = crate::update::read_selection();
         async move {
             let available = plan_ai_manifest::KNOWN_TARGET_KEYS.iter().map(|s| s.to_string()).collect();
-            Platforms { kept, available }
+            let available_features =
+                plan_ai_manifest::KNOWN_FEATURES.iter().map(|(n, _)| n.to_string()).collect();
+            Platforms { kept: sel.platforms, available, features: sel.features, available_features }
         }
     }
-    fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send {
-        crate::update::write_platforms(&kept);
+    fn set_platforms(&self, kept: Vec<String>, features: Option<Vec<String>>) -> impl Future<Output = ()> + Send {
+        let features = features.unwrap_or_else(|| crate::update::read_selection().features);
+        crate::update::write_selection(&plan_ai_manifest::Selection::new(kept, features));
+        // A changed selection usually means something to download (a re-added
+        // platform, a newly enabled feature) or prune — kick a check right away so
+        // saving acts on it without a separate manual "check for updates" step.
+        tokio::spawn(crate::update::check_and_predownload(self.updater.clone()));
         async {}
     }
 

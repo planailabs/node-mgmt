@@ -126,17 +126,28 @@ impl Default for UpdateStatus {
     }
 }
 
-/// Which platforms are kept on this USB + which exist (`/api/platforms`).
+/// Which platforms are kept on this USB + which exist, and which optional
+/// features are enabled + which exist (`/api/platforms`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Platforms {
     pub kept: Vec<String>,
     pub available: Vec<String>,
+    /// Enabled optional features (subset of `available_features`).
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// Every optional feature this build knows about.
+    #[serde(default)]
+    pub available_features: Vec<String>,
 }
 
-/// Request body for `POST /api/platforms`.
+/// Request body for `POST /api/platforms`. `features: None` (key absent) leaves
+/// the enabled features untouched — an older client can keep posting platforms
+/// only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetPlatforms {
     pub platforms: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<Vec<String>>,
 }
 
 /// Request body for `POST /api/llmfit/download`.

@@ -24,6 +24,7 @@ struct State {
     upd_done: u64,
     upd_total: u64,
     kept: Vec<String>,
+    features: Vec<String>,
     dl: HashMap<String, f64>,
     /// Stored USB config (only the values "set"), round-tripped by the Config tab.
     config: Value,
@@ -45,6 +46,7 @@ async fn main() {
             upd_done: 0,
             upd_total: 100,
             kept: vec!["linux-x64".into()],
+            features: vec!["openwebui".into()],
             dl: HashMap::new(),
             config: json!({
                 "ollama": { "enabled": true, "default_model": "qwen3.5", "models": ["qwen3.5"] },
@@ -210,11 +212,28 @@ impl ControlApi for Mock {
         async {}
     }
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
-        let kept = self.s.lock().unwrap().kept.clone();
-        async move { Platforms { kept, available: vec!["linux-x64".into(), "linux-arm64".into(), "win-x64".into(), "mac-arm64".into()] } }
+        let (kept, features) = {
+            let m = self.s.lock().unwrap();
+            (m.kept.clone(), m.features.clone())
+        };
+        async move {
+            Platforms {
+                kept,
+                available: vec!["linux-x64".into(), "linux-arm64".into(), "win-x64".into(), "mac-arm64".into()],
+                features,
+                available_features: vec!["openwebui".into(), "hermes".into()],
+            }
+        }
     }
-    fn set_platforms(&self, kept: Vec<String>) -> impl Future<Output = ()> + Send {
-        self.s.lock().unwrap().kept = kept;
+    fn set_platforms(&self, kept: Vec<String>, features: Option<Vec<String>>) -> impl Future<Output = ()> + Send {
+        let mut m = self.s.lock().unwrap();
+        m.kept = kept;
+        if let Some(f) = features {
+            m.features = f;
+        }
+        // mirror the real backend: saving a selection kicks an update check
+        m.update = UpdateState::Checking;
+        drop(m);
         async {}
     }
     fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send {

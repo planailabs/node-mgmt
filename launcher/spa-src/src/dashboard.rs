@@ -209,6 +209,8 @@ fn UpdatesCard() -> Element {
     let mut status = use_signal(UpdateStatus::idle);
     let mut kept = use_signal(Vec::<String>::new);
     let mut available = use_signal(Vec::<String>::new);
+    let mut features = use_signal(Vec::<String>::new);
+    let mut available_features = use_signal(Vec::<String>::new);
 
     use_future(move || async move {
         loop {
@@ -222,6 +224,8 @@ fn UpdatesCard() -> Element {
         if let Ok(p) = api::get::<Platforms>("/api/platforms").await {
             kept.set(p.kept);
             available.set(p.available);
+            features.set(p.features);
+            available_features.set(p.available_features);
         }
     });
 
@@ -254,6 +258,8 @@ fn UpdatesCard() -> Element {
     };
     let kept_now = kept.read().clone();
     let avail = available.read().clone();
+    let feats_now = features.read().clone();
+    let avail_feats = available_features.read().clone();
 
     rsx! {
         Card { class: "card-pad space-y-3",
@@ -310,16 +316,43 @@ fn UpdatesCard() -> Element {
                             }
                         }
                     }
+                }
+                div { class: "label", {t!("features-title")} }
+                div { class: "flex items-center gap-2",
+                    for f in avail_feats.iter().cloned() {
+                        {
+                            let on = feats_now.contains(&f);
+                            let fc = f.clone();
+                            rsx! {
+                                Button {
+                                    size: ButtonSize::Xs,
+                                    variant: if on { ButtonVariant::Secondary } else { ButtonVariant::Ghost },
+                                    onclick: move |_| {
+                                        let mut x = features.write();
+                                        if let Some(i) = x.iter().position(|v| v == &fc) { x.remove(i); } else { x.push(fc.clone()); }
+                                    },
+                                    "{f}"
+                                }
+                            }
+                        }
+                    }
                     Button {
                         size: ButtonSize::Xs,
                         variant: ButtonVariant::Primary,
                         onclick: move |_| {
                             let k = kept.read().clone();
-                            spawn(async move { let _ = api::command_json("/api/platforms", json!({ "platforms": k })).await; });
+                            let f = features.read().clone();
+                            spawn(async move {
+                                // Saving also kicks an update check server-side, so a
+                                // re-added platform / newly enabled feature downloads
+                                // right away.
+                                let _ = api::command_json("/api/platforms", json!({ "platforms": k, "features": f })).await;
+                            });
                         },
                         {t!("btn-save")}
                     }
                 }
+                HelpText { xs: true, {t!("feature-hint")} }
             }
         }
     }

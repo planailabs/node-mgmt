@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use plan_ai_control_api::{UpdateState, UpdateStatus};
-use plan_ai_manifest::{self as manifest, Manifest};
+use plan_ai_manifest::{self as manifest, Manifest, Selection};
 
 use crate::{cache_root, net, paths};
 
@@ -17,7 +17,7 @@ use crate::{cache_root, net, paths};
 pub struct Pending {
     pub staging: PathBuf,
     pub remote: Manifest,
-    pub kept: Vec<String>,
+    pub sel: Selection,
 }
 
 /// Shared updater state (status for the SPA + the staged pending update for apply).
@@ -68,23 +68,20 @@ pub fn update_url() -> String {
         .unwrap_or_else(|| manifest::DEFAULT_UPDATE_URL.to_string())
 }
 
-/// Kept platforms for this USB. Creates platforms.json with the current platform
-/// on first run (returning whether it had to create it).
-pub fn read_platforms() -> Vec<String> {
+/// The drive's selection (kept platforms + enabled features) from platforms.json.
+/// Creates it with the current platform + default features on first run. A file
+/// without a `features` key (older drives) deserializes with the default feature
+/// set (see manifest::Selection).
+pub fn read_selection() -> Selection {
     if let Ok(s) = std::fs::read_to_string(platforms_path()) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-            let k: Vec<String> = v
-                .get("platforms")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-            if !k.is_empty() {
-                return k;
+        if let Ok(sel) = serde_json::from_str::<Selection>(&s) {
+            if !sel.platforms.is_empty() {
+                return sel;
             }
         }
     }
-    let cur = vec![manifest::current_platform().to_string()];
-    write_platforms(&cur);
+    let cur = Selection::current_platform_default();
+    write_selection(&cur);
     cur
 }
 
@@ -92,8 +89,8 @@ pub fn platforms_exists() -> bool {
     platforms_path().exists()
 }
 
-pub fn write_platforms(kept: &[String]) {
-    let _ = std::fs::write(platforms_path(), serde_json::json!({ "platforms": kept }).to_string());
+pub fn write_selection(sel: &Selection) {
+    let _ = std::fs::write(platforms_path(), serde_json::to_string(sel).unwrap_or_default());
 }
 
 fn staging_dir(commit: &str) -> PathBuf {
@@ -195,30 +192,46 @@ pub(crate) fn artifact_present(root: &Path, e: &manifest::Entry) -> bool {
     }
 }
 
-/// Is any component the remote wants for `kept` physically missing under `root`?
-/// (Used to decide whether the drive needs a repairing re-fetch.)
-pub(crate) fn any_missing_on_disk(remote: &Manifest, kept: &[String], root: &Path) -> bool {
-    remote.files.iter().any(|e| e.wanted_by(kept) && !artifact_present(root, e))
-}
-
-/// The local manifest to diff the remote against — EXCEPT it returns None (→ a FULL
-/// re-fetch of every wanted component at the remote version) when a wanted component
-/// is physically missing from the drive. A selective re-fetch of just the gone file
-/// would pull it at the REMOTE version while its on-disk siblings stay at the
-/// (possibly older) LOCAL version — a mismatched, half-updated component set that may
-/// not even work together. Re-running the whole update keeps every component on one
-/// version. (The manifest-only `diff` can't see disk state, so this is where the
-/// drive's actual contents enter the decision.)
-pub(crate) fn local_for_plan(remote: &Manifest, kept: &[String], root: &Path) -> Option<Manifest> {
-    let local = load_local();
-    if local.is_some() && any_missing_on_disk(remote, kept, root) {
-        crate::log(
-            "update: a wanted component is missing on the drive — doing a FULL re-fetch \
-             (all components to the remote version; a partial heal could mix versions)",
-        );
-        return None;
+/// The local manifest to diff the remote against, adjusted for what's PHYSICALLY on
+/// the drive (the manifest-only `diff` can't see disk state). When a wanted
+/// component's artifact is missing — a re-added platform, a re-enabled feature, a
+/// deleted/corrupted file — plain diffing would say "up to date" (the local manifest
+/// still lists it at the matching sha), so:
+///
+///   - same version+commit as the remote (no update available): HEAL — return the
+///     local manifest WITHOUT the missing entries, so the diff re-downloads exactly
+///     those and leaves the intact components alone. Safe: everything is fetched at
+///     the one version the drive already runs.
+///   - different version: None (→ a FULL re-fetch of every wanted component at the
+///     remote version). A selective re-fetch would pull the gone file at the REMOTE
+///     version while its on-disk siblings stay at the LOCAL version — a mismatched,
+///     half-updated component set that may not even work together.
+pub(crate) fn local_for_plan(remote: &Manifest, sel: &Selection, root: &Path) -> Option<Manifest> {
+    let local = load_local()?;
+    let missing: Vec<String> = remote
+        .files
+        .iter()
+        .filter(|e| e.wanted_by(sel) && !artifact_present(root, e))
+        .map(|e| e.path.clone())
+        .collect();
+    if missing.is_empty() {
+        return Some(local);
     }
-    local
+    if local.version == remote.version && local.commit == remote.commit {
+        crate::log(&format!(
+            "update: {} wanted component(s) missing on the drive at the current version — \
+             healing (re-downloading just those)",
+            missing.len(),
+        ));
+        let mut healed = local;
+        healed.files.retain(|e| !missing.iter().any(|m| m == &e.path));
+        return Some(healed);
+    }
+    crate::log(
+        "update: a wanted component is missing AND the remote has a new version — doing a \
+         FULL re-fetch (all components to the remote version; a partial heal could mix versions)",
+    );
+    None
 }
 
 /// Short commit for logs (first 8 chars; "?" when empty).
@@ -238,8 +251,12 @@ fn short(commit: &str) -> &str {
 pub async fn check_and_predownload(up: Handle) {
     up.set(UpdateStatus { state: UpdateState::Checking, ..UpdateStatus::idle() });
     let url = update_url();
-    let kept = read_platforms();
-    crate::log(&format!("update: checking {url} for platform(s) [{}]", kept.join(", ")));
+    let sel = read_selection();
+    crate::log(&format!(
+        "update: checking {url} for platform(s) [{}], feature(s) [{}]",
+        sel.platforms.join(", "),
+        sel.features.join(", "),
+    ));
     let remote = match fetch_remote(&url).await {
         Ok(m) => m,
         Err(e) => {
@@ -255,15 +272,16 @@ pub async fn check_and_predownload(up: Handle) {
         if remote.built_at.is_empty() { "?" } else { &remote.built_at },
         remote.files.len(),
     ));
-    // Diff against the local manifest — but a missing component on the drive forces a
-    // None here (a full re-fetch at the remote version; see local_for_plan).
-    let local = local_for_plan(&remote, &kept, &paths::portable_root());
+    // Diff against the local manifest — adjusted for missing on-disk artifacts (a
+    // heal of just those at the same version, or a full re-fetch across versions;
+    // see local_for_plan).
+    let local = local_for_plan(&remote, &sel, &paths::portable_root());
     match &local {
         Some(l) => crate::log(&format!("update: local version {} (commit {})", l.version, short(&l.commit))),
         None => crate::log("update: no local manifest (or repairing) — fetching every wanted component"),
     }
-    let plan = manifest::diff(local.as_ref(), &remote, &kept);
-    if plan.to_download.is_empty() && plan.to_delete.is_empty() {
+    let plan = manifest::diff(local.as_ref(), &remote, &sel);
+    if plan.to_download.is_empty() && plan.to_delete.is_empty() && plan.to_wipe_dirs.is_empty() {
         crate::log(&format!("update: already up to date (version {})", remote.version));
         clear_pending_marker();
         up.set(UpdateStatus { state: UpdateState::Idle, version: remote.version, commit: remote.commit, ..UpdateStatus::idle() });
@@ -373,7 +391,7 @@ pub async fn check_and_predownload(up: Handle) {
     // the marker and applies the already-staged delta (apply::resume_if_interrupted)
     // without needing the in-memory Pending or the network.
     write_pending_marker(&remote.commit, &remote.version, &staging);
-    *up.pending.lock().unwrap() = Some(Pending { staging, remote: remote.clone(), kept });
+    *up.pending.lock().unwrap() = Some(Pending { staging, remote: remote.clone(), sel });
     up.set(UpdateStatus {
         state: UpdateState::Ready,
         done: total,
@@ -385,4 +403,83 @@ pub async fn check_and_predownload(up: Handle) {
         commit: remote.commit,
         message: None,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plan_ai_manifest::Entry;
+
+    fn entry(path: &str, sha: &str, plats: &[&str]) -> Entry {
+        Entry {
+            path: path.into(),
+            kind: "file".into(),
+            sha256: Some(sha.into()),
+            size: Some(1),
+            exec: false,
+            platforms: plats.iter().map(|s| s.to_string()).collect(),
+            target: None,
+            feature: plan_ai_manifest::classify_feature(path),
+        }
+    }
+
+    fn man(version: &str, commit: &str, files: Vec<Entry>) -> Manifest {
+        Manifest {
+            schema: 1,
+            product: "p".into(),
+            version: version.into(),
+            commit: commit.into(),
+            built_at: String::new(),
+            update_url: String::new(),
+            files,
+        }
+    }
+
+    /// One test fn for every local_for_plan scenario: they all share the
+    /// PLANAI_PORTABLE_ROOT env var (process-global), so separate #[test]s would
+    /// race under the parallel test runner.
+    #[test]
+    fn local_for_plan_heals_readded_platform_and_full_refetches_across_versions() {
+        let base = std::env::temp_dir().join(format!("planai-healtest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("components/linux-x64")).unwrap();
+        std::env::set_var("PLANAI_PORTABLE_ROOT", &base);
+
+        let files = vec![
+            entry("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            entry("plan-ai.exe", "b", &["win-x64"]),
+            entry("components/linux-x64/ollama-linux-amd64.squashfs", "c", &["linux-x64"]),
+        ];
+        let local = man("1.0", "abc", files.clone());
+        std::fs::write(base.join("update.json"), local.to_json_pretty()).unwrap();
+        // linux artifacts present on disk; the win launcher is NOT (pruned earlier)
+        std::fs::write(base.join("plan-ai.linux-x64.exe"), b"x").unwrap();
+        std::fs::write(base.join("components/linux-x64/ollama-linux-amd64.squashfs"), b"x").unwrap();
+
+        // 1) re-added platform, NO update available (same version+commit) → HEAL:
+        //    the local manifest loses exactly the missing win entry, so the diff
+        //    re-downloads it and nothing else.
+        let remote = man("1.0", "abc", files.clone());
+        let sel = Selection::new(vec!["linux-x64".into(), "win-x64".into()], vec![]);
+        let healed = local_for_plan(&remote, &sel, &base).expect("heal keeps a local manifest");
+        assert!(healed.file("plan-ai.exe").is_none(), "missing artifact dropped from local");
+        assert!(healed.file("plan-ai.linux-x64.exe").is_some());
+        let plan = manifest::diff(Some(&healed), &remote, &sel);
+        let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["plan-ai.exe"], "downloads exactly the re-added platform's file");
+        assert!(plan.to_delete.is_empty());
+
+        // 2) nothing missing for the selection → plain local manifest, empty plan.
+        let sel_linux = Selection::new(vec!["linux-x64".into()], vec![]);
+        let l = local_for_plan(&remote, &sel_linux, &base).expect("local manifest");
+        let plan = manifest::diff(Some(&l), &remote, &sel_linux);
+        assert!(plan.to_download.is_empty());
+
+        // 3) missing artifact AND a new remote version → None (full re-fetch).
+        let newer = man("2.0", "def", files);
+        assert!(local_for_plan(&newer, &sel, &base).is_none());
+
+        std::env::remove_var("PLANAI_PORTABLE_ROOT");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

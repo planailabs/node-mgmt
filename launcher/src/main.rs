@@ -280,9 +280,9 @@ fn pool_needs_provision(comp_dir: Option<&PathBuf>) -> bool {
     match update::load_local() {
         None => comp_dir.is_none(),
         Some(m) => {
-            let kept = update::read_platforms();
+            let sel = update::read_selection();
             let root = paths::portable_root();
-            let missing = m.files.iter().any(|e| e.wanted_by(&kept) && !update::artifact_present(&root, e));
+            let missing = m.files.iter().any(|e| e.wanted_by(&sel) && !update::artifact_present(&root, e));
             if missing {
                 log("components missing on the drive — repairing from the update server");
             }

@@ -31,6 +31,34 @@ pub fn current_platform() -> &'static str {
 /// The build targets this manifest scheme knows, as drive-path group segments.
 pub const KNOWN_TARGET_KEYS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", "mac-arm64"];
 
+/// The optional-feature catalog: `(name, enabled_by_default)`. A manifest entry
+/// tagged with a feature is only wanted when that feature is enabled in
+/// platforms.json; entries without a feature are core (always wanted). Features
+/// NOT enabled by default are never downloaded until the user turns them on.
+pub const KNOWN_FEATURES: &[(&str, bool)] = &[("openwebui", true), ("hermes", false)];
+
+/// The feature set a drive starts with (every default-on feature).
+pub fn default_features() -> Vec<String> {
+    KNOWN_FEATURES.iter().filter(|(_, on)| *on).map(|(n, _)| n.to_string()).collect()
+}
+
+/// Which optional feature owns a drive-relative path (None = core). Matched on the
+/// component basename so it works for grouped (components/<target>/x) and flat
+/// layouts, and for every packaging of one component (.squashfs/.dmg/.zip/dir).
+pub fn classify_feature(rel: &str) -> Option<String> {
+    let p = rel.to_ascii_lowercase();
+    let base = p.rsplit('/').next().unwrap_or(p.as_str());
+    if base.starts_with("hermes") {
+        return Some("hermes".into());
+    }
+    // The python runtime exists to run Open-WebUI, and ow-assets is its model/asset
+    // cache — together they ARE the openwebui feature (on by default).
+    if base.starts_with("runtime-") || base.starts_with("ow-assets") {
+        return Some("openwebui".into());
+    }
+    None
+}
+
 /// A manifest entry: a file, a directory, or a zip-component in the drive layout,
 /// tagged with the platform(s) that need it.
 ///
@@ -57,6 +85,10 @@ pub struct Entry {
     /// For a `zip` entry: the drive-relative folder it unpacks into (wiped first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Optional feature this entry belongs to (None = core, always wanted). Tagged
+    /// entries are only downloaded/kept when the feature is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
 }
 
 impl Entry {
@@ -67,9 +99,34 @@ impl Entry {
     pub fn is_zip(&self) -> bool {
         self.kind == "zip"
     }
-    /// Does any kept platform need this entry? ("all" matches everything.)
-    pub fn wanted_by(&self, kept: &[String]) -> bool {
-        self.platforms.iter().any(|p| p == "all") || self.platforms.iter().any(|p| kept.iter().any(|k| k == p))
+    /// Does this drive's selection need the entry? A kept platform must match
+    /// ("all" matches everything) AND, when the entry belongs to an optional
+    /// feature, that feature must be enabled.
+    pub fn wanted_by(&self, sel: &Selection) -> bool {
+        let plat = self.platforms.iter().any(|p| p == "all")
+            || self.platforms.iter().any(|p| sel.platforms.iter().any(|k| k == p));
+        let feat = self.feature.as_ref().is_none_or(|f| sel.features.iter().any(|x| x == f));
+        plat && feat
+    }
+}
+
+/// What a drive keeps (platforms.json): the platform targets to retain + the
+/// enabled optional features. A platforms.json without a `features` key (older
+/// drives) gets the default feature set, preserving its pre-features behavior.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Selection {
+    pub platforms: Vec<String>,
+    #[serde(default = "default_features")]
+    pub features: Vec<String>,
+}
+
+impl Selection {
+    pub fn new(platforms: Vec<String>, features: Vec<String>) -> Self {
+        Selection { platforms, features }
+    }
+    /// The bootstrap selection for a fresh drive: just this platform + defaults.
+    pub fn current_platform_default() -> Self {
+        Selection { platforms: vec![current_platform().to_string()], features: default_features() }
     }
 }
 
@@ -220,8 +277,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Entry>) -> io::Result<()> {
             continue;
         }
         let platforms = classify(&rel);
+        let feature = classify_feature(&rel);
         if md.is_dir() {
-            out.push(Entry { path: rel, kind: "dir".into(), sha256: None, size: None, exec: false, platforms, target: None });
+            out.push(Entry { path: rel, kind: "dir".into(), sha256: None, size: None, exec: false, platforms, target: None, feature });
             walk(root, &path, out)?;
         } else {
             // A `.zip` is a zip-component: a single archive the launcher unpacks into
@@ -238,6 +296,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Entry>) -> io::Result<()> {
                 exec: is_exec(&md),
                 platforms,
                 target,
+                feature,
             });
         }
     }
@@ -281,6 +340,7 @@ mod tests {
             exec: false,
             platforms: plats.iter().map(|s| s.to_string()).collect(),
             target: None,
+            feature: classify_feature(path),
         }
     }
 
@@ -293,7 +353,19 @@ mod tests {
             exec: false,
             platforms: plats.iter().map(|s| s.to_string()).collect(),
             target: Some(path.strip_suffix(".zip").unwrap().to_string()),
+            feature: classify_feature(path),
         }
+    }
+
+    fn sel(plats: &[&str]) -> Selection {
+        Selection::new(plats.iter().map(|s| s.to_string()).collect(), default_features())
+    }
+
+    fn sel_feat(plats: &[&str], feats: &[&str]) -> Selection {
+        Selection::new(
+            plats.iter().map(|s| s.to_string()).collect(),
+            feats.iter().map(|s| s.to_string()).collect(),
+        )
     }
 
     #[test]
@@ -346,7 +418,7 @@ mod tests {
             file("plan-ai.exe", "b", &["win-x64"]),
             file("components/ow-assets.squashfs", "c", &["all"]),
         ]);
-        let plan = diff(None, &remote, &["linux-x64".into()]);
+        let plan = diff(None, &remote, &sel(&["linux-x64"]));
         let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains(&"plan-ai.linux-x64.exe"));
         assert!(paths.contains(&"components/ow-assets.squashfs")); // "all" wanted
@@ -364,7 +436,7 @@ mod tests {
             file("plan-ai.linux-x64.exe", "a", &["linux-x64"]), // unchanged
             file("plan-ai.exe", "b", &["win-x64"]),
         ]);
-        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
+        let plan = diff(Some(&local), &remote, &sel(&["linux-x64"]));
         assert!(plan.to_download.is_empty()); // linux unchanged, win not wanted
         assert_eq!(plan.to_delete, vec!["plan-ai.exe".to_string()]); // prune win
     }
@@ -373,7 +445,7 @@ mod tests {
     fn diff_redownloads_changed() {
         let local = manifest(vec![file("plan-ai.linux-x64.exe", "old", &["linux-x64"])]);
         let remote = manifest(vec![file("plan-ai.linux-x64.exe", "new", &["linux-x64"])]);
-        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
+        let plan = diff(Some(&local), &remote, &sel(&["linux-x64"]));
         assert_eq!(plan.to_download.len(), 1);
     }
 
@@ -381,7 +453,7 @@ mod tests {
     fn zip_entry_downloads_when_changed_and_carries_target() {
         let local = manifest(vec![zip("components/win-x64/runtime-win-x64.zip", "old", &["win-x64"])]);
         let remote = manifest(vec![zip("components/win-x64/runtime-win-x64.zip", "new", &["win-x64"])]);
-        let plan = diff(Some(&local), &remote, &["win-x64".into()]);
+        let plan = diff(Some(&local), &remote, &sel(&["win-x64"]));
         assert_eq!(plan.to_download.len(), 1);
         let e = &plan.to_download[0];
         assert!(e.is_zip());
@@ -393,7 +465,7 @@ mod tests {
     fn zip_entry_unchanged_is_skipped() {
         let local = manifest(vec![zip("components/win-x64/app-win-x64.zip", "same", &["win-x64"])]);
         let remote = manifest(vec![zip("components/win-x64/app-win-x64.zip", "same", &["win-x64"])]);
-        let plan = diff(Some(&local), &remote, &["win-x64".into()]);
+        let plan = diff(Some(&local), &remote, &sel(&["win-x64"]));
         assert!(plan.to_download.is_empty());
         assert!(plan.to_wipe_dirs.is_empty());
     }
@@ -411,7 +483,7 @@ mod tests {
             file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
             zip("components/win-x64/runtime-win-x64.zip", "b", &["win-x64"]),
         ]);
-        let plan = diff(Some(&local), &remote, &["linux-x64".into()]);
+        let plan = diff(Some(&local), &remote, &sel(&["linux-x64"]));
         assert!(plan.to_download.is_empty());
         assert!(plan.to_delete.is_empty());
         assert_eq!(plan.to_wipe_dirs, vec!["components/win-x64/runtime-win-x64".to_string()]);
@@ -422,15 +494,86 @@ mod tests {
         assert_eq!(classify("components/win-x64/runtime-win-x64.zip"), vec!["win-x64"]);
         assert_eq!(classify("components/win-x64/app-win-x64.zip"), vec!["win-x64"]);
     }
+
+    #[test]
+    fn classify_feature_by_basename() {
+        assert_eq!(classify_feature("components/linux-x64/hermes-linux-x64.squashfs").as_deref(), Some("hermes"));
+        assert_eq!(classify_feature("components/win-x64/hermes-win-x64.zip").as_deref(), Some("hermes"));
+        assert_eq!(classify_feature("components/linux-x64/runtime-linux-x64.squashfs").as_deref(), Some("openwebui"));
+        assert_eq!(classify_feature("components/mac-arm64/ow-assets.dmg").as_deref(), Some("openwebui"));
+        // core stays untagged
+        assert_eq!(classify_feature("components/linux-x64/ollama-linux-amd64.squashfs"), None);
+        assert_eq!(classify_feature("components/linux-x64/manifest.json"), None);
+        assert_eq!(classify_feature("plan-ai.exe"), None);
+    }
+
+    #[test]
+    fn selection_defaults_features_when_key_missing() {
+        // an older platforms.json (no `features` key) keeps the default behavior
+        let s: Selection = serde_json::from_str(r#"{ "platforms": ["linux-x64"] }"#).unwrap();
+        assert_eq!(s.features, vec!["openwebui".to_string()]);
+        let s: Selection = serde_json::from_str(r#"{ "platforms": ["linux-x64"], "features": [] }"#).unwrap();
+        assert!(s.features.is_empty());
+    }
+
+    #[test]
+    fn default_off_feature_not_downloaded_by_default() {
+        let remote = manifest(vec![
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            file("components/linux-x64/runtime-linux-x64.squashfs", "b", &["linux-x64"]),
+            file("components/linux-x64/hermes-linux-x64.squashfs", "c", &["linux-x64"]),
+        ]);
+        // bootstrap with the default feature set: hermes (default-off) is skipped
+        let plan = diff(None, &remote, &sel(&["linux-x64"]));
+        let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"components/linux-x64/runtime-linux-x64.squashfs"));
+        assert!(!paths.iter().any(|p| p.contains("hermes")));
+        // enabling hermes pulls it in
+        let plan = diff(None, &remote, &sel_feat(&["linux-x64"], &["openwebui", "hermes"]));
+        let paths: Vec<_> = plan.to_download.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.iter().any(|p| p.contains("hermes")));
+    }
+
+    #[test]
+    fn disabling_feature_prunes_its_components() {
+        let local = manifest(vec![
+            file("plan-ai.linux-x64.exe", "a", &["linux-x64"]),
+            file("components/linux-x64/runtime-linux-x64.squashfs", "b", &["linux-x64"]),
+            zip("components/win-x64/runtime-win-x64.zip", "c", &["win-x64"]),
+            file("components/linux-x64/hermes-linux-x64.squashfs", "d", &["linux-x64"]),
+        ]);
+        let remote = local.clone();
+        // every feature off: openwebui + hermes artifacts pruned, the zip via wipe
+        let plan = diff(Some(&local), &remote, &sel_feat(&["linux-x64", "win-x64"], &[]));
+        assert!(plan.to_download.is_empty());
+        assert!(plan.to_delete.contains(&"components/linux-x64/runtime-linux-x64.squashfs".to_string()));
+        assert!(plan.to_delete.contains(&"components/linux-x64/hermes-linux-x64.squashfs".to_string()));
+        assert_eq!(plan.to_wipe_dirs, vec!["components/win-x64/runtime-win-x64".to_string()]);
+        assert!(!plan.to_delete.contains(&"plan-ai.linux-x64.exe".to_string())); // core stays
+    }
+
+    #[test]
+    fn reenabling_feature_redownloads_it() {
+        // local manifest still lists the hermes entry (manifests are full),
+        // but the diff with the feature re-enabled re-downloads only if changed —
+        // the on-disk heal path (launcher update::local_for_plan) handles the
+        // "file gone but sha unchanged" case; here we prove the wanted logic.
+        let local = manifest(vec![file("components/linux-x64/hermes-linux-x64.squashfs", "d", &["linux-x64"])]);
+        let remote = manifest(vec![file("components/linux-x64/hermes-linux-x64.squashfs", "e", &["linux-x64"])]);
+        let plan = diff(Some(&local), &remote, &sel_feat(&["linux-x64"], &["hermes"]));
+        assert_eq!(plan.to_download.len(), 1); // sha changed → re-download
+    }
 }
 
-/// Diff `local` (what's on the drive; None ⇒ bootstrap) against `remote` for the
-/// `kept` platforms. Wanted = entries any kept platform needs; everything else
-/// local is pruned. Never touches models/ or data/ (excluded from manifests).
-pub fn diff(local: Option<&Manifest>, remote: &Manifest, kept: &[String]) -> Plan {
+/// Diff `local` (what's on the drive; None ⇒ bootstrap) against `remote` for a
+/// drive selection (kept platforms + enabled features). Wanted = entries the
+/// selection needs; everything else local is pruned — including a disabled
+/// feature's components, freeing their space. Never touches models/ or data/
+/// (excluded from manifests).
+pub fn diff(local: Option<&Manifest>, remote: &Manifest, sel: &Selection) -> Plan {
     let mut plan = Plan::default();
     for e in &remote.files {
-        if !is_safe_path(&e.path) || !e.wanted_by(kept) {
+        if !is_safe_path(&e.path) || !e.wanted_by(sel) {
             continue;
         }
         if e.is_dir() {
@@ -450,10 +593,11 @@ pub fn diff(local: Option<&Manifest>, remote: &Manifest, kept: &[String]) -> Pla
             if e.is_dir() || !is_safe_path(&e.path) {
                 continue;
             }
-            let remote_has = remote.file(&e.path).is_some_and(|r| r.wanted_by(kept));
-            // Remove if the remote no longer ships it, or no kept platform wants it
-            // (pruning another platform's components to free space).
-            if !remote_has || !e.wanted_by(kept) {
+            let remote_has = remote.file(&e.path).is_some_and(|r| r.wanted_by(sel));
+            // Remove if the remote no longer ships it, or the selection no longer
+            // wants it (pruning another platform's / a disabled feature's components
+            // to free space).
+            if !remote_has || !e.wanted_by(sel) {
                 if e.is_zip() {
                     // The zip itself isn't on the drive (unpacked); wipe its target
                     // folder instead (its files aren't individually tracked).

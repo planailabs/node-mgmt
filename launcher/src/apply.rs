@@ -25,7 +25,7 @@ pub fn run(up: &update::Updater) -> bool {
     };
     let root = paths::portable_root();
     write_journal(&root, &pending.staging, &pending.remote.commit);
-    let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.kept, Some(up));
+    let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.sel, Some(up));
     let _ = std::fs::remove_file(journal_path(&root));
     // The staged update is now on the drive — drop the pendrive "in flight" marker
     // so the next launch doesn't try to re-apply it.
@@ -61,8 +61,8 @@ pub fn resume_if_interrupted() {
     match (staging, remote) {
         (Some(staging), Some(remote)) if staging.exists() => {
             crate::log("resuming staged update apply (from pendrive marker)");
-            let kept = update::read_platforms();
-            apply_plan(&root, &staging, &remote, &kept, None);
+            let sel = update::read_selection();
+            apply_plan(&root, &staging, &remote, &sel, None);
             let _ = std::fs::remove_file(&jp);
             update::clear_pending_marker();
         }
@@ -84,12 +84,12 @@ fn write_journal(root: &Path, staging: &Path, commit: &str) {
 
 /// Copy staged files into place (verified, atomic per file), delete pruned files,
 /// then commit the manifest last. `up` (when present) drives the progress splash.
-fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], up: Option<&update::Updater>) -> bool {
+fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, sel: &manifest::Selection, up: Option<&update::Updater>) -> bool {
     // Same local-or-None decision as the download (local_for_plan): a component missing
     // from the drive means a full re-fetch, so apply must place the full set too (the
     // staging holds exactly what the download fetched). Files absent from staging are
     // skipped below, so this stays safe for the resume path.
-    let plan = manifest::diff(update::local_for_plan(remote, kept, root).as_ref(), remote, kept);
+    let plan = manifest::diff(update::local_for_plan(remote, sel, root).as_ref(), remote, sel);
     let total = (plan.to_download.len() + plan.to_delete.len() + plan.to_wipe_dirs.len()) as u64;
     let commit = remote.commit.get(..8).unwrap_or(&remote.commit);
     crate::log(&format!(
