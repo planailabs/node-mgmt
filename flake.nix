@@ -538,9 +538,17 @@
           cp ${usbd-linux-arm64}/bin/mac-mgmt "$out/mac-mgmt"
           chmod +x "$out/mac-mgmt"
         '';
+        # Shared dev-leg toolchain + env (nix/dev-env.nix), consumed by both the
+        # interactive devshell and the bundled Docker image below.
+        devEnv = import ./nix/dev-env.nix { inherit pkgs lib spaTools; };
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents;
+          # The devshell, bundled as a Docker image (built via dockerTools on the
+          # NixOS build leg — no Dockerfile/daemon). Same toolchain + env as
+          # `nix develop`, so `make` runs unchanged inside the container:
+          #   nix build .#devshell-image && docker load < result
+          devshell-image = import ./nix/docker.nix { inherit pkgs lib devEnv; };
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           inherit usbd usbdComponent;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
