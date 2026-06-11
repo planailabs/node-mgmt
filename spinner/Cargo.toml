@@ -9,29 +9,19 @@ name = "plan-ai-spinner"
 path = "src/main.rs"
 
 [dependencies]
-# CLI args (--text / --progress / --title)
+# CLI args (--text / --progress / --title / --selftest)
 clap = { version = "4", features = ["derive"] }
-
-# The eframe backend is chosen per target (each cross-build is a single platform, so
-# the features resolve cleanly):
-#
-# Windows -> wgpu (Direct3D 12/11, with a WARP *software* adapter when there's no GPU).
-# glow needs a desktop OpenGL ≥2.0 context, which is absent on many Windows VMs / RDP /
-# headless sessions (only GDI GL 1.1) — there the splash never came up ("egui_glow
-# requires opengl 2.0+"). wgpu renders via D3D instead. pollster block_on's the one-shot
-# adapter/device request we do before the window opens (see wgpu_adapter_config).
-[target.'cfg(windows)'.dependencies]
-eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts"] }
-pollster = "0.4"
-
-# macOS / Linux -> glow (OpenGL). These have a working desktop GL (and NixOS uses the
-# launcher's dialog/terminal fallback instead of eframe), and glow keeps the binary
-# lean — notably it avoids wgpu's extra libobjc link on macOS, which modern dyld
-# SIGABRTs on as a duplicate. glow/winit dlopen the system GL/windowing libs at runtime,
-# so a NixOS-cross-built binary still resolves the target's own libs. accesskit is
-# dropped (a splash needs no screen-reader, and it's a cross-compile pain point).
-[target.'cfg(not(windows))'.dependencies]
-eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+# The splash is rendered on the CPU and blitted to the window via the OS 2D path
+# (GDI on Windows, CoreGraphics on macOS, X11/Wayland shm on Linux) — NOT a GPU/GL/D3D
+# backend. eframe's glow needed desktop OpenGL ≥2.0 and wgpu needed a Direct3D adapter,
+# neither of which exists on a display-only VM (e.g. a virtio "DOD" GPU) or many
+# RDP/headless sessions, so the splash never came up there. softbuffer needs only a
+# window + a framebuffer copy, so it renders anywhere a window can be shown.
+winit = "0.30"
+softbuffer = "0.4"
+# 8x8 bitmap glyphs for the label text (no font file / GPU text shaping needed). Covers
+# Basic Latin + Latin-1 (umlauts etc.); anything else degrades to a blank/space.
+font8x8 = "0.3"
 
 [profile.release]
 opt-level = "z"

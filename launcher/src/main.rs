@@ -56,7 +56,7 @@ fn notify(title: &str, body: &str) {
 /// A running splash — the single shared progress abstraction for BOTH the GUI and
 /// the terminal. Every caller uses the same `set_text` / `set_progress` / `close`
 /// API regardless of which backend `show_splash` picked:
-///   - `Proc`: an external splash process — the embedded eframe spinner, a GUI
+///   - `Proc`: an external splash process — the embedded CPU-rendered splash window, a GUI
 ///     progress dialog (zenity/kdialog/yad), or the curses `dialog` gauge — all fed
 ///     over the zenity-compatible stdin protocol (`#label` / a bare percentage).
 ///   - `Term`: an in-process progress line drawn on stderr. The universal fallback
@@ -66,7 +66,7 @@ pub enum Splash {
     Proc(std::process::Child),
     Term(TermBar),
     /// Last-resort fallback: no GUI window, no dialog, and no tty for a progress line
-    /// (e.g. a GUI double-click on a machine where the eframe spinner can't come up).
+    /// (e.g. a GUI double-click on a machine where the splash window can't come up).
     /// A one-shot "starting…" desktop notification was already fired when this was
     /// chosen; the progress updates below are intentional no-ops (re-firing toasts per
     /// tick would spam). It still exists as a real handle so callers `close()` it
@@ -945,7 +945,7 @@ pub struct SplashOpts<'a> {
 /// NixOS / no-GL fallback splash: a progress dialog via the desktop's own tool
 /// (no GL/glibc deps to ship). zenity (GTK), kdialog (KDE) and yad keep the window
 /// for the life of the process, so killing the child closes it — same contract as
-/// the eframe spinner. With no display at all but a terminal, the curses `dialog`
+/// the splash window. With no display at all but a terminal, the curses `dialog`
 /// gauge is the last resort (e.g. a headless SSH / TTY launch). Determinate mode
 /// reads 0..100 percentages on stdin (zenity/yad/dialog natively; kdialog stays
 /// indeterminate). None if no usable tool is present.
@@ -1016,7 +1016,7 @@ fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child>
     None
 }
 
-/// Write the embedded eframe spinner (or a PLANAI_SPINNER dev override) to the
+/// Write the embedded splash spinner (or a PLANAI_SPINNER dev override) to the
 /// writable tools dir + chmod +x (FAT32 has no exec bit) and return its path. None if
 /// there's no embedded binary (dev/bare-cargo) and no override. Shared by the selftest
 /// probe and the real spawn so both run the exact same binary.
@@ -1036,7 +1036,7 @@ fn materialize_spinner() -> Option<PathBuf> {
             Err(e) => { log(&format!("spinner: copy dev override failed: {e}")); false }
         }
     } else {
-        // The usual reason the eframe splash is absent: a dev/bare-cargo launcher
+        // The usual reason the splash is absent: a dev/bare-cargo launcher
         // built without PLANAI_SPINNER_BIN, and no PLANAI_SPINNER override set.
         log("spinner: no embedded binary (built without PLANAI_SPINNER_BIN) and no PLANAI_SPINNER override");
         false
@@ -1052,15 +1052,15 @@ fn materialize_spinner() -> Option<PathBuf> {
     Some(bin)
 }
 
-/// Probe ONCE whether the embedded eframe spinner can actually come up in THIS
+/// Probe ONCE whether the embedded splash window can actually come up in THIS
 /// environment, then cache the verdict. Runs the spinner with `--selftest`: it opens
 /// the window, renders a few frames, and exits 0 — or non-zero if the window/GL can't
-/// be created (headless, no OpenGL ≥2.0 on a VM/RDP, a dyld/loader error, …). This is
+/// be created (headless / no usable display, a dyld/loader error, …). This is
 /// far more reliable than watching the real spinner for an early exit: GL init can
 /// take longer than any fixed grace period, and the selftest gives a definitive yes/no
 /// before we commit to (or fall back from) the GUI splash. Self-caps at ~5s; we add a
 /// hard kill at 8s so a wedged window can't stall startup.
-fn eframe_spinner_works() -> bool {
+fn splash_renders_here() -> bool {
     use std::process::Stdio;
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
@@ -1105,10 +1105,10 @@ fn eframe_spinner_works() -> bool {
     })
 }
 
-/// Spawn the embedded eframe spinner in the chosen mode. Callers must have confirmed
-/// it can run via `eframe_spinner_works()` first. None if it can't be materialized or
+/// Spawn the embedded splash window in the chosen mode. Callers must have confirmed
+/// it can run via `splash_renders_here()` first. None if it can't be materialized or
 /// spawn fails.
-fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
+fn spawn_splash_window(opts: SplashOpts) -> Option<std::process::Child> {
     use std::process::Stdio;
     let bin = materialize_spinner()?;
     let mut cmd = Command::new(&bin);
@@ -1120,7 +1120,7 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
     }
     cmd.stdout(Stdio::null());
     // Hide the spinner's own stderr by default, but surface it for diagnosis when
-    // PLANAI_SPINNER_DEBUG is set — that's where a missing-libGL / no-display crash
+    // PLANAI_SPINNER_DEBUG is set — that's where a no-display / render-init crash
     // prints, which is otherwise invisible (the launcher only sees a dead child).
     if std::env::var_os("PLANAI_SPINNER_DEBUG").is_some() {
         cmd.stderr(Stdio::inherit());
@@ -1134,24 +1134,24 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
 }
 
 /// Show the splash — the one entry point every progress site uses. Picks the best
-/// available backend, all behind the same `Splash` API: the embedded eframe spinner
+/// available backend, all behind the same `Splash` API: the embedded splash window
 /// where it can run; the desktop's progress dialog on NixOS (can't run the dynamic
-/// GL binary) or if eframe won't spawn on linux; and finally an in-process terminal
+/// dynamic binary) or if the splash won't spawn on linux; and finally an in-process terminal
 /// progress line whenever we have a tty but no GUI/dialog. Returns None only when
 /// truly headless (no display, no tty — e.g. CI). Best-effort.
 pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
-    // The eframe GUI spinner is fragile across environments: it needs a display, an
-    // OpenGL ≥2.0 context (absent on many VMs/RDP/headless sessions), and a binary
-    // that loads cleanly. Rather than guess, ask it directly via a cached `--selftest`
+    // The GUI splash can still fail across environments: it needs a usable display and
+    // a binary that loads cleanly (e.g. NixOS can't run the dynamic binary at all).
+    // Rather than guess, ask it directly via a cached `--selftest`
     // probe; only spawn the real window when that proves it works HERE. Otherwise fall
-    // back. NixOS short-circuits to the dialog/terminal (the dynamic glibc/GL binary
+    // back. NixOS short-circuits to the dialog/terminal (the dynamic glibc binary
     // can't run on its bare nix-ld stub at all), so we don't even probe there.
     #[cfg(target_os = "linux")]
     if is_nixos() {
         return Some(fallback_splash(opts));
     }
-    if eframe_spinner_works() {
-        if let Some(child) = spawn_eframe_spinner(opts) {
+    if splash_renders_here() {
+        if let Some(child) = spawn_splash_window(opts) {
             log("splash spinner shown");
             return Some(Splash::Proc(child));
         }
@@ -1165,7 +1165,7 @@ pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
 /// or the curses `dialog` on a bare tty); else an in-process terminal progress line
 /// (any OS with a tty — incl. the Windows console-subsystem launcher); else a one-shot
 /// "starting…" desktop notification (no GUI, no dialog, no tty — e.g. a GUI
-/// double-click on a machine with no working OpenGL). Never returns "nothing".
+/// double-click on a machine with no usable display). Never returns "nothing".
 fn fallback_splash(opts: SplashOpts) -> Splash {
     #[cfg(target_os = "linux")]
     if let Some(child) = spawn_system_progress_dialog(opts) {
