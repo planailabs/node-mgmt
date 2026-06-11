@@ -206,6 +206,14 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
     (→ `gen-vendor-lock.sh`, which reads each release's `.sha256` sidecar). To bump:
     edit `usb.lock` `.llmfit.version`, run `make update-locks`, commit.
 
+- **When touching `usb.lock` or `vendor.lock.json`, also update the scripts that
+  work with them** — they are read in several places that don't share a parser:
+  `scripts/lib.sh` (the `*_version`/`*_repo` jq helpers), `scripts/gen-vendor-lock.sh`
+  (writes vendor.lock.json), `scripts/fetch-vendor.sh` (materialises vendor/ from
+  the FODs), `scripts/update-locks.sh`, `nix/vendor.nix` (+ `flake.nix` consumers),
+  and `xtask` (e.g. `ollama_tag()` reads usb.lock directly). Adding a key without
+  threading it through these leaves the build half-wired.
+
 ## Pitfalls that bit us
 
 - `make clean` mid-build wipes `dist/` + `node_modules` → app-builder "no such

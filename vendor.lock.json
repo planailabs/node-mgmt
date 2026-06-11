@@ -92,5 +92,10 @@
         "sha256": "36e27d803fb740782dd6a64c7511e09f93864fe1cc5ecf986b9df850bb32dd69"
       }
     ]
+  },
+  "hermes": {
+    "tag": "v2026.5.16",
+    "url": "https://github.com/NousResearch/hermes-agent/archive/refs/tags/v2026.5.16.tar.gz",
+    "sha256": "c0a554050a50ee9a62f3fa5cd288a167ba5640c42d647d100cdea084b7294143"
   }
 }

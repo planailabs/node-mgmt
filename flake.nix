@@ -331,6 +331,42 @@
             wheelsLock = builtins.fromJSON (builtins.readFile lockFile);
           };
 
+        # the vendored hermes-agent source tree (FOD tarball → plain tree); the
+        # hermes component + its web build consume it.
+        hermesSrcTree = pkgs.runCommand "hermes-agent-src-${vendorLock.hermes.tag}"
+          { src = pkgs.fetchurl { inherit (vendorLock.hermes) url sha256; }; }
+          ''mkdir -p $out && tar -xzf "$src" -C $out --strip-components=1'';
+
+        # portable hermes component per target (same wheels-FOD + vanilla install
+        # shape as runtimeFor; see nix/hermes.nix)
+        hermesFor = { target, triple, lockFile }:
+          import ./nix/hermes.nix {
+            inherit pkgs lib system triple;
+            pyVersion = vendorLock.pbs.python;
+            pbsArchive = pbsFor target;
+            wheelsLock = builtins.fromJSON (builtins.readFile lockFile);
+            hermesSrc = hermesSrcTree;
+            hermesTag = vendorLock.hermes.tag;
+          };
+        hermesComponents = {
+          hermes-linux-x64 = hermesFor {
+            target = "linux-x64"; triple = "x86_64-unknown-linux-gnu";
+            lockFile = ./hermes/wheels-linux-x64.lock.json;
+          };
+          hermes-linux-arm64 = hermesFor {
+            target = "linux-arm64"; triple = "aarch64-unknown-linux-gnu";
+            lockFile = ./hermes/wheels-linux-arm64.lock.json;
+          };
+          hermes-win-x64 = hermesFor {
+            target = "win-x64"; triple = "x86_64-pc-windows-msvc";
+            lockFile = ./hermes/wheels-win-x64.lock.json;
+          };
+          hermes-mac-arm64 = hermesFor {
+            target = "mac-arm64"; triple = "aarch64-apple-darwin";
+            lockFile = ./hermes/wheels-mac-arm64.lock.json;
+          };
+        };
+
         # uv cross-resolution triples per distributable target (mac-x64 dropped —
         # arm64-only macOS wheels). nixos-x64 reuses the linux-x64 runtime.
         runtimes = {
@@ -581,7 +617,7 @@
             # expands the per-component .zip into its target folder + removes the zip.
             paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils pkgs.unzip ];
           };
-        } // runtimes
+        } // runtimes // hermesComponents
           # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;
           # add the attr only when the asset is in vendor.lock.json so a missing arm64
           # binary doesn't poison flake eval (the bundle tolerates its absence).

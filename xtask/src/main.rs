@@ -327,6 +327,23 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
             &format!("nix component: usbd-{t}"));
         comp_stamps.push(stamp(&format!("comp-usbd-{t}")));
     }
+    // hermes: the optional hermes-agent component (feature "hermes", default-off —
+    // ships on the update server, not the image). Fully nix-built (pbs + wheels-FOD,
+    // nix/hermes.nix); per-OS format like usbd: linux squashfs, mac dmg, win zip.
+    let mut hermes_srcs = nix_comp_srcs.clone();
+    hermes_srcs.extend(srcs(&["nix/hermes.nix"]));
+    hermes_srcs.extend(src_tree("hermes"));
+    for t in targets {
+        let (attr_fmt, out) = match target_os(t) {
+            "linux" => ("squashfs", format!("dist/components/hermes-{t}.squashfs")),
+            "mac" => ("dmg", format!("dist/components/hermes-{t}.dmg")),
+            _ => ("dir", format!("dist/components/hermes-{t}.zip")),
+        };
+        stamp_edge(&format!("comp-hermes-{t}"), &hermes_srcs,
+            &format!("./scripts/nix-component.sh hermes-{t}-{attr_fmt} {out}"),
+            &format!("nix component: hermes-{t}"));
+        comp_stamps.push(stamp(&format!("comp-hermes-{t}")));
+    }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
 

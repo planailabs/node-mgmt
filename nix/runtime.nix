@@ -29,7 +29,7 @@ derivation {
   args = [ "-c" ''
     # python3 is only for uv's interpreter discovery; --python-platform/--python-version
     # drive wheel selection and --target installs into the pbs tree (no wheel is executed).
-    export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar gzip uv python3 ])}"
+    export PATH="${lib.makeBinPath (with pkgs; [ coreutils findutils gnutar gzip uv python3 ])}"
     export HOME="$TMPDIR" UV_NO_INDEX=1 UV_PYTHON_DOWNLOADS=never UV_PYTHON_PREFERENCE=only-system
     # macOS: onnxruntime (via chromadb) only ships macosx_14_0 wheels, so resolve
     # against that deployment target or resolution is unsatisfiable.

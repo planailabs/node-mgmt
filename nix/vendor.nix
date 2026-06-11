@@ -11,6 +11,8 @@ let
     (map (a: { name = "ollama/${vendorLock.ollama.tag}/${a.name}"; path = fetch a; }) vendorLock.ollama.assets)
     ++ (map (p: { name = "pbs/${p.target}.tar.gz"; path = fetch p; }) vendorLock.pbs.files)
     ++ [ { name = "open-webui/${vendorLock.openwebui.tag}/source.tar.gz"; path = fetch vendorLock.openwebui; } ]
+    ++ lib.optional (vendorLock ? hermes)
+      { name = "hermes/${vendorLock.hermes.tag}/source.tar.gz"; path = fetch vendorLock.hermes; }
   );
 
   # Layer 2 — normalise each ollama FOD to a uniform .tar.gz. VANILLA derivation

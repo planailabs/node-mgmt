@@ -1,0 +1,19 @@
+--- a/tools/lazy_deps.py
++++ b/tools/lazy_deps.py
+@@ -333,8 +333,14 @@
+ 
+ 
+ def _in_nix_store() -> bool:
+-    """True when the running Python lives in the read-only Nix store."""
+-    return sys.executable.startswith("/nix/store/")
++    """True when the running Python's venv root can't be written — the Nix
++    store, or any read-only mounted bundle (e.g. a squashfs/dmg component).
++    Lazy installs are then redirected to the overlay venv at $HERMES_HOME/venv.
++    """
++    if sys.executable.startswith("/nix/store/"):
++        return True
++    venv_root = Path(sys.executable).parent.parent
++    return not os.access(venv_root, os.W_OK)
+ 
+ 
+ def _overlay_venv_dir() -> Path:

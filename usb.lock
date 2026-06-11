@@ -24,5 +24,9 @@
   ],
   "models": [
     "smollm2:1.7b"
-  ]
+  ],
+  "hermes": {
+    "repo": "NousResearch/hermes-agent",
+    "version": "v2026.5.16"
+  }
 }

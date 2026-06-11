@@ -8,7 +8,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 need nix; need tar
-OLLAMA_TAG="$(ollama_version)"; OW_TAG="$(ow_version)"
+OLLAMA_TAG="$(ollama_version)"; OW_TAG="$(ow_version)"; HERMES_TAG="$(hermes_version)"
 
 [ -f "$REPO_ROOT/vendor.lock.json" ] || die "vendor.lock.json missing — run scripts/gen-vendor-lock.sh"
 
@@ -17,10 +17,11 @@ RESULT="$(nix build "$REPO_ROOT#vendor" --no-link --print-out-paths)"
 
 link() { ln -sfn "$(readlink -f "$1")" "$2"; }   # point at the real store file
 
-mkdir -p "$VENDOR_DIR/ollama/$OLLAMA_TAG" "$VENDOR_DIR/open-webui/$OW_TAG" "$VENDOR_DIR/pbs"
+mkdir -p "$VENDOR_DIR/ollama/$OLLAMA_TAG" "$VENDOR_DIR/open-webui/$OW_TAG" "$VENDOR_DIR/pbs" "$VENDOR_DIR/hermes/$HERMES_TAG"
 for f in "$RESULT/ollama/$OLLAMA_TAG"/*; do link "$f" "$VENDOR_DIR/ollama/$OLLAMA_TAG/$(basename "$f")"; done
 for f in "$RESULT/pbs"/*;                 do link "$f" "$VENDOR_DIR/pbs/$(basename "$f")"; done
 link "$RESULT/open-webui/$OW_TAG/source.tar.gz" "$VENDOR_DIR/open-webui/$OW_TAG/source.tar.gz"
+link "$RESULT/hermes/$HERMES_TAG/source.tar.gz" "$VENDOR_DIR/hermes/$HERMES_TAG/source.tar.gz"
 
 # extract the open-webui source (what download-openwebui.sh used to do)
 SRC="$VENDOR_DIR/open-webui/$OW_TAG/src"
@@ -29,4 +30,11 @@ if [ ! -f "$SRC/pyproject.toml" ]; then
   tar -xzf "$VENDOR_DIR/open-webui/$OW_TAG/source.tar.gz" -C "$SRC" --strip-components=1
 fi
 
-log "vendor ready: $(ls "$VENDOR_DIR/ollama/$OLLAMA_TAG" | wc -l) ollama, $(ls "$VENDOR_DIR/pbs" | wc -l) pbs, open-webui src extracted"
+# extract the hermes-agent source (uv.lock + nix files + skills/plugins/locales)
+HSRC="$VENDOR_DIR/hermes/$HERMES_TAG/src"
+if [ ! -f "$HSRC/pyproject.toml" ]; then
+  rm -rf "$HSRC"; mkdir -p "$HSRC"
+  tar -xzf "$VENDOR_DIR/hermes/$HERMES_TAG/source.tar.gz" -C "$HSRC" --strip-components=1
+fi
+
+log "vendor ready: $(ls "$VENDOR_DIR/ollama/$OLLAMA_TAG" | wc -l) ollama, $(ls "$VENDOR_DIR/pbs" | wc -l) pbs, open-webui + hermes src extracted"

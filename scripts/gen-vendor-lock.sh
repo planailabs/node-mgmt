@@ -46,6 +46,12 @@ OW_URL="https://github.com/$OW_REPO/archive/refs/tags/$OW_TAG.tar.gz"
 log "open-webui source $OW_TAG (hashing)"
 OW_SHA="$(curl -fsSL "$OW_URL" | sha256sum | awk '{print $1}')"
 
+# --- hermes-agent source archive ---------------------------------------------
+HERMES_REPO="$(hermes_repo)"; HERMES_TAG="$(hermes_version)"
+HERMES_URL="https://github.com/$HERMES_REPO/archive/refs/tags/$HERMES_TAG.tar.gz"
+log "hermes-agent source $HERMES_TAG (hashing)"
+HERMES_SHA="$(curl -fsSL "$HERMES_URL" | sha256sum | awk '{print $1}')"
+
 # --- llmfit: upstream prebuilt binaries (sha256 from sidecar .sha256 files) --
 # Cross-building llmfit hits toolchain walls (win synchronization.lib, mac libobjc),
 # so we bundle its official prebuilt binaries; flake.nix fetches these as FODs.
@@ -73,12 +79,14 @@ jq -n \
   --arg otag "$OLLAMA_TAG" --argjson oassets "$OLLAMA_ASSETS" \
   --arg pyver "$PYVER" --arg pbs "$PBS" --argjson pbsent "$PBS_ENTRIES" \
   --arg owtag "$OW_TAG" --arg owurl "$OW_URL" --arg owsha "$OW_SHA" \
-  --arg lftag "$LLMFIT_TAG" --argjson lfassets "$LLMFIT_ASSETS" '
+  --arg lftag "$LLMFIT_TAG" --argjson lfassets "$LLMFIT_ASSETS" \
+  --arg htag "$HERMES_TAG" --arg hurl "$HERMES_URL" --arg hsha "$HERMES_SHA" '
 {
   ollama:    { tag: $otag, assets: $oassets },
   pbs:       { python: $pyver, release: $pbs, files: $pbsent },
   openwebui: { tag: $owtag, url: $owurl, sha256: $owsha },
-  llmfit:    { tag: $lftag, assets: $lfassets }
+  llmfit:    { tag: $lftag, assets: $lfassets },
+  hermes:    { tag: $htag, url: $hurl, sha256: $hsha }
 }' > "$OUT"
 
-log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1 llmfit:$(jq '.llmfit.assets|length' "$OUT")"
+log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1 llmfit:$(jq '.llmfit.assets|length' "$OUT") hermes:1"

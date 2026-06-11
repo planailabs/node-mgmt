@@ -144,6 +144,17 @@ in
   "usbd-mac-arm64-dmg" = mkDmg { name = "usbd-mac-arm64"; src = flake.packages.${builtins.currentSystem}.usbdComponent-mac-arm64; };
   "usbd-win-x64-dir" = pkgs.runCommand "usbd-win-x64" { }
     "mkdir -p $out && cp -a ${flake.packages.${builtins.currentSystem}.usbdComponent-win-x64}/. $out/";
+  # hermes: the optional hermes-agent component (feature "hermes", default-off in
+  # platforms.json — not on the image / not downloaded until enabled). Source is
+  # fully pure nix (flake `hermes-<target>`, wheels-FOD into pbs — nix/hermes.nix);
+  # packed per-OS like usbd: linux squashfs, mac dmg, win dir (zipped by
+  # nix-component.sh when the out path ends .zip).
+  "hermes-linux-x64-squashfs" = mkSqfs "hermes-linux-x64" (flake.packages.${builtins.currentSystem}.hermes-linux-x64);
+  "hermes-linux-arm64-squashfs" = mkSqfs "hermes-linux-arm64" (flake.packages.${builtins.currentSystem}.hermes-linux-arm64);
+  "hermes-mac-arm64-dmg" = mkDmg { name = "hermes-mac-arm64"; src = flake.packages.${builtins.currentSystem}.hermes-mac-arm64; memSize = 4096; };
+  "hermes-win-x64-dir" = pkgs.runCommand "hermes-win-x64" { }
+    "mkdir -p $out && cp -a ${flake.packages.${builtins.currentSystem}.hermes-win-x64}/. $out/";
+
   # runtimes: store-import the built dist/runtime/<t> (python tree + runtime.json that
   # make-runtime already writes), then pack — linux squashfs, mac dmg, win dir.
   "runtime-linux-x64-squashfs" = mkSqfs "runtime-linux-x64" (stores.runtime-linux-x64 or (throw "runtime-linux-x64 not imported"));

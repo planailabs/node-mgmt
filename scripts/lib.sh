@@ -52,6 +52,8 @@ ow_repo()        { lock '.openwebui.repo'; }
 ow_version()     { lock '.openwebui.version'; }
 llmfit_repo()    { lock '.llmfit.repo'; }
 llmfit_version() { lock '.llmfit.version'; }
+hermes_repo()    { lock '.hermes.repo'; }
+hermes_version() { lock '.hermes.version'; }
 py_version()     { lock '.python'; }
 pbs_release()    { lock '.pbs_release'; }
 
