@@ -45,19 +45,72 @@ struct Shared {
     closed: bool,
 }
 
+/// eframe wgpu config that PRE-CREATES the adapter + device itself (WgpuSetup::Existing)
+/// instead of letting eframe call `request_adapter` with `force_fallback_adapter =
+/// false`. That default skips software adapters AND relies on adapter *enumeration*,
+/// which returns nothing in a headless / session-0 context (RDP, a service, an ssh
+/// launch) — so the splash never came up on a GPU-less Windows box ("no suitable
+/// adapter found"). Here we try a real GPU first, then fall back to forcing a software
+/// adapter: `force_fallback_adapter = true` CREATES the DX12 WARP rasterizer directly
+/// (no enumeration), so the splash renders with no GPU and no working system OpenGL.
+/// If even that fails we hand back eframe's default config (real-GPU machines still
+/// work; the launcher's --selftest gate covers the rest).
+#[cfg(target_os = "windows")]
+fn wgpu_adapter_config() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{wgpu, WgpuConfiguration, WgpuSetup, WgpuSetupExisting};
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY | wgpu::Backends::GL),
+        ..Default::default()
+    });
+    let request = |fallback| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: fallback,
+        }))
+    };
+    if let Some(adapter) = request(false).or_else(|| request(true)) {
+        let dev = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("plan-ai-spinner"),
+                required_features: wgpu::Features::empty(),
+                // The adapter's own limits — guaranteed satisfiable (WARP advertises
+                // generous ones), and enough for a 320×180 splash.
+                required_limits: adapter.limits(),
+                memory_hints: wgpu::MemoryHints::default(),
+            },
+            None,
+        ));
+        if let Ok((device, queue)) = dev {
+            return WgpuConfiguration {
+                wgpu_setup: WgpuSetup::Existing(WgpuSetupExisting { instance, adapter, device, queue }),
+                ..Default::default()
+            };
+        }
+    }
+    WgpuConfiguration::default()
+}
+
 fn main() -> eframe::Result {
     let args = Args::parse();
     let shared = Arc::new(Mutex::new(Shared { frac: 0.0, label: args.text.clone(), closed: false }));
     // Counts frames the app actually painted — the selftest's proof the window came up.
     let frames = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([320.0, 180.0])
             .with_resizable(false)
             .with_decorations(false),
         ..Default::default()
     };
+    // Windows uses the wgpu backend with a pre-created (WARP-capable) adapter; mac/linux
+    // use glow, whose default options are correct.
+    #[cfg(target_os = "windows")]
+    {
+        options.wgpu_options = wgpu_adapter_config();
+    }
     let progress = args.progress;
     let selftest = args.selftest;
     let title = args.title.clone();
