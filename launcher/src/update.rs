@@ -165,6 +165,62 @@ pub(crate) fn human_bytes(n: u64) -> String {
     if i == 0 { format!("{n} B") } else { format!("{f:.1} {}", U[i]) }
 }
 
+/// Drive-relative on-disk artifact of a manifest entry: a zip-component's unpacked
+/// `target` folder, else the file's own path. None for dir entries (nothing on disk
+/// to verify — they're just `mkdir`s).
+pub(crate) fn entry_artifact(e: &manifest::Entry) -> Option<&str> {
+    if e.is_dir() {
+        None
+    } else if e.is_zip() {
+        e.target.as_deref()
+    } else {
+        Some(e.path.as_str())
+    }
+}
+
+/// Is an entry's artifact actually present under `root` (the drive)? A zip-component
+/// counts as present only when its unpacked target dir exists AND is non-empty (a
+/// half-wiped/failed unpack shouldn't pass). Unsafe/odd paths are treated as present
+/// (never our business to re-fetch).
+pub(crate) fn artifact_present(root: &Path, e: &manifest::Entry) -> bool {
+    let Some(rel) = entry_artifact(e) else { return true };
+    if !manifest::is_safe_path(rel) {
+        return true;
+    }
+    let p = root.join(rel);
+    if e.is_zip() {
+        std::fs::read_dir(&p).map(|mut d| d.next().is_some()).unwrap_or(false)
+    } else {
+        p.exists()
+    }
+}
+
+/// Is any component the remote wants for `kept` physically missing under `root`?
+/// (Used to decide whether the drive needs a repairing re-fetch.)
+pub(crate) fn any_missing_on_disk(remote: &Manifest, kept: &[String], root: &Path) -> bool {
+    remote.files.iter().any(|e| e.wanted_by(kept) && !artifact_present(root, e))
+}
+
+/// The local manifest to diff the remote against — EXCEPT it returns None (→ a FULL
+/// re-fetch of every wanted component at the remote version) when a wanted component
+/// is physically missing from the drive. A selective re-fetch of just the gone file
+/// would pull it at the REMOTE version while its on-disk siblings stay at the
+/// (possibly older) LOCAL version — a mismatched, half-updated component set that may
+/// not even work together. Re-running the whole update keeps every component on one
+/// version. (The manifest-only `diff` can't see disk state, so this is where the
+/// drive's actual contents enter the decision.)
+pub(crate) fn local_for_plan(remote: &Manifest, kept: &[String], root: &Path) -> Option<Manifest> {
+    let local = load_local();
+    if local.is_some() && any_missing_on_disk(remote, kept, root) {
+        crate::log(
+            "update: a wanted component is missing on the drive — doing a FULL re-fetch \
+             (all components to the remote version; a partial heal could mix versions)",
+        );
+        return None;
+    }
+    local
+}
+
 /// Short commit for logs (first 8 chars; "?" when empty).
 fn short(commit: &str) -> &str {
     if commit.is_empty() {
@@ -199,10 +255,12 @@ pub async fn check_and_predownload(up: Handle) {
         if remote.built_at.is_empty() { "?" } else { &remote.built_at },
         remote.files.len(),
     ));
-    let local = load_local();
+    // Diff against the local manifest — but a missing component on the drive forces a
+    // None here (a full re-fetch at the remote version; see local_for_plan).
+    let local = local_for_plan(&remote, &kept, &paths::portable_root());
     match &local {
         Some(l) => crate::log(&format!("update: local version {} (commit {})", l.version, short(&l.commit))),
-        None => crate::log("update: no local manifest — first-run bootstrap (everything is new)"),
+        None => crate::log("update: no local manifest (or repairing) — fetching every wanted component"),
     }
     let plan = manifest::diff(local.as_ref(), &remote, &kept);
     if plan.to_download.is_empty() && plan.to_delete.is_empty() {

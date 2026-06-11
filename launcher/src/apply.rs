@@ -85,7 +85,11 @@ fn write_journal(root: &Path, staging: &Path, commit: &str) {
 /// Copy staged files into place (verified, atomic per file), delete pruned files,
 /// then commit the manifest last. `up` (when present) drives the progress splash.
 fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, kept: &[String], up: Option<&update::Updater>) -> bool {
-    let plan = manifest::diff(update::load_local().as_ref(), remote, kept);
+    // Same local-or-None decision as the download (local_for_plan): a component missing
+    // from the drive means a full re-fetch, so apply must place the full set too (the
+    // staging holds exactly what the download fetched). Files absent from staging are
+    // skipped below, so this stays safe for the resume path.
+    let plan = manifest::diff(update::local_for_plan(remote, kept, root).as_ref(), remote, kept);
     let total = (plan.to_download.len() + plan.to_delete.len() + plan.to_wipe_dirs.len()) as u64;
     let commit = remote.commit.get(..8).unwrap_or(&remote.commit);
     crate::log(&format!(
