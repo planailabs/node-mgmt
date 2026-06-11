@@ -97,5 +97,45 @@
     "tag": "v2026.5.16",
     "url": "https://github.com/NousResearch/hermes-agent/archive/refs/tags/v2026.5.16.tar.gz",
     "sha256": "c0a554050a50ee9a62f3fa5cd288a167ba5640c42d647d100cdea084b7294143"
+  },
+  "llamacpp": {
+    "tag": "b9601",
+    "assets": [
+      {
+        "name": "llama-b9601-bin-ubuntu-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-ubuntu-x64.tar.gz",
+        "sha256": "16d7cd9e190c63d0355a2eb751333fb806f32b9a0ba30f8a52255f0a9de407fd"
+      },
+      {
+        "name": "llama-b9601-bin-ubuntu-vulkan-x64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-ubuntu-vulkan-x64.tar.gz",
+        "sha256": "022517e2c77e758cc6ff8a771f0c0bcd4889faddbfdec662247bf9907a59d824"
+      },
+      {
+        "name": "llama-b9601-bin-ubuntu-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-ubuntu-arm64.tar.gz",
+        "sha256": "676c85757b96c327a7ca4750678fd7ca347c5a743b71d8f8e7ef5084ab5db686"
+      },
+      {
+        "name": "llama-b9601-bin-ubuntu-vulkan-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-ubuntu-vulkan-arm64.tar.gz",
+        "sha256": "80353003959103928083afe05a6aa84bedab0013749e8ea06d6fe16caa324190"
+      },
+      {
+        "name": "llama-b9601-bin-macos-arm64.tar.gz",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-macos-arm64.tar.gz",
+        "sha256": "8e26998a6a47f68142a42006247ecd0a4c6b9a72accc67d88834c851b4703e1f"
+      },
+      {
+        "name": "llama-b9601-bin-win-cpu-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-win-cpu-x64.zip",
+        "sha256": "33b1888cdc8e0469561a58019174bad8a2705d2717270f35e99757b342c25596"
+      },
+      {
+        "name": "llama-b9601-bin-win-vulkan-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9601/llama-b9601-bin-win-vulkan-x64.zip",
+        "sha256": "8ac86643963709946ccb9faf809b620e6c3aa5ec68c3b2059153f0d0244b57b3"
+      }
+    ]
   }
 }

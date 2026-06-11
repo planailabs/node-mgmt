@@ -208,6 +208,17 @@ impl ControlApi for RealApi {
                 let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
                 out.push(ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui });
             }
+            if sel.features.iter().any(|f| f == "llamacpp") {
+                let url = match &usbd_url {
+                    Some(b) => proxy::get(b, "/info").await.ok()
+                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+                        .and_then(|v| v.get("llamacpp_url").and_then(|x| x.as_str()).map(String::from)),
+                    None => None,
+                }
+                .unwrap_or_else(|| "http://127.0.0.1:8090".into());
+                let lc = service_state(by("llamacpp"), &format!("{url}/health")).await;
+                out.push(ServiceStatus { id: "llamacpp".into(), name: "llama.cpp".into(), state: lc });
+            }
             if sel.features.iter().any(|f| f == "hermes") {
                 // Health: the dashboard's /api/status on the effective port the
                 // daemon reports (fall back to the default 9119).

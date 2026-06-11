@@ -37,7 +37,8 @@ pub const KNOWN_TARGET_KEYS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", 
 /// NOT enabled by default are never downloaded until the user turns them on.
 /// `mgmt` has no components of its own — it toggles BEHAVIOR (the SPA's Config
 /// tab + the usb daemon's networked parts, formerly the build-time `future` flag).
-pub const KNOWN_FEATURES: &[(&str, bool)] = &[("openwebui", true), ("hermes", false), ("mgmt", false)];
+pub const KNOWN_FEATURES: &[(&str, bool)] =
+    &[("openwebui", true), ("hermes", false), ("llamacpp", false), ("mgmt", false)];
 
 /// The feature set a drive starts with (every default-on feature).
 pub fn default_features() -> Vec<String> {
@@ -52,6 +53,9 @@ pub fn classify_feature(rel: &str) -> Option<String> {
     let base = p.rsplit('/').next().unwrap_or(p.as_str());
     if base.starts_with("hermes") {
         return Some("hermes".into());
+    }
+    if base.starts_with("llamacpp") {
+        return Some("llamacpp".into());
     }
     // The python runtime exists to run Open-WebUI, and ow-assets is its model/asset
     // cache — together they ARE the openwebui feature (on by default).

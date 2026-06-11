@@ -52,6 +52,15 @@ case "$TARGET" in
   mac-arm64|mac-x64) OKEYS="${OLLAMA_FLAVOURS:-darwin}" ;;
   *) die "unsupported target $TARGET" ;;
 esac
+# llama.cpp flavours this OS ships (optional feature — NOT on the image; they
+# ride the update server and download when the user enables "llamacpp"). Both
+# the cpu and vulkan builds ship; the launcher picks by GPU detection.
+case "$TARGET" in
+  linux-x64|nixos-x64) LKEYS="${LLAMACPP_FLAVOURS:-linux-amd64 linux-amd64-vulkan}" ;;
+  linux-arm64) LKEYS="${LLAMACPP_FLAVOURS:-linux-arm64 linux-arm64-vulkan}" ;;
+  win-x64)   LKEYS="${LLAMACPP_FLAVOURS:-windows-amd64 windows-amd64-vulkan}" ;;
+  mac-arm64|mac-x64) LKEYS="${LLAMACPP_FLAVOURS:-darwin}" ;;
+esac
 # The standalone rust launcher's nix attr for this target (its arch-matched build).
 case "$TARGET" in
   linux-x64|nixos-x64) LAUNCHER_ATTR=launcher-linux-x64 ;;
@@ -96,6 +105,10 @@ case "$TARGET" in
 esac
 # component base names this launcher needs (loader picks the ollama flavour)
 COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
+# llama.cpp flavours for this OS (optional "llamacpp" feature; per-flavour names
+# like ollama — the launcher picks by GPU detection; win FMTS=zip so the per-
+# flavour dirs were packed as llamacpp-<k>.zip by the xtask edge).
+for k in $LKEYS; do COMP_BASES="$COMP_BASES llamacpp-$k"; done
 # usbd: the plan.ai USB daemon (control plane) ships on ALL platforms now — the
 # launcher hands service ownership to it everywhere; its own supervisor remains a
 # dead-code fallback only when the component is absent (plain dev builds). usbd is

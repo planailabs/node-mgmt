@@ -574,7 +574,7 @@
         devEnv = import ./nix/dev-env.nix { inherit pkgs lib spaTools; };
       in {
         packages = {
-          inherit (vendorPkgs) vendor ollamaComponents;
+          inherit (vendorPkgs) vendor ollamaComponents llamacppComponents;
           # The devshell, bundled as a Docker image (built via dockerTools on the
           # NixOS build leg — no Dockerfile/daemon). Same toolchain + env as
           # `nix develop`, so `make` runs unchanged inside the container:

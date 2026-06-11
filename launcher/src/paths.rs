@@ -36,6 +36,19 @@ pub fn ow_assets() -> PathBuf {
     resources_root().join("ow-assets")
 }
 
+/// The mounted llama.cpp component's llama-server (optional "llamacpp"
+/// feature). Upstream archives differ: linux/mac pack build/bin/, win is flat.
+pub fn llamacpp_server() -> PathBuf {
+    let root = resources_root().join("llamacpp");
+    let name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    for c in [root.join("build").join("bin").join(name), root.join("bin").join(name)] {
+        if c.exists() {
+            return c;
+        }
+    }
+    root.join(name)
+}
+
 /// The hermes component's bundled python (optional "hermes" feature).
 pub fn hermes_python() -> PathBuf {
     let root = resources_root().join("hermes").join("python");

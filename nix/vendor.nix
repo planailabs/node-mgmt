@@ -35,7 +35,7 @@ let
       mkdir x
       case "$assetName" in
         *.tar.zst) zstd -dc "$src" | tar -x -C x ;;
-        *.tgz)     tar -xzf "$src" -C x ;;
+        *.tgz|*.tar.gz) tar -xzf "$src" -C x ;;
         *.zip)     unzip -q "$src" -d x ;;
       esac
       tar -C x -cf - . | pigz > "$out"
@@ -45,5 +45,53 @@ let
   };
   ollamaComponents = pkgs.linkFarm "ollama-components"
     (map (a: { name = "ollama-${ollamaKeyOf a.name}.tar.gz"; path = repackOllama a; }) vendorLock.ollama.assets);
+
+  # llama.cpp prebuilt release assets, normalised to uniform tar.gz components
+  # keyed like ollama's flavours (llamacpp-<key>.tar.gz). Upstream's asset name
+  # `llama-<tag>-bin-<plat>[.-…]` maps to our key:
+  #   ubuntu-x64 → linux-amd64 · ubuntu-vulkan-x64 → linux-amd64-vulkan
+  #   ubuntu-arm64 → linux-arm64 · ubuntu-vulkan-arm64 → linux-arm64-vulkan
+  #   macos-arm64 → darwin · win-cpu-x64 → windows-amd64 ·
+  #   win-vulkan-x64 → windows-amd64-vulkan
+  llamacppKeyOf = name: lib.pipe name [
+    (lib.removePrefix "llama-${vendorLock.llamacpp.tag}-bin-")
+    (lib.removeSuffix ".tar.gz") (lib.removeSuffix ".zip")
+    (n: {
+      "ubuntu-x64" = "linux-amd64";
+      "ubuntu-vulkan-x64" = "linux-amd64-vulkan";
+      "ubuntu-arm64" = "linux-arm64";
+      "ubuntu-vulkan-arm64" = "linux-arm64-vulkan";
+      "macos-arm64" = "darwin";
+      "win-cpu-x64" = "windows-amd64";
+      "win-vulkan-x64" = "windows-amd64-vulkan";
+    }.${n} or n)
+  ];
+  # The same vanilla no-fixup repack as ollama, plus a flatten: the linux/mac
+  # tarballs nest everything under a single `llama-<tag>/` dir (win zips are
+  # flat) — flatten so `llama-server` + its libs sit at the component root.
+  repackLlamacpp = a: derivation {
+    inherit system;
+    name = "llamacpp-${llamacppKeyOf a.name}.tar.gz";
+    builder = "${pkgs.bash}/bin/bash";
+    args = [ "-c" ''
+      export PATH="${lib.makeBinPath (with pkgs; [ coreutils gnutar gzip pigz unzip ])}"
+      set -e
+      mkdir x
+      case "$assetName" in
+        *.tgz|*.tar.gz) tar -xzf "$src" -C x ;;
+        *.zip)          unzip -q "$src" -d x ;;
+      esac
+      if [ "$(ls x | wc -l)" = 1 ] && [ -d "x/$(ls x)" ]; then
+        inner="x/$(ls x)"
+        mv "$inner" flat && rmdir x && mv flat x
+      fi
+      tar -C x -cf - . | pigz > "$out"
+    '' ];
+    src = fetch a;
+    assetName = a.name;
+  };
+  llamacppComponents = pkgs.linkFarm "llamacpp-components"
+    (map (a: { name = "llamacpp-${llamacppKeyOf a.name}.tar.gz"; path = repackLlamacpp a; })
+      (vendorLock.llamacpp.assets or [ ]));
 in
-{ inherit vendor ollamaComponents; }
+{ inherit vendor ollamaComponents llamacppComponents; }

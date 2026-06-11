@@ -24,6 +24,7 @@ platforms-title = Platforms kept on this USB
 btn-save = Save
 tab-hermes = Hermes
 svc-hermes-sub = Agent dashboard
+svc-llamacpp-sub = llama-server (OpenAI-compatible)
 manage-drive = Manage drive
 features-title = Optional features
 feature-hint = Toggling a feature downloads or removes its components on save

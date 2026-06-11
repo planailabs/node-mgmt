@@ -23,6 +23,7 @@ platforms-title = Auf diesem USB behaltene Plattformen
 btn-save = Speichern
 tab-hermes = Hermes
 svc-hermes-sub = Agent-Dashboard
+svc-llamacpp-sub = llama-server (OpenAI-kompatibel)
 manage-drive = Datenträger verwalten
 features-title = Optionale Funktionen
 feature-hint = Das Umschalten einer Funktion lädt ihre Komponenten beim Speichern herunter oder entfernt sie

@@ -76,6 +76,10 @@ let
   # extracted tree feeds mkDmg.
   mkOllamaDir = key: pkgs.runCommand "ollama-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
     "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C $out";
+  # a llama.cpp flavour, same shape (the normalised tar.gz from nix/vendor.nix).
+  llamacppComponents = flake.packages.${builtins.currentSystem}.llamacppComponents;
+  mkLlamacppDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
+    "mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out";
 
   # --- mac launcher .app, wrapped + ad-hoc signed in nix ---------------------
   # The standalone launcher binary is already nix (launcher-mac-arm64). Wrap it in
@@ -144,6 +148,17 @@ in
   "usbd-mac-arm64-dmg" = mkDmg { name = "usbd-mac-arm64"; src = flake.packages.${builtins.currentSystem}.usbdComponent-mac-arm64; };
   "usbd-win-x64-dir" = pkgs.runCommand "usbd-win-x64" { }
     "mkdir -p $out && cp -a ${flake.packages.${builtins.currentSystem}.usbdComponent-win-x64}/. $out/";
+  # llama.cpp: the optional llama-server component (feature "llamacpp",
+  # default-off), one component per flavour like ollama — the launcher picks the
+  # flavour by GPU detection (vulkan vs cpu; mac is Metal-always).
+  "llamacpp-linux-amd64-squashfs" = mkSqfs "llamacpp-linux-amd64" (mkLlamacppDir "linux-amd64");
+  "llamacpp-linux-amd64-vulkan-squashfs" = mkSqfs "llamacpp-linux-amd64-vulkan" (mkLlamacppDir "linux-amd64-vulkan");
+  "llamacpp-linux-arm64-squashfs" = mkSqfs "llamacpp-linux-arm64" (mkLlamacppDir "linux-arm64");
+  "llamacpp-linux-arm64-vulkan-squashfs" = mkSqfs "llamacpp-linux-arm64-vulkan" (mkLlamacppDir "linux-arm64-vulkan");
+  "llamacpp-darwin-dmg" = mkDmg { name = "llamacpp-darwin"; src = mkLlamacppDir "darwin"; };
+  "llamacpp-windows-amd64-dir" = mkLlamacppDir "windows-amd64";
+  "llamacpp-windows-amd64-vulkan-dir" = mkLlamacppDir "windows-amd64-vulkan";
+
   # hermes: the optional hermes-agent component (feature "hermes", default-off in
   # platforms.json — not on the image / not downloaded until enabled). Source is
   # fully pure nix (flake `hermes-<target>`, wheels-FOD into pbs — nix/hermes.nix);

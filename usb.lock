@@ -28,5 +28,9 @@
   "hermes": {
     "repo": "NousResearch/hermes-agent",
     "version": "v2026.5.16"
+  },
+  "llamacpp": {
+    "repo": "ggml-org/llama.cpp",
+    "version": "b9601"
   }
 }

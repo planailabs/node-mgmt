@@ -54,6 +54,8 @@ llmfit_repo()    { lock '.llmfit.repo'; }
 llmfit_version() { lock '.llmfit.version'; }
 hermes_repo()    { lock '.hermes.repo'; }
 hermes_version() { lock '.hermes.version'; }
+llamacpp_repo()    { lock '.llamacpp.repo'; }
+llamacpp_version() { lock '.llamacpp.version'; }
 py_version()     { lock '.python'; }
 pbs_release()    { lock '.pbs_release'; }
 

@@ -134,6 +134,12 @@ const KNOWN_TARGETS: &[&str] = &["linux-x64", "linux-arm64", "win-x64", "mac-arm
 /// archive isn't vendored is simply omitted from the components manifest. The
 /// active set is filtered to the OSes of the built platforms (see `ollama_keys_for`).
 const KNOWN_OLLAMA: &[&str] = &["linux-amd64", "linux-arm64", "linux-amd64-rocm", "darwin", "windows-amd64"];
+/// llama.cpp flavours (optional "llamacpp" feature): per-arch cpu + vulkan on
+/// linux/windows, Metal-always on mac. Same key style as ollama.
+const KNOWN_LLAMACPP: &[&str] = &[
+    "linux-amd64", "linux-amd64-vulkan", "linux-arm64", "linux-arm64-vulkan",
+    "darwin", "windows-amd64", "windows-amd64-vulkan",
+];
 
 /// The OS family of a build target / ollama flavour, used to match flavours to the
 /// platforms being built (a linux build packs the linux ollama flavours, etc.).
@@ -178,6 +184,12 @@ fn resolve_targets() -> Result<Vec<String>> {
 fn ollama_keys_for(targets: &[String]) -> Vec<String> {
     let oses: std::collections::HashSet<&str> = targets.iter().map(|t| target_os(t)).collect();
     KNOWN_OLLAMA.iter().filter(|k| oses.contains(flavour_os(k))).map(|s| s.to_string()).collect()
+}
+
+/// Same, for the llama.cpp flavour catalog.
+fn llamacpp_keys_for(targets: &[String]) -> Vec<String> {
+    let oses: std::collections::HashSet<&str> = targets.iter().map(|t| target_os(t)).collect();
+    KNOWN_LLAMACPP.iter().filter(|k| oses.contains(flavour_os(k))).map(|s| s.to_string()).collect()
 }
 
 /// Read a top-level string array from usb.lock (e.g. `.targets`); None if the file
@@ -339,6 +351,20 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
             &format!("nix component: usbd-{t}"));
         comp_stamps.push(stamp(&format!("comp-usbd-{t}")));
     }
+    // llama.cpp: the optional llama-server component (feature "llamacpp",
+    // default-off), one flavour per GPU backend like ollama. Pure nix from the
+    // vendored release binaries: linux squashfs, mac dmg, win dir.
+    for k in llamacpp_keys_for(targets) {
+        let (attr_fmt, out) = match flavour_os(&k) {
+            "linux" => ("squashfs", format!("dist/components/llamacpp-{k}.squashfs")),
+            "mac" => ("dmg", format!("dist/components/llamacpp-{k}.dmg")),
+            _ => ("dir", format!("dist/components/llamacpp-{k}.zip")),
+        };
+        stamp_edge(&format!("comp-llamacpp-{k}"), &nix_comp_srcs,
+            &format!("./scripts/nix-component.sh llamacpp-{k}-{attr_fmt} {out}"),
+            &format!("nix component: llamacpp-{k}"));
+        comp_stamps.push(stamp(&format!("comp-llamacpp-{k}")));
+    }
     // hermes: the optional hermes-agent component (feature "hermes", default-off —
     // ships on the update server, not the image). Fully nix-built (pbs + wheels-FOD,
     // nix/hermes.nix); per-OS format like usbd: linux squashfs, mac dmg, win zip.
@@ -479,12 +505,14 @@ fn components_manifest(a: ComponentsManifestArgs) -> Result<()> {
     // is honest regardless of which platform subset this build targeted.
     let runtimes: Vec<&str> = KNOWN_TARGETS.iter().copied().filter(|t| present(&format!("runtime-{t}"))).collect();
     let ollama: Vec<&str> = KNOWN_OLLAMA.iter().copied().filter(|k| present(&format!("ollama-{k}"))).collect();
+    let llamacpp: Vec<&str> = KNOWN_LLAMACPP.iter().copied().filter(|k| present(&format!("llamacpp-{k}"))).collect();
 
     let manifest = serde_json::json!({
         "ollama_tag": ollama_tag()?,
         "ow_assets": "ow-assets",
         "runtimes": runtimes,
         "ollama": ollama,
+        "llamacpp": llamacpp,
         "note": "loader picks runtime-<this bundles OS> + ollama by CPU arch (rocm if /dev/kfd); mounts .squashfs (else extracts), extracts .tar.gz",
     });
     let out = dir.join("manifest.json");

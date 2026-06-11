@@ -46,6 +46,17 @@ OW_URL="https://github.com/$OW_REPO/archive/refs/tags/$OW_TAG.tar.gz"
 log "open-webui source $OW_TAG (hashing)"
 OW_SHA="$(curl -fsSL "$OW_URL" | sha256sum | awk '{print $1}')"
 
+# --- llama.cpp: upstream prebuilt binaries (sha256 from the releases API) ----
+LLAMACPP_REPO="$(llamacpp_repo)"; LLAMACPP_TAG="$(llamacpp_version)"
+log "llama.cpp $LLAMACPP_REPO@$LLAMACPP_TAG (prebuilt binaries)"
+LLAMACPP_WANT="llama-$LLAMACPP_TAG-bin-ubuntu-x64.tar.gz llama-$LLAMACPP_TAG-bin-ubuntu-vulkan-x64.tar.gz llama-$LLAMACPP_TAG-bin-ubuntu-arm64.tar.gz llama-$LLAMACPP_TAG-bin-ubuntu-vulkan-arm64.tar.gz llama-$LLAMACPP_TAG-bin-macos-arm64.tar.gz llama-$LLAMACPP_TAG-bin-win-cpu-x64.zip llama-$LLAMACPP_TAG-bin-win-vulkan-x64.zip"
+LLAMACPP_ASSETS="$(release_json "$LLAMACPP_REPO" "$LLAMACPP_TAG" | jq -c --arg want "$LLAMACPP_WANT" '
+  ($want | split(" ")) as $w
+  | [ .assets[]
+      | select(.name as $n | $w | index($n))
+      | { name: .name, url: .browser_download_url, sha256: (.digest // "" | sub("^sha256:";"")) }
+      | select(.sha256 != "") ]')"
+
 # --- hermes-agent source archive ---------------------------------------------
 HERMES_REPO="$(hermes_repo)"; HERMES_TAG="$(hermes_version)"
 HERMES_URL="https://github.com/$HERMES_REPO/archive/refs/tags/$HERMES_TAG.tar.gz"
@@ -80,13 +91,15 @@ jq -n \
   --arg pyver "$PYVER" --arg pbs "$PBS" --argjson pbsent "$PBS_ENTRIES" \
   --arg owtag "$OW_TAG" --arg owurl "$OW_URL" --arg owsha "$OW_SHA" \
   --arg lftag "$LLMFIT_TAG" --argjson lfassets "$LLMFIT_ASSETS" \
-  --arg htag "$HERMES_TAG" --arg hurl "$HERMES_URL" --arg hsha "$HERMES_SHA" '
+  --arg htag "$HERMES_TAG" --arg hurl "$HERMES_URL" --arg hsha "$HERMES_SHA" \
+  --arg lctag "$LLAMACPP_TAG" --argjson lcassets "$LLAMACPP_ASSETS" '
 {
   ollama:    { tag: $otag, assets: $oassets },
   pbs:       { python: $pyver, release: $pbs, files: $pbsent },
   openwebui: { tag: $owtag, url: $owurl, sha256: $owsha },
   llmfit:    { tag: $lftag, assets: $lfassets },
-  hermes:    { tag: $htag, url: $hurl, sha256: $hsha }
+  hermes:    { tag: $htag, url: $hurl, sha256: $hsha },
+  llamacpp:  { tag: $lctag, assets: $lcassets }
 }' > "$OUT"
 
-log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1 llmfit:$(jq '.llmfit.assets|length' "$OUT") hermes:1"
+log "wrote $OUT — ollama:$(jq '.ollama.assets|length' "$OUT") pbs:$(jq '.pbs.files|length' "$OUT") ow:1 llmfit:$(jq '.llmfit.assets|length' "$OUT") hermes:1 llamacpp:$(jq '.llamacpp.assets|length' "$OUT")"

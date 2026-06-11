@@ -78,6 +78,10 @@ fn export_paths() {
         set_if_unset("PLANAI_HERMES_PYTHON", crate::paths::hermes_python());
         set_if_unset("PLANAI_HERMES_WEB_DIST", hermes.join("share").join("web_dist"));
     }
+    // llama.cpp (optional feature): the launcher mounted the GPU-detected flavour.
+    if crate::paths::resources_root().join("llamacpp").is_dir() {
+        set_if_unset("PLANAI_LLAMACPP_BIN", crate::paths::llamacpp_server());
+    }
 }
 
 /// Seed `<home>/config.json` enabling ollama + open-webui (with the preferred
@@ -91,6 +95,7 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
     // the user's.
     let openwebui_on = feature_on("openwebui") && crate::paths::venv_python().exists();
     let hermes_on = feature_on("hermes") && crate::paths::hermes_python().exists();
+    let llamacpp_on = feature_on("llamacpp") && crate::paths::llamacpp_server().exists();
 
     let json = home.join("config.json");
     let _ = std::fs::create_dir_all(home);
@@ -99,6 +104,7 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
             "ollama": { "enabled": true, "port": ollama_port },
             "openwebui": { "enabled": openwebui_on, "port": webui_port },
             "hermes": { "enabled": hermes_on },
+            "llamacpp": { "enabled": llamacpp_on },
         });
         if let Ok(s) = serde_json::to_string_pretty(&cfg) {
             let _ = std::fs::write(&json, s);
@@ -114,6 +120,8 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
                     serde_json::json!(openwebui_on);
                 obj.entry("hermes").or_insert_with(|| serde_json::json!({}))["enabled"] =
                     serde_json::json!(hermes_on);
+                obj.entry("llamacpp").or_insert_with(|| serde_json::json!({}))["enabled"] =
+                    serde_json::json!(llamacpp_on);
                 if let Ok(s) = serde_json::to_string_pretty(&v) {
                     let _ = std::fs::write(&json, s);
                 }

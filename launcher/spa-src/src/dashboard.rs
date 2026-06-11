@@ -73,6 +73,7 @@ pub fn Dashboard() -> Element {
                                     {match s.id.as_str() {
                                         "ollama" => t!("svc-ollama-sub"),
                                         "hermes" => t!("svc-hermes-sub"),
+                                        "llamacpp" => t!("svc-llamacpp-sub"),
                                         _ => t!("svc-webui-sub"),
                                     }}
                                 }

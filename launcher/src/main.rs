@@ -570,6 +570,47 @@ fn detect_ollama(comp: &Path) -> Option<(String, String)> {
     None
 }
 
+/// Pick the llama.cpp flavour for this machine (optional "llamacpp" feature),
+/// mirroring detect_ollama: vulkan when a GPU render node + the vulkan loader
+/// are present (linux) / vulkan-1.dll exists (windows), else the cpu build;
+/// mac is Metal-always. PLANAI_LLAMACPP=cpu forces the cpu build.
+fn detect_llamacpp(comp: &Path) -> Option<(String, String)> {
+    let has = |key: &str| {
+        ["squashfs", "tar.gz", "dmg"]
+            .iter()
+            .any(|e| comp.join(format!("llamacpp-{key}.{e}")).exists())
+            || comp.join(format!("llamacpp-{key}")).is_dir()
+    };
+    let pick = |key: &str, why: &str| Some((format!("llamacpp-{key}"), why.to_string()));
+    let force_cpu = std::env::var("PLANAI_LLAMACPP").as_deref() == Ok("cpu");
+    if cfg!(target_os = "linux") {
+        let arch = if std::env::consts::ARCH == "aarch64" { "linux-arm64" } else { "linux-amd64" };
+        let gpu = std::fs::read_dir("/dev/dri")
+            .map(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("renderD")))
+            .unwrap_or(false);
+        let vulkan = format!("{arch}-vulkan");
+        if !force_cpu && gpu && has(&vulkan) && lib_present(&["libvulkan.so.1", "libvulkan.so"]) {
+            return pick(&vulkan, "GPU render node + vulkan loader detected");
+        }
+        if has(arch) {
+            return pick(arch, "CPU (default)");
+        }
+    } else if cfg!(target_os = "macos") {
+        if has("darwin") {
+            return pick("darwin", "macOS arm64 (Metal)");
+        }
+    } else if cfg!(target_os = "windows") {
+        let vulkan_dll = Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+        if !force_cpu && vulkan_dll && has("windows-amd64-vulkan") {
+            return pick("windows-amd64-vulkan", "vulkan-1.dll present");
+        }
+        if has("windows-amd64") {
+            return pick("windows-amd64", "Windows x64 CPU");
+        }
+    }
+    None
+}
+
 // The shared pool may hold every platform's copy of a component; pick the one
 // whose name starts with `prefix` in THIS OS's format (linux=squashfs, mac=dmg,
 // windows=pre-extracted dir). Used for the runtime AND the Electron app itself
@@ -1641,6 +1682,19 @@ fn main() {
                 }
                 std::env::set_var("PLANAI_OLLAMA_FLAVOUR", ol);
                 std::env::set_var("PLANAI_OLLAMA_REASON", why);
+            }
+            // llama.cpp (optional feature): GPU-detected flavour, mounted at a
+            // flavour-neutral dist/llamacpp like ollama's dist/ollama.
+            if features.iter().any(|f| f == "llamacpp") {
+                if let Some((lc, why)) = detect_llamacpp(comp) {
+                    log(&format!("llamacpp flavour: {lc} — {why}"));
+                    match provide(comp, &lc, &dist.join("llamacpp"), &tools, force_extract) {
+                        Ok(k) => mounts.push(Mount { dest: dist.join("llamacpp"), kind: k }),
+                        Err(e) => log(&format!("llamacpp: {e}")),
+                    }
+                    std::env::set_var("PLANAI_LLAMACPP_FLAVOUR", lc);
+                    std::env::set_var("PLANAI_LLAMACPP_REASON", why);
+                }
             }
             // The Electron app itself ships as a component (app-<os>): mount/link it
             // and run Electron from the mounted tree (never extract — Electron runs
