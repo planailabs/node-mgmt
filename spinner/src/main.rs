@@ -24,7 +24,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use font8x8::UnicodeFonts;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
@@ -47,6 +46,9 @@ const WIN_H: u32 = 180;
 /// wall-clock cap, whichever comes first — so the probe never hangs.
 const SELFTEST_FRAMES: u32 = 6;
 const SELFTEST_MAX: Duration = Duration::from_secs(5);
+
+/// Vendored sans-serif (Roboto-Regular, Apache-2.0) for anti-aliased label text.
+const FONT_TTF: &[u8] = include_bytes!("../assets/Roboto-Regular.ttf");
 
 #[derive(Parser)]
 #[command(name = "plan-ai-spinner", about = "plan.ai splash spinner")]
@@ -88,6 +90,7 @@ struct App {
     init_error: Option<String>,
     stdin_started: bool,
     proxy: winit::event_loop::EventLoopProxy<()>,
+    font: fontdue::Font,
 }
 
 fn main() -> std::process::ExitCode {
@@ -103,6 +106,13 @@ fn main() -> std::process::ExitCode {
     };
     event_loop.set_control_flow(ControlFlow::wait_duration(FRAME));
     let proxy = event_loop.create_proxy();
+    let font = match fontdue::Font::from_bytes(FONT_TTF, fontdue::FontSettings::default()) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("plan-ai-spinner: bad embedded font: {e}");
+            return std::process::ExitCode::from(2);
+        }
+    };
 
     let mut app = App {
         progress: args.progress,
@@ -117,6 +127,7 @@ fn main() -> std::process::ExitCode {
         init_error: None,
         stdin_started: false,
         proxy,
+        font,
     };
 
     let run = event_loop.run_app(&mut app);
@@ -178,12 +189,12 @@ impl App {
         }
         let mut fb = Frame { buf: &mut buf, w, h };
         if self.progress {
-            draw_progress(&mut fb, scale, frac);
+            draw_progress(&mut fb, &self.font, scale, frac);
         } else {
             draw_spinner(&mut fb, scale, self.started.elapsed().as_secs_f32());
         }
         if !label.is_empty() {
-            draw_text_centered(&mut fb, scale, &label, (h as f32 * 0.72) as i32, TEXT);
+            draw_text_centered(&mut fb, &self.font, 15.0 * scale, &label, (h as f32 * 0.70) as i32, TEXT);
         }
         let _ = buf.present();
         self.frames += 1;
@@ -230,6 +241,17 @@ impl ApplicationHandler for App {
         if self.progress && !self.selftest && !self.stdin_started {
             spawn_stdin_reader(self.shared.clone(), self.proxy.clone());
             self.stdin_started = true;
+        }
+        // Centre on the monitor the window landed on (else the primary one): place its
+        // top-left at monitor_origin + (monitor_size - window_size) / 2.
+        let monitor = window.current_monitor().or_else(|| event_loop.primary_monitor());
+        if let Some(mon) = monitor {
+            let ms = mon.size();
+            let mp = mon.position();
+            let ws = window.outer_size();
+            let x = mp.x + ((ms.width as i32 - ws.width as i32) / 2).max(0);
+            let y = mp.y + ((ms.height as i32 - ws.height as i32) / 2).max(0);
+            window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
         }
         window.request_redraw();
         self._context = Some(context);
@@ -320,6 +342,20 @@ impl Frame<'_> {
             self.buf[(y as u32 * self.w + x as u32) as usize] = color;
         }
     }
+    /// Alpha-blend `color` over the existing pixel by coverage `cov` (0..=255). Used for
+    /// the anti-aliased font glyphs.
+    #[inline]
+    fn put_blend(&mut self, x: i32, y: i32, color: (u8, u8, u8), cov: u8) {
+        if cov == 0 || x < 0 || y < 0 || (x as u32) >= self.w || (y as u32) >= self.h {
+            return;
+        }
+        let idx = (y as u32 * self.w + x as u32) as usize;
+        let dst = self.buf[idx];
+        let (dr, dg, db) = ((dst >> 16) as u8, (dst >> 8) as u8, dst as u8);
+        let a = cov as f32 / 255.0;
+        let mix = |s: u8, d: u8| (s as f32 * a + d as f32 * (1.0 - a)).round() as u8;
+        self.buf[idx] = rgb((mix(color.0, dr), mix(color.1, dg), mix(color.2, db)));
+    }
     fn fill_rect(&mut self, x: i32, y: i32, rw: i32, rh: i32, color: u32) {
         for dy in 0..rh {
             for dx in 0..rw {
@@ -372,51 +408,38 @@ fn draw_spinner(fb: &mut Frame, scale: f32, t: f32) {
 }
 
 /// Determinate progress bar: a track with a BRAND-filled portion + a percentage label.
-fn draw_progress(fb: &mut Frame, scale: f32, frac: f32) {
+fn draw_progress(fb: &mut Frame, font: &fontdue::Font, scale: f32, frac: f32) {
     let frac = frac.clamp(0.0, 1.0);
     let bw = (220.0 * scale) as i32;
-    let bh = (16.0 * scale) as i32;
+    let bh = (12.0 * scale) as i32;
     let x = fb.w as i32 / 2 - bw / 2;
     let y = (fb.h as f32 * 0.40) as i32;
     fb.fill_rect(x, y, bw, bh, rgb(TRACK));
     let fill = (bw as f32 * frac) as i32;
     fb.fill_rect(x, y, fill, bh, rgb(BRAND));
     let pct = format!("{}%", (frac * 100.0).round() as i32);
-    draw_text_centered(fb, scale, &pct, y + bh + (10.0 * scale) as i32, TEXT);
+    draw_text_centered(fb, font, 16.0 * scale, &pct, y + bh + (12.0 * scale) as i32, TEXT);
 }
 
-/// Blit a string of 8x8 bitmap glyphs centred horizontally at the given top `y`.
-/// Unknown/unsupported chars render as blank cells. `scale` upsizes each pixel.
-fn draw_text_centered(fb: &mut Frame, scale: f32, text: &str, y: i32, color: (u8, u8, u8)) {
-    let px = (scale.round() as i32).max(1);
-    let cell = 8 * px;
-    let chars: Vec<char> = text.chars().collect();
-    let total_w = chars.len() as i32 * cell;
-    let mut x = fb.w as i32 / 2 - total_w / 2;
-    let c = rgb(color);
-    for ch in chars {
-        if let Some(glyph) = glyph_for(ch) {
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8 {
-                    if bits & (1 << col) != 0 {
-                        fb.fill_rect(x + col * px, y + row as i32 * px, px, px, c);
-                    }
-                }
+/// Render anti-aliased text from the embedded sans-serif font, horizontally centred,
+/// with its top at `top_y`. `px` is the pixel height; coverage is alpha-blended over
+/// whatever's already drawn.
+fn draw_text_centered(fb: &mut Frame, font: &fontdue::Font, px: f32, text: &str, top_y: i32, color: (u8, u8, u8)) {
+    let px = px.max(6.0);
+    // Total advance for horizontal centring.
+    let total_w: f32 = text.chars().map(|c| font.metrics(c, px).advance_width).sum();
+    let ascent = font.horizontal_line_metrics(px).map(|m| m.ascent).unwrap_or(px);
+    let baseline = top_y + ascent.round() as i32;
+    let mut pen_x = fb.w as f32 / 2.0 - total_w / 2.0;
+    for ch in text.chars() {
+        let (m, bitmap) = font.rasterize(ch, px);
+        let gx = pen_x.round() as i32 + m.xmin;
+        let gy = baseline - m.height as i32 - m.ymin;
+        for j in 0..m.height {
+            for i in 0..m.width {
+                fb.put_blend(gx + i as i32, gy + j as i32, color, bitmap[j * m.width + i]);
             }
         }
-        x += cell;
+        pen_x += m.advance_width;
     }
-}
-
-/// font8x8 glyph for a char, trying Basic Latin then Latin-1 (umlauts etc.). A few
-/// common non-Latin-1 punctuation chars degrade to an ASCII lookalike so localized
-/// labels (e.g. an ellipsis) don't leave gaps.
-fn glyph_for(ch: char) -> Option<[u8; 8]> {
-    let ch = match ch {
-        '\u{2026}' => '.', // … → a dot (we draw three by the loop only if present; one is fine)
-        '\u{2014}' | '\u{2013}' => '-',
-        '\u{00A0}' => ' ',
-        other => other,
-    };
-    font8x8::BASIC_FONTS.get(ch).or_else(|| font8x8::LATIN_FONTS.get(ch))
 }

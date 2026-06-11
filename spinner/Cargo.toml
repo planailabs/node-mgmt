@@ -19,9 +19,10 @@ clap = { version = "4", features = ["derive"] }
 # window + a framebuffer copy, so it renders anywhere a window can be shown.
 winit = "0.30"
 softbuffer = "0.4"
-# 8x8 bitmap glyphs for the label text (no font file / GPU text shaping needed). Covers
-# Basic Latin + Latin-1 (umlauts etc.); anything else degrades to a blank/space.
-font8x8 = "0.3"
+# Anti-aliased text via a real sans-serif font (Roboto-Regular, vendored under
+# assets/). plan-ai-design's font is Inter, but nixpkgs only ships it as a variable
+# font; Roboto is a static, metric-clean stand-in with the same geometric sans feel.
+fontdue = "0.9"
 
 [profile.release]
 opt-level = "z"
