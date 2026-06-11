@@ -65,6 +65,13 @@ fn notify(title: &str, body: &str) {
 pub enum Splash {
     Proc(std::process::Child),
     Term(TermBar),
+    /// Last-resort fallback: no GUI window, no dialog, and no tty for a progress line
+    /// (e.g. a GUI double-click on a machine where the eframe spinner can't come up).
+    /// A one-shot "starting…" desktop notification was already fired when this was
+    /// chosen; the progress updates below are intentional no-ops (re-firing toasts per
+    /// tick would spam). It still exists as a real handle so callers `close()` it
+    /// uniformly.
+    Notify,
 }
 
 impl Splash {
@@ -73,6 +80,7 @@ impl Splash {
         match self {
             Splash::Proc(child) => write_proc_line(child, &format!("#{text}")),
             Splash::Term(bar) => bar.set_text(text),
+            Splash::Notify => {}
         }
     }
     /// Update the percentage 0..=100 (determinate/progress splashes).
@@ -80,6 +88,7 @@ impl Splash {
         match self {
             Splash::Proc(child) => write_proc_line(child, &pct.min(100).to_string()),
             Splash::Term(bar) => bar.set_progress(pct),
+            Splash::Notify => {}
         }
     }
     /// Close + reap the splash.
@@ -90,6 +99,7 @@ impl Splash {
                 let _ = child.wait();
             }
             Splash::Term(bar) => bar.close(),
+            Splash::Notify => {}
         }
     }
 }
@@ -249,6 +259,36 @@ fn pool_drive_root(comp: &Path) -> Option<PathBuf> {
         p = cur.parent();
     }
     comp.parent().map(Path::to_path_buf)
+}
+
+/// Does the drive need (re)provisioning from the update server before we can run?
+///   - first run: no component pool AND no local manifest (the original trigger), or
+///   - repair: a local manifest exists but lists a component for THIS platform whose
+///     on-disk artifact is gone (deleted / corrupted / a partial burn). Either way we
+///     run the updater, which — because a component is missing — does a FULL re-fetch
+///     to the remote version (update::local_for_plan), keeping the set consistent
+///     instead of mixing a re-fetched component with stale siblings.
+/// Pins PLANAI_PORTABLE_ROOT from the pool first so the on-disk check (and the apply
+/// that follows) target the USB root, not the process cwd. A dev/flat pool without a
+/// manifest still runs directly (no blocking network fetch) — preserving old behavior.
+fn pool_needs_provision(comp_dir: Option<&PathBuf>) -> bool {
+    if std::env::var_os("PLANAI_PORTABLE_ROOT").is_none() {
+        if let Some(root) = comp_dir.and_then(|c| pool_drive_root(c)) {
+            std::env::set_var("PLANAI_PORTABLE_ROOT", root);
+        }
+    }
+    match update::load_local() {
+        None => comp_dir.is_none(),
+        Some(m) => {
+            let kept = update::read_platforms();
+            let root = paths::portable_root();
+            let missing = m.files.iter().any(|e| e.wanted_by(&kept) && !update::artifact_present(&root, e));
+            if missing {
+                log("components missing on the drive — repairing from the update server");
+            }
+            missing
+        }
+    }
 }
 
 fn components_dir(here: &Path) -> Option<PathBuf> {
@@ -976,11 +1016,11 @@ fn spawn_system_progress_dialog(opts: SplashOpts) -> Option<std::process::Child>
     None
 }
 
-/// Spawn the embedded eframe spinner: write it (or a PLANAI_SPINNER dev override)
-/// to the writable tools dir + chmod +x (FAT32 has no exec bit), then run it in the
-/// chosen mode. None if there's no embedded binary (dev) or spawn fails.
-fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
-    use std::process::Stdio;
+/// Write the embedded eframe spinner (or a PLANAI_SPINNER dev override) to the
+/// writable tools dir + chmod +x (FAT32 has no exec bit) and return its path. None if
+/// there's no embedded binary (dev/bare-cargo) and no override. Shared by the selftest
+/// probe and the real spawn so both run the exact same binary.
+fn materialize_spinner() -> Option<PathBuf> {
     let tools = cache_root().join("root").join("tools");
     let _ = fs::create_dir_all(&tools);
     let name = if cfg!(target_os = "windows") { "plan-ai-spinner.exe" } else { "plan-ai-spinner" };
@@ -1009,6 +1049,68 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&bin, fs::Permissions::from_mode(0o755));
     }
+    Some(bin)
+}
+
+/// Probe ONCE whether the embedded eframe spinner can actually come up in THIS
+/// environment, then cache the verdict. Runs the spinner with `--selftest`: it opens
+/// the window, renders a few frames, and exits 0 — or non-zero if the window/GL can't
+/// be created (headless, no OpenGL ≥2.0 on a VM/RDP, a dyld/loader error, …). This is
+/// far more reliable than watching the real spinner for an early exit: GL init can
+/// take longer than any fixed grace period, and the selftest gives a definitive yes/no
+/// before we commit to (or fall back from) the GUI splash. Self-caps at ~5s; we add a
+/// hard kill at 8s so a wedged window can't stall startup.
+fn eframe_spinner_works() -> bool {
+    use std::process::Stdio;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(|| {
+        let Some(bin) = materialize_spinner() else { return false };
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--selftest").stdin(Stdio::null()).stdout(Stdio::null());
+        if std::env::var_os("PLANAI_SPINNER_DEBUG").is_some() {
+            cmd.stderr(Stdio::inherit());
+        } else {
+            cmd.stderr(Stdio::null());
+        }
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => { log(&format!("spinner: selftest spawn failed: {e}")); return false; }
+        };
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let ok = status.success();
+                    if ok {
+                        log("spinner: selftest passed — GUI splash usable here");
+                    } else {
+                        log(&format!("spinner: selftest failed ({status}) — falling back (set PLANAI_SPINNER_DEBUG to see why)"));
+                    }
+                    return ok;
+                }
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        log("spinner: selftest timed out — falling back");
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => { log(&format!("spinner: selftest wait failed: {e}")); return false; }
+            }
+        }
+    })
+}
+
+/// Spawn the embedded eframe spinner in the chosen mode. Callers must have confirmed
+/// it can run via `eframe_spinner_works()` first. None if it can't be materialized or
+/// spawn fails.
+fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
+    use std::process::Stdio;
+    let bin = materialize_spinner()?;
     let mut cmd = Command::new(&bin);
     cmd.arg("--text").arg(opts.text);
     if opts.progress {
@@ -1038,52 +1140,44 @@ fn spawn_eframe_spinner(opts: SplashOpts) -> Option<std::process::Child> {
 /// progress line whenever we have a tty but no GUI/dialog. Returns None only when
 /// truly headless (no display, no tty — e.g. CI). Best-effort.
 pub(crate) fn show_splash(opts: SplashOpts) -> Option<Splash> {
-    // No display → skip the GUI backends entirely and go to the terminal fallback
-    // (the eframe binary needs a display). Truly headless (no display, no tty) → None.
-    #[cfg(target_os = "linux")]
-    {
-        let has = |k: &str| std::env::var_os(k).map(|v| !v.is_empty()).unwrap_or(false);
-        let have_display = has("DISPLAY") || has("WAYLAND_DISPLAY");
-        if !have_display {
-            if let Some(child) = spawn_system_progress_dialog(opts) {
-                return Some(Splash::Proc(child));
-            }
-            return term_splash(opts);
-        }
-    }
-    // NixOS: the dynamic glibc/GL eframe binary can't run (bare nix-ld stub) — use
-    // the system dialog directly, then the terminal line.
+    // The eframe GUI spinner is fragile across environments: it needs a display, an
+    // OpenGL ≥2.0 context (absent on many VMs/RDP/headless sessions), and a binary
+    // that loads cleanly. Rather than guess, ask it directly via a cached `--selftest`
+    // probe; only spawn the real window when that proves it works HERE. Otherwise fall
+    // back. NixOS short-circuits to the dialog/terminal (the dynamic glibc/GL binary
+    // can't run on its bare nix-ld stub at all), so we don't even probe there.
     #[cfg(target_os = "linux")]
     if is_nixos() {
-        if let Some(child) = spawn_system_progress_dialog(opts) {
+        return Some(fallback_splash(opts));
+    }
+    if eframe_spinner_works() {
+        if let Some(child) = spawn_eframe_spinner(opts) {
+            log("splash spinner shown");
             return Some(Splash::Proc(child));
         }
-        return term_splash(opts);
     }
-    if let Some(mut child) = spawn_eframe_spinner(opts) {
-        // The eframe binary dlopens GL + windowing libs; if those (or the display)
-        // are missing it exits almost immediately. Give it a beat, then check — a
-        // spinner that already died is no splash at all, so fall through to the
-        // system dialog instead of logging "shown" for a window nobody can see.
-        // (Negligible vs the multi-second mount this splash covers.)
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                log(&format!("spinner: eframe splash exited immediately ({status}) — falling back (set PLANAI_SPINNER_DEBUG to see why)"));
-            }
-            _ => {
-                log("splash spinner shown");
-                return Some(Splash::Proc(child));
-            }
-        }
-    }
-    // Linux fallback if the eframe binary is absent / won't spawn.
+    // GUI splash unusable here — guaranteed fallback on every platform.
+    Some(fallback_splash(opts))
+}
+
+/// The non-GUI splash, tried in order and ALWAYS yielding something so progress is
+/// never silently lost: a desktop progress dialog (Linux only — zenity/kdialog/yad,
+/// or the curses `dialog` on a bare tty); else an in-process terminal progress line
+/// (any OS with a tty — incl. the Windows console-subsystem launcher); else a one-shot
+/// "starting…" desktop notification (no GUI, no dialog, no tty — e.g. a GUI
+/// double-click on a machine with no working OpenGL). Never returns "nothing".
+fn fallback_splash(opts: SplashOpts) -> Splash {
     #[cfg(target_os = "linux")]
     if let Some(child) = spawn_system_progress_dialog(opts) {
-        return Some(Splash::Proc(child));
+        return Splash::Proc(child);
     }
-    // Universal last resort: an in-process terminal progress line (every OS).
-    term_splash(opts)
+    if let Some(s) = term_splash(opts) {
+        return s;
+    }
+    let text = if opts.text.is_empty() { i18n::t("starting-preparing") } else { opts.text.to_string() };
+    notify("plan.ai", &text);
+    log("splash: no GUI/dialog/tty available — showed a desktop notification");
+    Splash::Notify
 }
 
 /// The terminal backend of `Splash`: only when stderr is a real tty (otherwise the
@@ -1382,8 +1476,10 @@ fn main() {
     // THIS launch can mount + run instead of erroring out with nothing to start. Once
     // the manifest lands we re-resolve the pool. Skipped in the FHS child (the host
     // already provisioned before re-exec).
-    if !in_fhs && comp_dir.is_none() && update::load_local().is_none() {
-        log("no components on the drive — provisioning from the update server");
+    if !in_fhs && pool_needs_provision(comp_dir.as_ref()) {
+        if comp_dir.is_none() {
+            log("no components on the drive — provisioning from the update server");
+        }
         // Determinate splash: a side thread drives the gauge from the updater's download
         // status (file N of M) while the blocking download runs on this thread; apply::run
         // then shows its own gauge for the copy-onto-drive phase. So provisioning shows

@@ -159,7 +159,8 @@
           in
           pkgs.runCommand "plan-ai-launcher-${outDir}"
             ({
-              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
+              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]
+                ++ lib.optionals (lib.hasInfix "apple-darwin" zigTarget) [ pkgs.python3 pkgs.rcodesign ];
               # build.rs embeds these into the linux launcher (mounts squashfs itself,
               # like the AppImage runtime); ignored for win/mac targets.
               PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
@@ -200,6 +201,14 @@
               for b in plan-ai plan-ai.exe; do
                 if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
               done
+              ${lib.optionalString (lib.hasInfix "apple-darwin" zigTarget) ''
+                # Same dyld duplicate-dylib hazard as the spinner (zig + objc crates):
+                # repoint any duplicate to its alias and re-sign ad-hoc. No-op when the
+                # binary has no duplicate, so it's safe to run unconditionally on mac.
+                chmod +w "$out/plan-ai"
+                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/plan-ai"
+                rcodesign sign "$out/plan-ai" "$out/plan-ai"
+              ''}
             '';
 
         # registry deps for the spinner crate's Cargo.lock (eframe + its tree).
@@ -215,7 +224,8 @@
         spinnerFor = { zigTarget, outDir }:
           pkgs.runCommand "plan-ai-spinner-${outDir}"
             ({
-              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ];
+              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]
+                ++ lib.optionals (lib.hasInfix "apple-darwin" zigTarget) [ pkgs.python3 pkgs.rcodesign ];
             } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
               SDKROOT = macosx-sdk;
             })
@@ -229,6 +239,15 @@
               for b in plan-ai-spinner plan-ai-spinner.exe; do
                 if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
               done
+              ${lib.optionalString (lib.hasInfix "apple-darwin" zigTarget) ''
+                # zig links libobjc.A.dylib twice -> modern dyld SIGABRTs before main()
+                # ("duplicate linked dylib"), so the GUI spinner never starts on macOS.
+                # Repoint the duplicate to its symlink alias (ordinals preserved) and
+                # re-sign ad-hoc (the edit voids zig's linker signature).
+                chmod +w "$out/plan-ai-spinner"
+                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/plan-ai-spinner"
+                rcodesign sign "$out/plan-ai-spinner" "$out/plan-ai-spinner"
+              ''}
             '';
 
         # llmfit — hardware-aware model selector. Bundled beside the launcher so it
