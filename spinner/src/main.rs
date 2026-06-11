@@ -31,10 +31,13 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-const CANVAS: u32 = 0x0f_0e_0c;
-const BRAND: (u8, u8, u8) = (0xff, 0x6a, 0x3d);
-const TEXT: (u8, u8, u8) = (0xe8, 0xe4, 0xde);
-const TRACK: (u8, u8, u8) = (0x3a, 0x36, 0x32);
+// Colours from plan-ai-design (dark theme, third_party/plan-ai-design/assets/input.css):
+// a calm slate surface (not pure black, so the light text stays legible), the brand
+// orange, and a dim track for the spinner trail / progress groove.
+const CANVAS: u32 = 0x1c_27_35; // --c-surface  #1c2735
+const BRAND: (u8, u8, u8) = (0xf9, 0x73, 0x16); // --c-brand    #f97316
+const TEXT: (u8, u8, u8) = (0xe8, 0xed, 0xf5); // --c-fg       #e8edf5
+const TRACK: (u8, u8, u8) = (0x2d, 0x3c, 0x50); // --c-surface-3 #2d3c50
 const MAX_LIFETIME: Duration = Duration::from_secs(180);
 const FRAME: Duration = Duration::from_millis(33); // ~30fps; plenty for a splash
 const WIN_W: u32 = 320;
@@ -334,25 +337,37 @@ impl Frame<'_> {
             }
         }
     }
+    /// A rounded thick line from (x0,y0) to (x1,y1): step the segment and stamp a
+    /// disc of radius `r` at each step (cheap, gives rounded caps).
+    fn fill_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: i32, color: u32) {
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let steps = len.ceil() as i32;
+        for s in 0..=steps {
+            let t = s as f32 / steps as f32;
+            self.fill_disc((x0 + dx * t).round() as i32, (y0 + dy * t).round() as i32, r, color);
+        }
+    }
 }
 
-/// Indeterminate spinner: a ring of dots with a head that brightens and a fading trail.
+/// Indeterminate spinner: radial lines (spokes) around a centre, with the leading line
+/// at full brand colour and a trail that fades toward the track colour as it rotates.
 fn draw_spinner(fb: &mut Frame, scale: f32, t: f32) {
-    const DOTS: usize = 12;
-    let cx = fb.w as i32 / 2;
-    let cy = (fb.h as f32 * 0.40) as i32;
-    let radius = 30.0 * scale;
-    let dot_r = (4.0 * scale).round() as i32;
-    let head = (t * 1.3) * DOTS as f32; // ~1.3 rev/s
-    for i in 0..DOTS {
-        let ang = (i as f32 / DOTS as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-        let x = cx + (ang.cos() * radius) as i32;
-        let y = cy + (ang.sin() * radius) as i32;
-        // Distance (in dot-steps) behind the rotating head → brightness.
-        let mut d = (head - i as f32).rem_euclid(DOTS as f32);
-        d /= DOTS as f32; // 0 = head, →1 = far trail
-        let bright = 1.0 - d;
-        fb.fill_disc(x, y, dot_r, rgb(lerp(TRACK, BRAND, bright * bright)));
+    const SPOKES: usize = 12;
+    let cx = fb.w as f32 / 2.0;
+    let cy = fb.h as f32 * 0.40;
+    let inner = 9.0 * scale;
+    let outer = 24.0 * scale;
+    let thick = (2.5 * scale).round().max(1.0) as i32;
+    let head = (t * 1.1) * SPOKES as f32; // ~1.1 rev/s
+    for i in 0..SPOKES {
+        let ang = (i as f32 / SPOKES as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let (c, s) = (ang.cos(), ang.sin());
+        // Distance (in spoke-steps) behind the rotating head → brightness.
+        let d = (head - i as f32).rem_euclid(SPOKES as f32) / SPOKES as f32; // 0 = head … 1 = far trail
+        let bright = (1.0 - d).powf(1.5);
+        let color = rgb(lerp(TRACK, BRAND, bright));
+        fb.fill_line(cx + c * inner, cy + s * inner, cx + c * outer, cy + s * outer, thick, color);
     }
 }
 
