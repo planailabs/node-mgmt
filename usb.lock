@@ -1,6 +1,5 @@
 {
   "$schema": "https://plan.ai/schemas/usb.lock.v1.json",
-  "future": false,
   "ollama": {
     "repo": "ollama/ollama",
     "version": "v0.30.7"

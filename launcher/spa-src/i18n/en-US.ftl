@@ -22,6 +22,7 @@ upd-applying = Applying update…
 upd-failed = Update check failed
 platforms-title = Platforms kept on this USB
 btn-save = Save
+manage-drive = Manage drive
 features-title = Optional features
 feature-hint = Toggling a feature downloads or removes its components on save
 webui-starting = Open WebUI starting…

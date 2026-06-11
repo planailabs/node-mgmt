@@ -221,7 +221,7 @@ impl ControlApi for Mock {
                 kept,
                 available: vec!["linux-x64".into(), "linux-arm64".into(), "win-x64".into(), "mac-arm64".into()],
                 features,
-                available_features: vec!["openwebui".into(), "hermes".into()],
+                available_features: vec!["openwebui".into(), "hermes".into(), "mgmt".into()],
             }
         }
     }

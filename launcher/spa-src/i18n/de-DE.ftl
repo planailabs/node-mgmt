@@ -21,6 +21,7 @@ upd-applying = Update wird angewendet…
 upd-failed = Update-Suche fehlgeschlagen
 platforms-title = Auf diesem USB behaltene Plattformen
 btn-save = Speichern
+manage-drive = Datenträger verwalten
 features-title = Optionale Funktionen
 feature-hint = Das Umschalten einer Funktion lädt ihre Komponenten beim Speichern herunter oder entfernt sie
 webui-starting = Open WebUI startet…

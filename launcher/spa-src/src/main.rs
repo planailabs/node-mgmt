@@ -4,7 +4,6 @@
 
 mod api;
 mod app;
-#[cfg(feature = "future")]
 mod config;
 mod dashboard;
 mod models;

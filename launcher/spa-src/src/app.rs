@@ -13,8 +13,7 @@ use plan_ai_design::theme_toggle::{
 };
 use plan_ai_design::{Button, ButtonSize, ButtonVariant};
 
-use crate::api::{self, Info, ServiceState, ServiceStatus};
-#[cfg(feature = "future")]
+use crate::api::{self, Info, Platforms, ServiceState, ServiceStatus};
 use crate::config::ConfigView;
 use crate::dashboard::Dashboard;
 use crate::models::Models;
@@ -24,8 +23,7 @@ pub enum Tab {
     Dashboard,
     Models,
     WebUi,
-    /// The Config tab — gated behind the `future` feature.
-    #[cfg(feature = "future")]
+    /// The Config tab — shown when the "mgmt" feature is enabled on the drive.
     Config,
 }
 
@@ -36,6 +34,8 @@ pub struct AppState {
     pub services: Signal<Vec<ServiceStatus>>,
     pub logs: Signal<String>,
     pub tab: Signal<Tab>,
+    /// Enabled optional features from /api/platforms (drive selection).
+    pub features: Signal<Vec<String>>,
 }
 
 impl AppState {
@@ -47,6 +47,10 @@ impl AppState {
     pub fn llmfit_ready(&self) -> bool {
         self.info.read().as_ref().map(|i| i.llmfit_url.is_some()).unwrap_or(false)
     }
+    /// Whether the "mgmt" feature (config tab + networked daemon parts) is on.
+    pub fn mgmt_enabled(&self) -> bool {
+        self.features.read().iter().any(|f| f == "mgmt")
+    }
 }
 
 #[allow(non_snake_case)]
@@ -57,22 +61,12 @@ pub fn App() -> Element {
         // reuses mac_mgmt_config_ui::ConfigEditor, whose `t!` keys live there),
         // and this app's own FTL so `t!` resolves all three.
         let en: &'static str = Box::leak(
-            {
-                #[cfg(feature = "future")]
-                { format!("{}\n{}\n{}", plan_ai_design::i18n::EN_US, mac_mgmt_config_ui::EN_US, include_str!("../i18n/en-US.ftl")) }
-                #[cfg(not(feature = "future"))]
-                { format!("{}\n{}", plan_ai_design::i18n::EN_US, include_str!("../i18n/en-US.ftl")) }
-            }
-            .into_boxed_str(),
+            format!("{}\n{}\n{}", plan_ai_design::i18n::EN_US, mac_mgmt_config_ui::EN_US, include_str!("../i18n/en-US.ftl"))
+                .into_boxed_str(),
         );
         let de: &'static str = Box::leak(
-            {
-                #[cfg(feature = "future")]
-                { format!("{}\n{}\n{}", plan_ai_design::i18n::DE_DE, mac_mgmt_config_ui::DE_DE, include_str!("../i18n/de-DE.ftl")) }
-                #[cfg(not(feature = "future"))]
-                { format!("{}\n{}", plan_ai_design::i18n::DE_DE, include_str!("../i18n/de-DE.ftl")) }
-            }
-            .into_boxed_str(),
+            format!("{}\n{}\n{}", plan_ai_design::i18n::DE_DE, mac_mgmt_config_ui::DE_DE, include_str!("../i18n/de-DE.ftl"))
+                .into_boxed_str(),
         );
         I18nConfig::new(langid!("en-US"))
             .with_locale(Locale::new_static(langid!("en-US"), en))
@@ -95,6 +89,7 @@ pub fn App() -> Element {
         services: use_signal(Vec::new),
         logs: use_signal(String::new),
         tab: use_signal(|| Tab::Dashboard),
+        features: use_signal(Vec::new),
     };
     use_context_provider(|| state);
 
@@ -109,6 +104,20 @@ pub fn App() -> Element {
         async move {
             if let Ok(v) = api::info().await {
                 info.set(Some(v));
+            }
+        }
+    });
+
+    // Poll the drive selection every few seconds — the Config tab appears/
+    // disappears live when the "mgmt" feature is toggled on the dashboard.
+    use_future(move || {
+        let mut features = state.features;
+        async move {
+            loop {
+                if let Ok(p) = api::get::<Platforms>("/api/platforms").await {
+                    features.set(p.features);
+                }
+                gloo_timers::future::TimeoutFuture::new(5000).await;
             }
         }
     });
@@ -150,6 +159,7 @@ pub fn App() -> Element {
 
     let tab = (state.tab)();
     let webui_ready = state.ready("webui");
+    let mgmt = state.mgmt_enabled();
     let models_ready = state.llmfit_ready();
     let webui_url = state.info.read().as_ref().map(|i| i.webui_url.clone());
     // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
@@ -181,7 +191,9 @@ pub fn App() -> Element {
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
                     TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
                     TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
-                    {config_tab_button(tab)}
+                    if mgmt {
+                        TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
+                    }
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
@@ -203,7 +215,7 @@ pub fn App() -> Element {
             // when it's torn out and re-mounted fresh on the next ready.
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
-            {config_view(tab)}
+            if mgmt && tab == Tab::Config { ConfigView {} }
             div { class: "{webui_view_cls}",
                 if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
@@ -213,27 +225,6 @@ pub fn App() -> Element {
             }
         }
     }
-}
-
-// The Config tab button + view are gated behind the `future` feature. Routed
-// through these helpers (rather than inline `#[cfg]` in rsx!) so the non-future
-// build never references the (absent) `Tab::Config` variant or `ConfigView`.
-#[cfg(feature = "future")]
-fn config_tab_button(tab: Tab) -> Element {
-    rsx! { TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true } }
-}
-#[cfg(not(feature = "future"))]
-fn config_tab_button(_tab: Tab) -> Element {
-    rsx! {}
-}
-
-#[cfg(feature = "future")]
-fn config_view(tab: Tab) -> Element {
-    rsx! { if tab == Tab::Config { ConfigView {} } }
-}
-#[cfg(not(feature = "future"))]
-fn config_view(_tab: Tab) -> Element {
-    rsx! {}
 }
 
 #[component]

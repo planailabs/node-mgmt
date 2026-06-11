@@ -211,6 +211,10 @@ fn UpdatesCard() -> Element {
     let mut available = use_signal(Vec::<String>::new);
     let mut features = use_signal(Vec::<String>::new);
     let mut available_features = use_signal(Vec::<String>::new);
+    // The platform/feature selection lives in a collapsed disclosure ("Manage
+    // drive…") — an occasional, deliberate operation that shouldn't compete with
+    // the everyday update status for attention.
+    let mut manage_open = use_signal(|| false);
 
     use_future(move || async move {
         loop {
@@ -297,6 +301,17 @@ fn UpdatesCard() -> Element {
                 div { class: "text-xs td-muted tabular-nums", "{tp}" }
             }
             div { class: "pt-2 border-t border-line space-y-2",
+                // Disclosure toggle: chevron + label, ghost so it reads as chrome.
+                Button {
+                    size: ButtonSize::Xs,
+                    variant: ButtonVariant::Ghost,
+                    onclick: move |_| {
+                        let v = !manage_open();
+                        manage_open.set(v);
+                    },
+                    {format!("{} {}", if manage_open() { "▾" } else { "▸" }, t!("manage-drive"))}
+                }
+                if manage_open() {
                 div { class: "label", {t!("platforms-title")} }
                 div { class: "flex items-center gap-2",
                     for p in avail.iter().cloned() {
@@ -353,6 +368,7 @@ fn UpdatesCard() -> Element {
                     }
                 }
                 HelpText { xs: true, {t!("feature-hint")} }
+                }
             }
         }
     }

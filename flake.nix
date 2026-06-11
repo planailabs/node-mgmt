@@ -31,12 +31,7 @@
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         lib = pkgs.lib;
 
-        # Build-time toggle from usb.lock: when `"future": true`, the `future`
-        # cargo feature is enabled in the SPA (the Config tab) and the usb daemon
-        # (the network parts — heartbeat / relay / relay-ssh / server push / sync).
-        # Default false → a purely local stack with no config editing / phone-home.
         usbLock = builtins.fromJSON (builtins.readFile ./usb.lock);
-        futureEnabled = usbLock.future or false;
 
         # rust toolchain with the cross-target std libs the launcher needs
         rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
@@ -103,7 +98,7 @@
             cd launcher/spa-src
             tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \
               -o assets/tailwind.css --config tailwind.config.js --minify
-            dx build --platform web --release ${lib.optionalString futureEnabled "--features future"}
+            dx build --platform web --release
             cd ../..
             runHook postBuild
           '';
@@ -444,8 +439,9 @@
           };
           buildAndTestSubdir = "daemon";
           buildNoDefaultFeatures = true;
-          # `future` (usb.lock) adds the network parts (heartbeat/relay/sync).
-          buildFeatures = [ "usbd" ] ++ lib.optionals futureEnabled [ "future" ];
+          # Network parts (heartbeat/relay/sync) are a RUNTIME toggle now
+          # (USBD_NETWORKED, set by the launcher from the drive's "mgmt" feature).
+          buildFeatures = [ "usbd" ];
           doCheck = false;
           cargoBuildFlags = [ "--bin" "mac-mgmt" ];
           # nodejs + tailwindcss_3: memvault-web's build.rs runs `npm run
@@ -473,7 +469,7 @@
         # process exec — all `#[cfg(unix)]`-gated). cargoSetupHook (via cargoLock)
         # vendors the registry + git deps offline; cargo-zigbuild supplies the
         # cross C toolchain (ring/quinn build fine). Same feature set as the native
-        # `usbd` above: `usbd` (+ `future` when usb.lock enables it).
+        # `usbd` above.
         usbdFor = { rustTarget, exe, extraEnv ? { } }:
           crossRustPlatform.buildRustPackage ({
             pname = "mac-mgmt-usbd-${rustTarget}";
@@ -502,8 +498,7 @@
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
               cargo zigbuild --release --offline --target ${rustTarget} \
                 -p mac-mgmt --bin mac-mgmt \
-                --no-default-features --features usbd \
-                ${lib.optionalString futureEnabled "--features future"}
+                --no-default-features --features usbd
               runHook postBuild
             '';
             installPhase = ''

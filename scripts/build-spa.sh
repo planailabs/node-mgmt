@@ -14,15 +14,10 @@ SPA_OUT="$REPO_ROOT/launcher/spa"
 if [ "${1:-}" = "--dev" ]; then
   # In-tree build via the devshell's dx/wasm-bindgen/tailwind (faster iteration).
   need dx
-  # `future` (usb.lock) gates the Config tab. Mirror the flake's .#spa build.
-  FUTURE_FEAT=""
-  if [ "$(jq -r '.future // false' "$REPO_ROOT/usb.lock" 2>/dev/null)" = "true" ]; then
-    FUTURE_FEAT="--features future"
-  fi
   ( cd "$SPA_SRC" \
     && tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \
          -o assets/tailwind.css --config tailwind.config.js --minify \
-    && dx build --platform web --release $FUTURE_FEAT )
+    && dx build --platform web --release )
   SRC="$SPA_SRC/target/dx/plan-ai-spa/release/web/public"
 else
   need nix
