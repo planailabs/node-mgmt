@@ -72,23 +72,53 @@ fn export_paths() {
     set_if_unset("PLANAI_OW_ASSETS", crate::paths::ow_assets());
     set_if_unset("PLANAI_MODELS_DIR", crate::paths::models_dir());
     set_if_unset("PLANAI_DATA_DIR", crate::paths::data_dir());
+    // hermes (optional feature): only exported when the component is mounted.
+    let hermes = crate::paths::resources_root().join("hermes");
+    if hermes.is_dir() {
+        set_if_unset("PLANAI_HERMES_PYTHON", crate::paths::hermes_python());
+        set_if_unset("PLANAI_HERMES_WEB_DIST", hermes.join("share").join("web_dist"));
+    }
 }
 
 /// Seed `<home>/config.json` enabling ollama + open-webui (with the preferred
 /// ports) when no config exists, so a fresh stick brings the services up. An
 /// existing config (user-edited via the Config tab) is left untouched.
 fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
+    let sel = crate::update::read_selection();
+    let feature_on = |f: &str| sel.features.iter().any(|x| x == f);
+    // The launcher owns these enabled-flags (they mirror the drive's feature
+    // selection + what's actually mounted); everything else in the config stays
+    // the user's.
+    let openwebui_on = feature_on("openwebui") && crate::paths::venv_python().exists();
+    let hermes_on = feature_on("hermes") && crate::paths::hermes_python().exists();
+
     let json = home.join("config.json");
-    if json.exists() || home.join("config.toml").exists() {
+    let _ = std::fs::create_dir_all(home);
+    if !json.exists() && !home.join("config.toml").exists() {
+        let cfg = serde_json::json!({
+            "ollama": { "enabled": true, "port": ollama_port },
+            "openwebui": { "enabled": openwebui_on, "port": webui_port },
+            "hermes": { "enabled": hermes_on },
+        });
+        if let Ok(s) = serde_json::to_string_pretty(&cfg) {
+            let _ = std::fs::write(&json, s);
+        }
         return;
     }
-    let cfg = serde_json::json!({
-        "ollama": { "enabled": true, "port": ollama_port },
-        "openwebui": { "enabled": true, "port": webui_port },
-    });
-    let _ = std::fs::create_dir_all(home);
-    if let Ok(s) = serde_json::to_string_pretty(&cfg) {
-        let _ = std::fs::write(&json, s);
+    // Existing config: sync ONLY the feature-driven enabled flags (a toggled
+    // feature must take effect on the next launch without nuking user edits).
+    if let Ok(txt) = std::fs::read_to_string(&json) {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if let Some(obj) = v.as_object_mut() {
+                obj.entry("openwebui").or_insert_with(|| serde_json::json!({}))["enabled"] =
+                    serde_json::json!(openwebui_on);
+                obj.entry("hermes").or_insert_with(|| serde_json::json!({}))["enabled"] =
+                    serde_json::json!(hermes_on);
+                if let Ok(s) = serde_json::to_string_pretty(&v) {
+                    let _ = std::fs::write(&json, s);
+                }
+            }
+        }
     }
 }
 

@@ -154,6 +154,7 @@ impl ControlApi for RealApi {
         async move {
             let mut ollama_port = config::ollama_port();
             let mut webui_port = config::webui_port();
+            let mut hermes_url = None;
             // In daemon mode the daemon resolves the EFFECTIVE ports (after any
             // collision fallback), so prefer what it reports — otherwise the
             // WebUI iframe could point at a port the daemon didn't actually bind.
@@ -169,12 +170,16 @@ impl ControlApi for RealApi {
                         if let Some(u) = v.get("webui_url").and_then(|x| x.as_str()) {
                             webui_url = u.to_string();
                         }
+                        if let Some(u) = v.get("hermes_url").and_then(|x| x.as_str()) {
+                            hermes_url = Some(u.to_string());
+                        }
                     }
                 }
             }
             Info {
                 webui_url,
                 llmfit_url,
+                hermes_url,
                 ollama_port,
                 webui_port,
                 models_dir: paths::models_dir().to_string_lossy().into_owned(),
@@ -190,15 +195,33 @@ impl ControlApi for RealApi {
 
     fn status(&self) -> impl Future<Output = Vec<ServiceStatus>> + Send {
         let client = self.client.clone();
+        let usbd_url = self.usbd_url.clone();
         async move {
             let list = { client.lock().await.list().await.unwrap_or_default() };
             let by = |name: &str| list.iter().find(|x| x.name == name);
             let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
-            let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
-            vec![
-                ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama },
-                ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui },
-            ]
+            let mut out = vec![ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama }];
+            // Feature-driven rows: only services this drive runs. open-webui is a
+            // feature now; hermes appears once its supervisor entry exists.
+            let sel = crate::update::read_selection();
+            if sel.features.iter().any(|f| f == "openwebui") {
+                let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
+                out.push(ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui });
+            }
+            if sel.features.iter().any(|f| f == "hermes") {
+                // Health: the dashboard's /api/status on the effective port the
+                // daemon reports (fall back to the default 9119).
+                let url = match &usbd_url {
+                    Some(b) => proxy::get(b, "/info").await.ok()
+                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+                        .and_then(|v| v.get("hermes_url").and_then(|x| x.as_str()).map(String::from)),
+                    None => None,
+                }
+                .unwrap_or_else(|| "http://127.0.0.1:9119".into());
+                let hermes = service_state(by("hermes"), &format!("{url}/api/status")).await;
+                out.push(ServiceStatus { id: "hermes".into(), name: "Hermes".into(), state: hermes });
+            }
+            out
         }
     }
 

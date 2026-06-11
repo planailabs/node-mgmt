@@ -134,6 +134,7 @@ impl ControlApi for Mock {
     fn info(&self) -> impl Future<Output = Info> + Send {
         async move {
             Info {
+                hermes_url: Some("http://127.0.0.1:9119".into()),
                 webui_url: "http://127.0.0.1:8080".into(),
                 llmfit_url: Some("http://127.0.0.1:8787".into()),
                 ollama_port: 11434,

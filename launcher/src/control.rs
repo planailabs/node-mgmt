@@ -17,20 +17,45 @@ fn spec(program: String, args: &[&str], env: HashMap<String, String>) -> SpawnSp
     }
 }
 
-/// Build the ollama + open-webui spawn specs from the ported config/paths.
+/// Build the spawn specs from the ported config/paths: ollama always; open-webui
+/// and hermes per the drive's feature selection (this is the DEV FALLBACK path —
+/// in shipped bundles the usb daemon owns the services and applies the same
+/// feature gating via its seeded config).
 pub fn service_specs() -> Vec<(String, SpawnSpec)> {
+    let features = crate::update::read_selection().features;
+    let on = |f: &str| features.iter().any(|x| x == f);
     let ollama = spec(
         paths::ollama_binary().to_string_lossy().into_owned(),
         &["serve"],
         config::ollama_env(),
     );
-    let port = config::webui_port().to_string();
-    let webui = spec(
-        paths::venv_python().to_string_lossy().into_owned(),
-        &["-m", "uvicorn", "open_webui.main:app", "--host", config::WEBUI_HOST, "--port", &port],
-        config::webui_env(),
-    );
-    vec![("ollama".into(), ollama), ("open-webui".into(), webui)]
+    let mut specs = vec![("ollama".to_string(), ollama)];
+    if on("openwebui") {
+        let port = config::webui_port().to_string();
+        let webui = spec(
+            paths::venv_python().to_string_lossy().into_owned(),
+            &["-m", "uvicorn", "open_webui.main:app", "--host", config::WEBUI_HOST, "--port", &port],
+            config::webui_env(),
+        );
+        specs.push(("open-webui".into(), webui));
+    }
+    if on("hermes") && paths::hermes_python().exists() {
+        let home = paths::data_dir().join("hermes");
+        let mut env: std::collections::HashMap<String, String> = HashMap::new();
+        env.insert("HERMES_HOME".into(), home.to_string_lossy().into_owned());
+        env.insert(
+            "HERMES_WEB_DIST".into(),
+            paths::resources_root().join("hermes").join("share").join("web_dist").to_string_lossy().into_owned(),
+        );
+        env.insert("HERMES_MANAGED".into(), "1".into());
+        let hermes = spec(
+            paths::hermes_python().to_string_lossy().into_owned(),
+            &["-m", "hermes_cli.main", "dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open", "--skip-build"],
+            env,
+        );
+        specs.push(("hermes".into(), hermes));
+    }
+    specs
 }
 
 /// Start the supervisor (a re-exec of `self_exe`) and register the services.

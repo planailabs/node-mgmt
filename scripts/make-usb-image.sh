@@ -128,6 +128,11 @@ esac; done
 printf '%s\n' "${PLATS[@]}" | jq -Rsc '{platforms: (split("\n") | map(select(length>0)))}' > "$DRIVE/platforms.json"
 log "platforms.json -> drive root ($(jq -c .platforms "$DRIVE/platforms.json"))"
 
+# image-only: drop default-off feature components (hermes, …) — they stay in the
+# manifest + on the update server; the launcher downloads them when the user
+# enables the feature. Also seeds the default feature set into platforms.json.
+( cd "$REPO_ROOT" && nix run .#xtask -- image-prep "$DRIVE" )
+
 # --- stage 2: pack the FAT32 image directly, OUTSIDE the nix store -----------
 # Realise the pinned tools once (cached after the first build), then mkfs.vfat +
 # mcopy the on-disk drive-root straight into the image. No store-import → the big

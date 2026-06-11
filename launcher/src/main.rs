@@ -1603,17 +1603,34 @@ fn main() {
                 log("NixOS — FUSE-mounting components on the host (extract fallback)");
             }
 
-            let rt = pick_base(comp, "runtime-").unwrap_or_else(|| {
-                log("no runtime component found");
-                std::process::exit(1);
-            });
-            match provide(comp, &rt, &dist.join("runtime"), &tools, force_extract) {
-                Ok(k) => mounts.push(Mount { dest: dist.join("runtime"), kind: k }),
-                Err(e) => { log(&format!("runtime: {e}")); std::process::exit(1); }
+            // The python runtime + ow-assets ARE the "openwebui" feature: with it
+            // disabled (or the component pruned) we run without Open-WebUI instead
+            // of exiting — ollama + the dashboard still work.
+            let features = update::read_selection().features;
+            let openwebui_on = features.iter().any(|f| f == "openwebui");
+            match pick_base(comp, "runtime-") {
+                Some(rt) if openwebui_on => match provide(comp, &rt, &dist.join("runtime"), &tools, force_extract) {
+                    Ok(k) => mounts.push(Mount { dest: dist.join("runtime"), kind: k }),
+                    Err(e) => { log(&format!("runtime: {e}")); std::process::exit(1); }
+                },
+                Some(_) => log("openwebui feature disabled — skipping the runtime mount"),
+                None if openwebui_on => log("no runtime component found — running without Open-WebUI"),
+                None => {}
             }
-            if comp.join("ow-assets.squashfs").exists() || comp.join("ow-assets.dmg").exists() || comp.join("ow-assets").is_dir() {
+            if openwebui_on
+                && (comp.join("ow-assets.squashfs").exists() || comp.join("ow-assets.dmg").exists() || comp.join("ow-assets").is_dir())
+            {
                 if let Ok(k) = provide(comp, "ow-assets", &dist.join("ow-assets"), &tools, force_extract) {
                     mounts.push(Mount { dest: dist.join("ow-assets"), kind: k });
+                }
+            }
+            // hermes: the optional agent component (feature "hermes", default-off).
+            if features.iter().any(|f| f == "hermes")
+                && (comp.join("hermes.squashfs").exists() || comp.join("hermes.dmg").exists() || comp.join("hermes").is_dir())
+            {
+                match provide(comp, "hermes", &dist.join("hermes"), &tools, force_extract) {
+                    Ok(k) => mounts.push(Mount { dest: dist.join("hermes"), kind: k }),
+                    Err(e) => log(&format!("hermes: {e}")),
                 }
             }
             if let Some((ol, why)) = detect_ollama(comp) {

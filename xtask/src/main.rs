@@ -25,6 +25,11 @@ enum Cmd {
     ComponentsManifest(ComponentsManifestArgs),
     /// Assemble the update-server tarball: manifest.json + files/<path>.
     Tarball(TarballArgs),
+    /// Prepare an assembled drive-root for the burned image: drop default-off
+    /// feature components (they stay on the update server; the launcher
+    /// downloads them when the feature is enabled) and seed the default
+    /// feature set into platforms.json.
+    ImagePrep(ImagePrepArgs),
     /// (Re)write build.ninja describing the whole artifact graph.
     GenNinja,
     /// (Re)write build.ninja then run ninja for the given targets (default: image).
@@ -84,6 +89,12 @@ struct ManifestArgs {
 }
 
 #[derive(clap::Args)]
+struct ImagePrepArgs {
+    /// The assembled drive-root (holds update.json + platforms.json).
+    root: PathBuf,
+}
+
+#[derive(clap::Args)]
 struct TarballArgs {
     /// Root of the drive layout to publish (e.g. dist/bundle, all platforms).
     root: PathBuf,
@@ -102,6 +113,7 @@ struct TarballArgs {
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::GenManifest(a) => gen_manifest(a),
+        Cmd::ImagePrep(a) => image_prep(a),
         Cmd::ComponentsManifest(a) => components_manifest(a),
         Cmd::Tarball(a) => tarball(a),
         Cmd::GenNinja => {
@@ -488,6 +500,56 @@ fn ollama_tag() -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(&lock).context("parsing usb.lock")?;
     v.get("ollama").and_then(|o| o.get("version")).and_then(|s| s.as_str()).map(str::to_string)
         .context("usb.lock: missing .ollama.version")
+}
+
+/// Image-only adjustments AFTER gen-manifest wrote update.json into the root:
+///   1. delete every artifact whose feature is default-OFF — the manifest keeps
+///      the entries (so the launcher's heal path can fetch them at this exact
+///      version when the user enables the feature), the image just doesn't
+///      carry the bytes;
+///   2. rewrite platforms.json with the default feature set, so a fresh drive's
+///      selection matches what's physically on it.
+fn image_prep(a: ImagePrepArgs) -> Result<()> {
+    let root = &a.root;
+    let manifest_path = root.join("update.json");
+    let m = plan_ai_manifest::Manifest::from_json(
+        &std::fs::read_to_string(&manifest_path).with_context(|| format!("reading {}", manifest_path.display()))?,
+    )?;
+    let default_on = plan_ai_manifest::default_features();
+    let mut dropped = 0usize;
+    let mut bytes = 0u64;
+    for e in &m.files {
+        let Some(f) = &e.feature else { continue };
+        if default_on.iter().any(|d| d == f) || e.is_dir() {
+            continue;
+        }
+        let p = root.join(&e.path);
+        if p.exists() {
+            std::fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
+            dropped += 1;
+            bytes += e.size.unwrap_or(0);
+        }
+        // a zip-component may already be unpacked into its target — drop that too
+        if let Some(t) = e.target.as_deref() {
+            let tp = root.join(t);
+            if tp.is_dir() {
+                std::fs::remove_dir_all(&tp).with_context(|| format!("removing {}", tp.display()))?;
+                dropped += 1;
+            }
+        }
+    }
+    let plats = root.join("platforms.json");
+    if let Ok(txt) = std::fs::read_to_string(&plats) {
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            v["features"] = serde_json::json!(default_on);
+            std::fs::write(&plats, serde_json::to_string(&v)?)?;
+        }
+    }
+    eprintln!(
+        "==> image-prep: dropped {dropped} default-off feature artifact(s) ({} MiB); features -> {default_on:?}",
+        bytes / (1024 * 1024),
+    );
+    Ok(())
 }
 
 fn gen_manifest(a: ManifestArgs) -> Result<()> {

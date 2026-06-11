@@ -68,6 +68,10 @@ pub struct Info {
     pub webui_url: String,
     #[serde(default)]
     pub llmfit_url: Option<String>,
+    /// The hermes dashboard URL — present when the "hermes" feature is enabled
+    /// and the daemon reports its (effective) port. Drives the SPA's Hermes tab.
+    #[serde(default)]
+    pub hermes_url: Option<String>,
     pub ollama_port: u16,
     pub webui_port: u16,
     pub models_dir: String,

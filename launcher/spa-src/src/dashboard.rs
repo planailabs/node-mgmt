@@ -70,7 +70,11 @@ pub fn Dashboard() -> Element {
                             div {
                                 div { class: "h-card", "{s.name}" }
                                 div { class: "help-xs",
-                                    {if s.id == "ollama" { t!("svc-ollama-sub") } else { t!("svc-webui-sub") }}
+                                    {match s.id.as_str() {
+                                        "ollama" => t!("svc-ollama-sub"),
+                                        "hermes" => t!("svc-hermes-sub"),
+                                        _ => t!("svc-webui-sub"),
+                                    }}
                                 }
                             }
                         }

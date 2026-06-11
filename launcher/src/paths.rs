@@ -36,6 +36,16 @@ pub fn ow_assets() -> PathBuf {
     resources_root().join("ow-assets")
 }
 
+/// The hermes component's bundled python (optional "hermes" feature).
+pub fn hermes_python() -> PathBuf {
+    let root = resources_root().join("hermes").join("python");
+    if cfg!(windows) {
+        root.join("python.exe")
+    } else {
+        root.join("bin").join("python3")
+    }
+}
+
 /// The ollama binary for this OS, from <resources>/ollama/ (tolerating a bin/ nest).
 pub fn ollama_binary() -> PathBuf {
     let dir = resources_root().join("ollama");

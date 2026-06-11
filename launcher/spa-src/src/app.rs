@@ -23,6 +23,8 @@ pub enum Tab {
     Dashboard,
     Models,
     WebUi,
+    /// The Hermes agent dashboard — shown when the "hermes" feature is enabled.
+    Hermes,
     /// The Config tab — shown when the "mgmt" feature is enabled on the drive.
     Config,
 }
@@ -50,6 +52,10 @@ impl AppState {
     /// Whether the "mgmt" feature (config tab + networked daemon parts) is on.
     pub fn mgmt_enabled(&self) -> bool {
         self.features.read().iter().any(|f| f == "mgmt")
+    }
+    /// Whether the optional hermes agent is enabled on this drive.
+    pub fn hermes_enabled(&self) -> bool {
+        self.features.read().iter().any(|f| f == "hermes")
     }
 }
 
@@ -160,6 +166,9 @@ pub fn App() -> Element {
     let tab = (state.tab)();
     let webui_ready = state.ready("webui");
     let mgmt = state.mgmt_enabled();
+    let hermes_on = state.hermes_enabled();
+    let hermes_ready = state.ready("hermes");
+    let hermes_url = state.info.read().as_ref().and_then(|i| i.hermes_url.clone());
     let models_ready = state.llmfit_ready();
     let webui_url = state.info.read().as_ref().map(|i| i.webui_url.clone());
     // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
@@ -170,6 +179,9 @@ pub fn App() -> Element {
     // actually hit; while ready, only the iframe's visibility tracks the active tab.
     let webui_src = webui_url.filter(|_| webui_ready);
     let webui_view_cls = if tab == Tab::WebUi { "flex-1 min-h-0" } else { "hidden" };
+    // Same mount-once-ready iframe pattern as the WebUI tab.
+    let hermes_src = hermes_url.filter(|_| hermes_ready);
+    let hermes_view_cls = if tab == Tab::Hermes { "flex-1 min-h-0" } else { "hidden" };
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -191,6 +203,9 @@ pub fn App() -> Element {
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
                     TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
                     TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
+                    if hermes_on {
+                        TabButton { tab: Tab::Hermes, current: tab, label: t!("tab-hermes"), enabled: hermes_ready }
+                    }
                     if mgmt {
                         TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
                     }
@@ -221,6 +236,15 @@ pub fn App() -> Element {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
                 } else {
                     div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                }
+            }
+            if hermes_on {
+                div { class: "{hermes_view_cls}",
+                    if let Some(url) = hermes_src {
+                        iframe { class: "w-full h-full border-0", src: "{url}" }
+                    } else {
+                        div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                    }
                 }
             }
         }

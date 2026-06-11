@@ -122,6 +122,7 @@ copy_comps_into() {  # <components-dir>
     esac
   done; done
   copy_usbd_into "$cdst"
+  copy_hermes_into "$cdst"
   # Per-OS manifest: each target owns its OWN group dir (components/<os>/), so there
   # are no cross-target races (no shared file) and the manifest is DECLARATIVE — it
   # lists exactly this OS's contents instead of a global scan. The launcher uses it
@@ -141,6 +142,19 @@ copy_usbd_into() {  # <components-dir>
       dir) [ -d "$COMP_SRC/usbd-$TARGET" ] && { rm -rf "$cdst/usbd"; cp -a "$COMP_SRC/usbd-$TARGET" "$cdst/usbd"; } || true ;;
       *)   [ -f "$COMP_SRC/usbd-$TARGET.$ext" ] && cp -u "$COMP_SRC/usbd-$TARGET.$ext" "$cdst/usbd.$ext" || true ;;
     esac
+  done
+}
+
+# Copy this target's hermes component (pool name hermes-<target>) into the group
+# dir as the fixed `hermes` name the launcher resolves (hermes.squashfs /
+# hermes.dmg / hermes/ — win ships hermes-<t>.zip, copied as hermes.zip). The
+# manifest feature-tags every hermes* basename ("hermes", default-off), so it
+# lands on the UPDATE SERVER but is pruned from the burned image
+# (xtask image-prep) and only downloaded when the user enables the feature.
+copy_hermes_into() {  # <components-dir>
+  local cdst="$1" ext
+  for ext in $FMTS; do
+    [ -f "$COMP_SRC/hermes-$TARGET.$ext" ] && cp -u "$COMP_SRC/hermes-$TARGET.$ext" "$cdst/hermes.$ext" || true
   done
 }
 
