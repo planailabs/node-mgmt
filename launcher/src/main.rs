@@ -1157,7 +1157,11 @@ fn spawn_splash_window(opts: SplashOpts) -> Option<std::process::Child> {
     if opts.progress {
         cmd.arg("--progress").stdin(Stdio::piped());
     } else {
-        cmd.stdin(Stdio::null());
+        // Pipe stdin (held open for the child's lifetime via the Child handle) and
+        // have the spinner watch it: EOF = this launcher died → the splash closes
+        // itself. That replaces the old wall-clock max-lifetime, which killed the
+        // splash mid-mount/mid-update when those legitimately ran long.
+        cmd.arg("--watch-stdin").stdin(Stdio::piped());
     }
     cmd.stdout(Stdio::null());
     // Hide the spinner's own stderr by default, but surface it for diagnosis when

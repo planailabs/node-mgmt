@@ -3,7 +3,10 @@
 //! Two modes:
 //!   - default (indeterminate): an animated ring spinner + optional `--text` label,
 //!     shown while the launcher mounts the runtime; closed when the launcher kills
-//!     it. Does NOT read stdin (so an inherited /dev/null can't close it early).
+//!     it. Does NOT read stdin (so an inherited /dev/null can't close it early)
+//!     unless `--watch-stdin` is passed — then the launcher pipes stdin and holds
+//!     it open, and EOF (= the launcher died) closes the window. Protocol lines
+//!     are ignored in this mode; only EOF matters.
 //!   - `--progress` (determinate): a progress bar fed over STDIN, used while a
 //!     staged update is applied. Protocol (zenity-compatible), one line each:
 //!       `<0..100>`  set percent      `#<text>`  set label      EOF / `100` close
@@ -15,7 +18,11 @@
 //! many RDP/headless sessions, where the old splash silently failed. A CPU blit
 //! works anywhere a window can be shown.
 //!
-//! A hard max-lifetime timer is a safety net if the launcher dies without reaping us.
+//! There is deliberately NO max-lifetime timer: a mount or update can legitimately
+//! take arbitrarily long, and a wall-clock cap would close the splash mid-update
+//! (looking crashed/done while work continues). Orphan protection is stdin EOF
+//! instead — `--progress` reads stdin natively and `--watch-stdin` covers the
+//! indeterminate mode — which fires exactly when the launcher is actually gone.
 
 use std::io::BufRead;
 use std::num::NonZeroU32;
@@ -37,7 +44,6 @@ const CANVAS: u32 = 0x1c_27_35; // --c-surface  #1c2735
 const BRAND: (u8, u8, u8) = (0xf9, 0x73, 0x16); // --c-brand    #f97316
 const TEXT: (u8, u8, u8) = (0xe8, 0xed, 0xf5); // --c-fg       #e8edf5
 const TRACK: (u8, u8, u8) = (0x2d, 0x3c, 0x50); // --c-surface-3 #2d3c50
-const MAX_LIFETIME: Duration = Duration::from_secs(180);
 const FRAME: Duration = Duration::from_millis(33); // ~30fps; plenty for a splash
 const WIN_W: u32 = 320;
 const WIN_H: u32 = 180;
@@ -62,6 +68,11 @@ struct Args {
     /// Determinate progress-bar mode: read 0..100 percentages + `#labels` on stdin.
     #[arg(long)]
     progress: bool,
+    /// Indeterminate-mode parent watch: the launcher pipes stdin and holds it open;
+    /// close when it hits EOF (= the launcher died). Content is ignored. Only pass
+    /// this with an explicitly piped stdin — an inherited /dev/null is instant EOF.
+    #[arg(long)]
+    watch_stdin: bool,
     /// Self-test: open the window, render a few frames, then exit 0. Used to verify
     /// the splash actually comes up in a given environment (a window + a framebuffer).
     /// Exits non-zero if the window/surface can't be created or never rendered.
@@ -78,6 +89,7 @@ struct Shared {
 
 struct App {
     progress: bool,
+    watch_stdin: bool,
     selftest: bool,
     title: String,
     shared: Arc<Mutex<Shared>>,
@@ -116,6 +128,7 @@ fn main() -> std::process::ExitCode {
 
     let mut app = App {
         progress: args.progress,
+        watch_stdin: args.watch_stdin,
         selftest: args.selftest,
         title: args.title.clone(),
         shared,
@@ -156,7 +169,9 @@ fn main() -> std::process::ExitCode {
 }
 
 impl App {
-    /// Should the splash close now? (stdin/launcher asked, or the lifetime/selftest cap.)
+    /// Should the splash close now? (stdin EOF / `100` / the launcher asked, or the
+    /// selftest cap.) Deliberately no wall-clock lifetime: the splash must outlast
+    /// arbitrarily long mounts/updates and only ever close on an explicit signal.
     fn should_close(&self) -> bool {
         if self.init_error.is_some() {
             return true;
@@ -164,7 +179,7 @@ impl App {
         if self.selftest {
             return self.frames >= SELFTEST_FRAMES || self.started.elapsed() >= SELFTEST_MAX;
         }
-        self.shared.lock().map(|s| s.closed).unwrap_or(true) || self.started.elapsed() >= MAX_LIFETIME
+        self.shared.lock().map(|s| s.closed).unwrap_or(true)
     }
 
     fn render(&mut self) {
@@ -235,11 +250,12 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        // Only the determinate mode reads stdin (the launcher pipes it). The
-        // indeterminate splash is killed by the launcher, so it must not treat an
-        // inherited /dev/null EOF as "close".
-        if self.progress && !self.selftest && !self.stdin_started {
-            spawn_stdin_reader(self.shared.clone(), self.proxy.clone());
+        // Stdin is read when the launcher pipes it: `--progress` interprets the
+        // zenity protocol, `--watch-stdin` only watches for EOF (parent death).
+        // Without either flag the indeterminate splash must NOT read stdin, so an
+        // inherited /dev/null EOF can't close it early.
+        if (self.progress || self.watch_stdin) && !self.selftest && !self.stdin_started {
+            spawn_stdin_reader(self.shared.clone(), self.proxy.clone(), self.progress);
             self.stdin_started = true;
         }
         // Centre on the monitor the window landed on (else the primary one): place its
@@ -286,13 +302,19 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Read the zenity-style progress protocol from stdin on a background thread,
-/// updating shared state and nudging the event loop to repaint after each line.
-fn spawn_stdin_reader(shared: Arc<Mutex<Shared>>, proxy: winit::event_loop::EventLoopProxy<()>) {
+/// Read stdin on a background thread until EOF, nudging the event loop to repaint
+/// after each line. With `interpret` (progress mode) lines are parsed as the
+/// zenity-style protocol; without it (`--watch-stdin`) content is ignored — the
+/// thread exists purely to detect EOF. Either way EOF means the launcher closed
+/// the pipe (or died), which closes the window.
+fn spawn_stdin_reader(shared: Arc<Mutex<Shared>>, proxy: winit::event_loop::EventLoopProxy<()>, interpret: bool) {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
+            if !interpret {
+                continue;
+            }
             let line = line.trim();
             if let Ok(mut s) = shared.lock() {
                 if let Some(text) = line.strip_prefix('#') {
