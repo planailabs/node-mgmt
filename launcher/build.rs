@@ -55,5 +55,23 @@ fn main() {
         println!("cargo:rerun-if-env-changed=PLANAI_BWRAP_BIN");
     }
 
+    // Where serve.rs's rust-embed finds the built Dioxus SPA assets. The nix
+    // build passes the `spa` derivation via PLANAI_SPA_DIST (so the launcher
+    // src no longer carries the assets, and SPA changes rebuild only the
+    // embed); dev/bare cargo falls back to the in-tree `spa/` dir produced by
+    // scripts/build-spa.sh (created empty if missing so the build compiles).
+    {
+        let dir = match env::var("PLANAI_SPA_DIST") {
+            Ok(p) if !p.is_empty() => p,
+            _ => {
+                let p = format!("{}/spa", env::var("CARGO_MANIFEST_DIR").unwrap());
+                fs::create_dir_all(&p).unwrap();
+                p
+            }
+        };
+        println!("cargo:rustc-env=PLANAI_SPA_DIST={dir}");
+        println!("cargo:rerun-if-env-changed=PLANAI_SPA_DIST");
+    }
+
     println!("cargo:rerun-if-changed=build.rs");
 }

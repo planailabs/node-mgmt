@@ -51,6 +51,30 @@
         # registry + git deps (mac-mgmt pins a dioxus/swiftide fork) offline.
         crossRustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
 
+        # Scoped sources (lib.fileset): each derivation pulls only the files it
+        # actually reads, so unrelated repo changes don't trigger rebuilds.
+        # third_party/mac-mgmt always travels whole where needed — its workspace
+        # root requires every member manifest, so it can't be sliced further.
+        spaSrc = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./launcher/spa-src           # the crate
+            ./third_party/plan-ai-design # path dep
+            ./crates/control-api         # path dep
+            ./third_party/mac-mgmt       # config-ui + common path deps
+          ];
+        };
+        xtaskSrc = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [ ./xtask ./crates/manifest ];
+        };
+        # the launcher crate without spa-src (the SPA is its own derivation,
+        # passed in via PLANAI_SPA_DIST — see launcherFor)
+        launcherSrc = lib.fileset.toSource {
+          root = ./launcher;
+          fileset = lib.fileset.difference ./launcher ./launcher/spa-src;
+        };
+
         # macOS SDK source (Cocoa headers + framework stubs) for cross-compiling
         # crates with native Apple deps — notify-rust's mac-notification-sys
         # #imports <Cocoa/Cocoa.h>. Fed to the mac launcher build via SDKROOT so
@@ -81,9 +105,9 @@
         spa = wasmRustPlatform.buildRustPackage {
           pname = "plan-ai-spa";
           version = "0.1.0";
-          # whole flake source (git-tracked only): needs spa-src + the
-          # third_party/plan-ai-design and crates/control-api path deps.
-          src = ./.;
+          # scoped source: spa-src + its path deps (plan-ai-design,
+          # control-api, and the mac-mgmt submodule for config-ui/common).
+          src = spaSrc;
           # the crate (and its Cargo.lock) live in this subdir.
           cargoRoot = "launcher/spa-src";
           buildAndTestSubdir = "launcher/spa-src";
@@ -117,7 +141,7 @@
         xtask = pkgs.rustPlatform.buildRustPackage {
           pname = "xtask";
           version = "0.1.0";
-          src = ./.;
+          src = xtaskSrc;
           cargoRoot = "xtask";
           buildAndTestSubdir = "xtask";
           cargoLock.lockFile = ./xtask/Cargo.lock;
@@ -162,6 +186,9 @@
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
               # the splash spinner, embedded into the launcher for every target.
               PLANAI_SPINNER_BIN = spinnerBin;
+              # the built SPA assets, embedded by serve.rs's rust-embed via
+              # build.rs (the launcher src carries no spa/ dir).
+              PLANAI_SPA_DIST = "${spa}";
             } // lib.optionalAttrs (lib.hasInfix "linux" zigTarget) {
               # Static bubblewrap, embedded into the linux launcher: on NixOS it sets up
               # the OUTER namespace that binds/overlays the FHS-closure squashfs over
@@ -183,11 +210,7 @@
               mkdir -p third_party/mac-mgmt
               cp -r ${./third_party/mac-mgmt}/mac-mgmt-services third_party/mac-mgmt/mac-mgmt-services
               chmod -R u+w third_party
-              cp -r ${./launcher}/. src && chmod -R u+w src && cd src
-              # the SPA source isn't part of the launcher crate build; the built
-              # web assets come from the `spa` derivation, embedded below.
-              rm -rf spa-src
-              rm -rf spa && cp -r ${spa} spa && chmod -R u+w spa
+              cp -r ${launcherSrc}/. src && chmod -R u+w src && cd src
               # crates.io deps from the vendored cargo lock
               mkdir -p .cargo
               printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${launcherVendor}" > .cargo/config.toml

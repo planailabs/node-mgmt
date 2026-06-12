@@ -23,10 +23,12 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::{config, control, paths, proxy};
 
-/// The Dioxus SPA, embedded at compile time (built into spa/ by scripts/build-spa.sh
-/// or the flake before the launcher compiles).
+/// The Dioxus SPA, embedded at compile time. The folder comes from
+/// PLANAI_SPA_DIST (re-exported by build.rs): the flake passes the built
+/// `spa` derivation directly; dev builds fall back to `spa/` beside the
+/// crate (scripts/build-spa.sh).
 #[derive(rust_embed::RustEmbed)]
-#[folder = "spa/"]
+#[folder = "$PLANAI_SPA_DIST/"]
 struct Spa;
 
 /// The real control-plane backend: the supervised stack + the splash spinner.

@@ -34,7 +34,7 @@ fluent = "0.16"
 unic-langid = "0.9"
 # serve the embedded Dioxus SPA + control API over localhost (phase 3)
 axum = "0.8"
-rust-embed = "8"
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 mime_guess = "2"
 tokio-stream = { version = "0.1", features = ["sync"] }
 # Cross-platform desktop notification (e.g. "already running"): Linux D-Bus,
