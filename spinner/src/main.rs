@@ -209,7 +209,18 @@ impl App {
             draw_spinner(&mut fb, scale, self.started.elapsed().as_secs_f32());
         }
         if !label.is_empty() {
-            draw_text_centered(&mut fb, &self.font, 15.0 * scale, &label, (h as f32 * 0.70) as i32, TEXT);
+            // Word-wrap the label into the space under the spinner/bar (long
+            // translated strings + a throughput suffix easily exceed one line);
+            // whatever still doesn't fit is ellipsized rather than clipped.
+            let px = 15.0 * scale;
+            let max_w = w as f32 - 24.0 * scale; // 12px side margins
+            let line_h = self.font.horizontal_line_metrics(px).map(|m| m.new_line_size).unwrap_or(px * 1.3);
+            let top = (h as f32 * 0.70) as i32;
+            let avail = (h as f32 - 6.0 * scale) - top as f32;
+            let max_lines = ((avail / line_h).floor() as usize).max(1);
+            for (i, line) in wrap_text(&self.font, px, &label, max_w, max_lines).iter().enumerate() {
+                draw_text_centered(&mut fb, &self.font, px, line, top + (i as f32 * line_h) as i32, TEXT);
+            }
         }
         let _ = buf.present();
         self.frames += 1;
@@ -269,6 +280,7 @@ impl ApplicationHandler for App {
             let y = mp.y + ((ms.height as i32 - ws.height as i32) / 2).max(0);
             window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
         }
+        round_corners(&window);
         window.request_redraw();
         self._context = Some(context);
         self.surface = Some(surface);
@@ -334,6 +346,115 @@ fn spawn_stdin_reader(shared: Arc<Mutex<Shared>>, proxy: winit::event_loop::Even
         }
         let _ = proxy.send_event(());
     });
+}
+
+/// Logical corner radius, matching plan-ai-design's `rounded-xl` (0.75rem = 12px).
+const CORNER_RADIUS: f64 = 12.0;
+
+/// Best-effort native rounded corners for the undecorated splash window.
+/// softbuffer presents opaque XRGB buffers on every backend (no alpha channel),
+/// so the rounding must come from the window system, not the framebuffer:
+///   - Windows 11: DWM's per-window corner preference (radius is system-chosen;
+///     silently a no-op on Windows 10 → square corners there).
+///   - macOS: corner-radius + mask on the content view's CALayer; the window is
+///     made non-opaque with a clear background so the clipped corners show through.
+///   - linux/X11: the X Shape extension clips the bounding region to a rounded
+///     rect (hard-edged corner steps — invisible at this radius).
+///   - linux/Wayland: no client-side equivalent without an alpha buffer — square.
+/// Purely cosmetic: every path here is allowed to fail silently.
+#[allow(unused_variables)]
+fn round_corners(window: &Window) {
+    #[cfg(target_os = "windows")]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "dwmapi")]
+        extern "system" {
+            fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const core::ffi::c_void, size: u32) -> i32;
+        }
+        const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+        const DWMWCP_ROUND: i32 = 2;
+        let Ok(handle) = window.window_handle() else { return };
+        let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
+        let pref = DWMWCP_ROUND;
+        unsafe {
+            DwmSetWindowAttribute(
+                h.hwnd.get(),
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                (&pref as *const i32).cast(),
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = window.window_handle() else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+        let view = h.ns_view.as_ptr() as *mut AnyObject;
+        unsafe {
+            let _: () = msg_send![view, setWantsLayer: true];
+            let layer: *mut AnyObject = msg_send![view, layer];
+            let ns_window: *mut AnyObject = msg_send![view, window];
+            if layer.is_null() || ns_window.is_null() {
+                return;
+            }
+            // CALayer's cornerRadius is in points (logical px) — no scale factor.
+            let _: () = msg_send![layer, setCornerRadius: CORNER_RADIUS];
+            let _: () = msg_send![layer, setMasksToBounds: true];
+            let _: () = msg_send![ns_window, setOpaque: false];
+            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: clear];
+            // The drop shadow was cached from the square shape; recompute it.
+            let _: () = msg_send![ns_window, invalidateShadow];
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use x11rb::protocol::shape::{self, ConnectionExt as _};
+        use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
+        let Ok(handle) = window.window_handle() else { return };
+        let wid = match handle.as_raw() {
+            RawWindowHandle::Xlib(h) => h.window as u32,
+            RawWindowHandle::Xcb(h) => h.window.get(),
+            _ => return, // Wayland
+        };
+        let size = window.inner_size(); // physical px, like the shape region
+        let (w, h) = (size.width, size.height);
+        let r = ((CORNER_RADIUS * window.scale_factor()).round() as u32).min(w / 2).min(h / 2);
+        if r == 0 || w == 0 || h == 0 {
+            return;
+        }
+        // Horizontal inset of a corner pixel row: how far the quarter-circle arc
+        // pulls in from the window edge at this row's centre.
+        let inset = |row: u32| -> i32 {
+            let fy = r as f64 - (row as f64 + 0.5);
+            let rr = r as f64;
+            (rr - (rr * rr - fy * fy).max(0.0).sqrt()).ceil() as i32
+        };
+        // One 1px-tall rect per corner row + one body rect between the corners.
+        let mut rects = Vec::with_capacity(2 * r as usize + 1);
+        for y in 0..r {
+            let i = inset(y);
+            let width = (w as i32 - 2 * i).max(0) as u16;
+            rects.push(Rectangle { x: i as i16, y: y as i16, width, height: 1 });
+            rects.push(Rectangle { x: i as i16, y: (h - 1 - y) as i16, width, height: 1 });
+        }
+        rects.push(Rectangle { x: 0, y: r as i16, width: w as u16, height: (h - 2 * r) as u16 });
+        let Ok((conn, _)) = x11rb::connect(None) else { return };
+        let _ = conn.shape_rectangles(
+            shape::SO::SET,
+            shape::SK::BOUNDING,
+            ClipOrdering::UNSORTED,
+            wid,
+            0,
+            0,
+            &rects,
+        );
+        let _ = x11rb::connection::Connection::flush(&conn);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,13 +564,61 @@ fn draw_progress(fb: &mut Frame, font: &fontdue::Font, scale: f32, frac: f32) {
     draw_text_centered(fb, font, 16.0 * scale, &pct, y + bh + (12.0 * scale) as i32, TEXT);
 }
 
+/// Total horizontal advance of `text` at size `px` — the width the rasterizer
+/// will actually use (kerning-free, same as `draw_text_centered`'s layout).
+fn text_width(font: &fontdue::Font, px: f32, text: &str) -> f32 {
+    text.chars().map(|c| font.metrics(c, px).advance_width).sum()
+}
+
+/// Greedy word-wrap of `text` to at most `max_w` px per line at size `px`: words
+/// are packed while they fit; a single word wider than the line is hard-broken.
+/// Returns at most `max_lines` lines — when the text is longer, the last kept
+/// line is ellipsized (`…`) and re-trimmed until it fits.
+fn wrap_text(font: &fontdue::Font, px: f32, text: &str, max_w: f32, max_lines: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
+        if text_width(font, px, &candidate) <= max_w {
+            cur = candidate;
+            continue;
+        }
+        if !cur.is_empty() {
+            lines.push(std::mem::take(&mut cur));
+        }
+        // The word alone may still be too wide (a URL, a long path): hard-break it.
+        for ch in word.chars() {
+            cur.push(ch);
+            if text_width(font, px, &cur) > max_w && cur.chars().count() > 1 {
+                let overflow = cur.pop().unwrap();
+                lines.push(std::mem::take(&mut cur));
+                cur.push(overflow);
+            }
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if max_lines > 0 && lines.len() > max_lines {
+        lines.truncate(max_lines);
+        let last = lines.last_mut().expect("max_lines > 0");
+        last.push('…');
+        while text_width(font, px, last) > max_w && last.chars().count() > 1 {
+            last.pop(); // the ellipsis
+            last.pop(); // the char before it
+            last.push('…');
+        }
+    }
+    lines
+}
+
 /// Render anti-aliased text from the embedded sans-serif font, horizontally centred,
 /// with its top at `top_y`. `px` is the pixel height; coverage is alpha-blended over
 /// whatever's already drawn.
 fn draw_text_centered(fb: &mut Frame, font: &fontdue::Font, px: f32, text: &str, top_y: i32, color: (u8, u8, u8)) {
     let px = px.max(6.0);
     // Total advance for horizontal centring.
-    let total_w: f32 = text.chars().map(|c| font.metrics(c, px).advance_width).sum();
+    let total_w = text_width(font, px, text);
     let ascent = font.horizontal_line_metrics(px).map(|m| m.ascent).unwrap_or(px);
     let baseline = top_y + ascent.round() as i32;
     let mut pen_x = fb.w as f32 / 2.0 - total_w / 2.0;
@@ -463,5 +632,64 @@ fn draw_text_centered(fb: &mut Frame, font: &fontdue::Font, px: f32, text: &str,
             }
         }
         pen_x += m.advance_width;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn font() -> fontdue::Font {
+        fontdue::Font::from_bytes(FONT_TTF, fontdue::FontSettings::default()).expect("embedded font")
+    }
+
+    #[test]
+    fn short_text_stays_one_line() {
+        let f = font();
+        let lines = wrap_text(&f, 15.0, "Starting…", 300.0, 3);
+        assert_eq!(lines, vec!["Starting…".to_string()]);
+    }
+
+    #[test]
+    fn long_text_wraps_and_every_line_fits() {
+        let f = font();
+        let text = "Komponenten werden heruntergeladen 3 von 12 — 25,4 MB/s verbleibend";
+        let max_w = 296.0; // the label area at scale 1 (320 - 2×12 margins)
+        let lines = wrap_text(&f, 15.0, text, max_w, 10);
+        assert!(lines.len() > 1, "expected a wrap, got {lines:?}");
+        for line in &lines {
+            assert!(
+                text_width(&f, 15.0, line) <= max_w,
+                "line wider than {max_w}px: {line:?}"
+            );
+        }
+        // No words lost or reordered by wrapping.
+        let rejoined: Vec<&str> = lines.iter().flat_map(|l| l.split_whitespace()).collect();
+        let original: Vec<&str> = text.split_whitespace().collect();
+        assert_eq!(rejoined, original);
+    }
+
+    #[test]
+    fn overlong_word_hard_breaks() {
+        let f = font();
+        let text = "https://updates.plan.ai/components/runtime-linux-x64-0.1.0.squashfs";
+        let max_w = 200.0;
+        let lines = wrap_text(&f, 15.0, text, max_w, 10);
+        assert!(lines.len() > 1, "expected a hard break, got {lines:?}");
+        for line in &lines {
+            assert!(text_width(&f, 15.0, line) <= max_w, "line wider than {max_w}px: {line:?}");
+        }
+        assert_eq!(lines.concat(), text, "hard break must not lose characters");
+    }
+
+    #[test]
+    fn truncation_ellipsizes_last_line_within_width() {
+        let f = font();
+        let text = "ein sehr langer Text der niemals in zwei Zeilen passen wird weil er immer weiter geht und geht";
+        let max_w = 200.0;
+        let lines = wrap_text(&f, 15.0, text, max_w, 2);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].ends_with('…'), "last line not ellipsized: {:?}", lines[1]);
+        assert!(text_width(&f, 15.0, &lines[1]) <= max_w, "ellipsized line still too wide");
     }
 }

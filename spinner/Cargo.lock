@@ -1159,8 +1159,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fontdue",
+ "objc2 0.5.2",
  "softbuffer",
  "winit",
+ "x11rb",
 ]
 
 [[package]]

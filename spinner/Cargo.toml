@@ -24,6 +24,17 @@ softbuffer = "0.4"
 # font; Roboto is a static, metric-clean stand-in with the same geometric sans feel.
 fontdue = "0.9"
 
+# Native rounded corners (see `round_corners`): softbuffer presents opaque XRGB
+# buffers on every backend, so the rounding must come from the window system.
+# Versions match winit's own deps, so neither crate compiles twice.
+# linux/X11: clip the window's bounding region via the X Shape extension.
+# (Wayland has no client-side equivalent without an alpha buffer — stays square.)
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["shape"] }
+# macOS: corner-radius mask on the content view's CALayer.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+
 [profile.release]
 opt-level = "z"
 lto = true

@@ -145,6 +145,28 @@ fn spinner_selftest_renders() {
     );
 }
 
+/// A long label must render (word-wrapped + ellipsized), not crash or hang — the
+/// selftest paints real frames through the same `render()` path as production.
+#[test]
+fn selftest_renders_with_long_label() {
+    let Some(mut cmd) = spinner_command() else { return };
+    let long = "Komponenten werden heruntergeladen 3 von 12 — 25,4 MB/s — \
+                https://updates.plan.ai/components/runtime-linux-x64-0.1.0.squashfs \
+                und noch viel mehr Text der niemals auf eine Zeile passt";
+    let mut child = cmd
+        .args(["--selftest", "--text", long])
+        .spawn()
+        .expect("spawn plan-ai-spinner --selftest (long label)");
+    let status = match wait_up_to(&mut child, Duration::from_secs(30)) {
+        Some(s) => s,
+        None => {
+            kill_and_reap(child);
+            panic!("spinner --selftest with a long label did not exit within 30s");
+        }
+    };
+    assert!(status.success(), "long-label selftest exited with {:?}", status.code());
+}
+
 /// `--watch-stdin`: the launcher pipes stdin and holds it open — the splash must
 /// stay up for as long as the pipe lives (no wall-clock self-close; the old 180s
 /// max-lifetime killed it mid-update) and close promptly once the pipe drops
