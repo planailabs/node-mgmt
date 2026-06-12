@@ -170,6 +170,16 @@ in
   "llamacpp-windows-amd64-dir" = mkLlamacppWinDir "windows-amd64";
   "llamacpp-windows-amd64-vulkan-dir" = mkLlamacppWinDir "windows-amd64-vulkan";
 
+  # hermes-webui: the lightweight hermes web UI (same "hermes" feature —
+  # classify_feature matches the basename prefix). Pure python/static sources,
+  # ONE shared component for all platforms (like ow-assets): linux squashfs,
+  # mac dmg, win dir (zipped by the win component packer). Runs on the hermes
+  # component's portable python (see usbd's hermes-webui service).
+  "hermes-webui-squashfs" = mkSqfs "hermes-webui" (flake.packages.${builtins.currentSystem}.hermes-webui);
+  "hermes-webui-dmg" = mkDmg { name = "hermes-webui"; src = flake.packages.${builtins.currentSystem}.hermes-webui; };
+  "hermes-webui-dir" = pkgs.runCommand "hermes-webui-dir" { }
+    "mkdir -p $out && cp -a ${flake.packages.${builtins.currentSystem}.hermes-webui}/. $out/";
+
   # hermes: the optional hermes-agent component (feature "hermes", default-off in
   # platforms.json — not on the image / not downloaded until enabled). Source is
   # fully pure nix (flake `hermes-<target>`, wheels-FOD into pbs — nix/hermes.nix);

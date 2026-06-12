@@ -233,6 +233,17 @@ impl ControlApi for RealApi {
                 .unwrap_or_else(|| "http://127.0.0.1:9119".into());
                 let hermes = service_state(by("hermes"), &format!("{url}/api/status")).await;
                 out.push(ServiceStatus { id: "hermes".into(), name: "Hermes".into(), state: hermes });
+
+                // The hermes web UI (same feature, own component + service).
+                let webui_url = match &usbd_url {
+                    Some(b) => proxy::get(b, "/info").await.ok()
+                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+                        .and_then(|v| v.get("hermes_webui_url").and_then(|x| x.as_str()).map(String::from)),
+                    None => None,
+                }
+                .unwrap_or_else(|| "http://127.0.0.1:8787".into());
+                let webui = service_state(by("hermes-webui"), &webui_url).await;
+                out.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: webui });
             }
             out
         }

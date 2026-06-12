@@ -382,6 +382,21 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
             &format!("nix component: hermes-{t}"));
         comp_stamps.push(stamp(&format!("comp-hermes-{t}")));
     }
+    // hermes-webui: the lightweight hermes web UI (same "hermes" feature, the
+    // classifier matches the basename). Pure python/static sources running on
+    // the hermes component's python — ONE shared component for all platforms
+    // (like ow-assets): linux squashfs + mac dmg + win zip.
+    for (attr, out) in [
+        ("hermes-webui-squashfs", "dist/components/hermes-webui.squashfs"),
+        ("hermes-webui-dmg", "dist/components/hermes-webui.dmg"),
+        ("hermes-webui-dir", "dist/components/hermes-webui.zip"),
+    ] {
+        let stamp_name = format!("comp-{}", out.rsplit('/').next().unwrap().replace('.', "-"));
+        stamp_edge(&stamp_name, &nix_comp_srcs,
+            &format!("./scripts/nix-component.sh {attr} {out}"),
+            &format!("nix component: {attr}"));
+        comp_stamps.push(stamp(&stamp_name));
+    }
     // manifest: scans dist/components after every pack (xtask, not bash/jq).
     stamp_edge("components", &comp_stamps, "nix run .#xtask -- components-manifest", "components manifest");
 

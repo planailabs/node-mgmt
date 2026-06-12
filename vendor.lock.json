@@ -137,5 +137,10 @@
         "sha256": "8ac86643963709946ccb9faf809b620e6c3aa5ec68c3b2059153f0d0244b57b3"
       }
     ]
+  },
+  "hermes-webui": {
+    "tag": "v0.51.124",
+    "url": "https://github.com/nesquena/hermes-webui/archive/refs/tags/v0.51.124.tar.gz",
+    "sha256": "f0a8dbf2f3812964b90c33bc192f430d3da64ca8535e313e08a0381629c02207"
   }
 }

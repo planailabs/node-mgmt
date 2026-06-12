@@ -390,6 +390,25 @@
           };
         };
 
+        # hermes-webui: the lightweight three-panel web UI for the hermes agent
+        # (optional "hermes" feature, alongside the dashboard). Pure python +
+        # static sources — no venv of its own: the usbd service runs it with the
+        # hermes component's portable python (HERMES_WEBUI_PYTHON) and points
+        # HERMES_WEBUI_AGENT_DIR at that component's site-packages. One shared
+        # component for all platforms (like ow-assets), store-independent by
+        # construction (plain file copies).
+        hermesWebuiSrcTree = pkgs.runCommand "hermes-webui-src-${vendorLock."hermes-webui".tag}"
+          { src = pkgs.fetchurl { inherit (vendorLock."hermes-webui") url sha256; }; }
+          ''mkdir -p $out && tar -xzf "$src" -C $out --strip-components=1'';
+        hermesWebuiComponent = pkgs.runCommand "plan-ai-hermes-webui" { } ''
+          mkdir -p "$out"
+          cp -r ${hermesWebuiSrcTree}/api ${hermesWebuiSrcTree}/static ${hermesWebuiSrcTree}/scripts "$out/"
+          install -m 0644 ${hermesWebuiSrcTree}/bootstrap.py ${hermesWebuiSrcTree}/server.py \
+            ${hermesWebuiSrcTree}/mcp_server.py ${hermesWebuiSrcTree}/requirements.txt "$out/"
+          echo '{ "version": "${vendorLock."hermes-webui".tag}" }' > "$out/hermes-webui.json"
+          find "$out" -name '__pycache__' -type d -prune -exec rm -rf {} + || true
+        '';
+
         # uv cross-resolution triples per distributable target (mac-x64 dropped —
         # arm64-only macOS wheels). nixos-x64 reuses the linux-x64 runtime.
         runtimes = {
@@ -656,6 +675,7 @@
             # expands the per-component .zip into its target folder + removes the zip.
             paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils pkgs.unzip ];
           };
+          hermes-webui = hermesWebuiComponent;
         } // runtimes // hermesComponents
           # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;
           # add the attr only when the asset is in vendor.lock.json so a missing arm64

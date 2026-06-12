@@ -103,8 +103,11 @@ case "$TARGET" in
   mac-*)               EB_OS="";      EB_ARCH="";      UNPACK_DIR="" ;;
   *) die "no electron metadata for target $TARGET" ;;
 esac
-# component base names this launcher needs (loader picks the ollama flavour)
-COMP_BASES="runtime-$TARGET ow-assets"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
+# component base names this launcher needs (loader picks the ollama flavour).
+# hermes-webui is one SHARED component for all platforms (pure python/static,
+# runs on the hermes component's python); its basename starts with "hermes" so
+# the manifest feature-tags it ("hermes", default-off) like the agent component.
+COMP_BASES="runtime-$TARGET ow-assets hermes-webui"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
 # llama.cpp flavours for this OS (optional "llamacpp" feature; per-flavour names
 # like ollama — the launcher picks by GPU detection; win FMTS=zip so the per-
 # flavour dirs were packed as llamacpp-<k>.zip by the xtask edge).

@@ -348,6 +348,16 @@ impl Ctx {
                 Err(e) => log(&format!("hermes: {e}")),
             }
         }
+        // hermes-webui: the lightweight hermes web UI (same feature) — pure
+        // python/static sources run with the hermes component's python.
+        if features.iter().any(|f| f == "hermes")
+            && (comp.join("hermes-webui.squashfs").exists() || comp.join("hermes-webui.dmg").exists() || comp.join("hermes-webui").is_dir())
+        {
+            match provide(&comp, "hermes-webui", &dist.join("hermes-webui"), &tools, force_extract) {
+                Ok(k) => self.mounts.push(Mount { dest: dist.join("hermes-webui"), kind: k }),
+                Err(e) => log(&format!("hermes-webui: {e}")),
+            }
+        }
         if let Some((ol, why)) = detect_ollama(&comp) {
             log(&format!("ollama flavour: {ol} — {why}"));
             match provide(&comp, &ol, &dist.join("ollama"), &tools, force_extract) {
