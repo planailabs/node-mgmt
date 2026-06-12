@@ -300,19 +300,23 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
                 "./scripts/nix-component.sh ollama-darwin-dmg dist/components/ollama-darwin.dmg",
                 "nix dmg: ollama-darwin");
         } else if name == "ollama-windows-amd64" {
-            // win dir extracted in nix from the ollamaComponents repack
+            // win zip: the `-dir` attr extracts the ollamaComponents repack dir in nix,
+            // nix-component.sh zips it when the out ends .zip (launcher unpacks on
+            // update; the image unpacks + removes it).
             deps.extend(nix_comp_srcs.iter().cloned());
             stamp_edge("comp-ollama-windows-amd64", &deps,
-                "./scripts/nix-component.sh ollama-windows-amd64-dir dist/components/ollama-windows-amd64",
-                "nix dir: ollama-windows-amd64");
+                "./scripts/nix-component.sh ollama-windows-amd64-dir dist/components/ollama-windows-amd64.zip",
+                "nix component: ollama-windows-amd64");
         } else if let Some(t) = name.strip_prefix("runtime-") {
             // runtime packed in nix from the store-imported dist/runtime/<t> (make-runtime
-            // already wrote the python/ tree + runtime.json): linux squashfs, mac dmg, win dir.
+            // already wrote the python/ tree + runtime.json): linux squashfs, mac dmg, win
+            // zip (the `-dir` attr builds the tree, import-build-component.sh zips when the
+            // out ends .zip — launcher unpacks on update; the image unpacks + removes it).
             deps.extend(ib_srcs.iter().cloned());
             let (fmt, out) = match target_os(t) {
                 "linux" => ("squashfs", format!("dist/components/runtime-{t}.squashfs")),
                 "mac" => ("dmg", format!("dist/components/runtime-{t}.dmg")),
-                _ => ("dir", format!("dist/components/runtime-{t}")),
+                _ => ("dir", format!("dist/components/runtime-{t}.zip")),
             };
             stamp_edge(&format!("comp-{name}"), &deps,
                 &format!("./scripts/import-build-component.sh runtime-{t} dist/runtime/{t} runtime-{t}-{fmt} {out}"),
@@ -511,9 +515,9 @@ fn components_manifest(a: ComponentsManifestArgs) -> Result<()> {
         bail!("{} is not a directory — pack the components first", dir.display());
     }
     // A component is "present" in this OS-neutral pool as a file (base.squashfs /
-    // base.dmg / base.tar.gz) OR a pre-extracted dir (base/).
+    // base.dmg / base.tar.gz / base.zip for Windows) OR a pre-extracted dir (base/).
     let present = |base: &str| -> bool {
-        ["squashfs", "dmg", "tar.gz"].iter().any(|e| dir.join(format!("{base}.{e}")).is_file())
+        ["squashfs", "dmg", "tar.gz", "zip"].iter().any(|e| dir.join(format!("{base}.{e}")).is_file())
             || dir.join(base).is_dir()
     };
     // scan the full catalogs and report whatever's actually on disk, so the manifest
