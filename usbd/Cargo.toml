@@ -20,6 +20,8 @@ path = "src/main.rs"
 mac-mgmt-agent = { path = "../third_party/mac-mgmt/mac-mgmt-agent", features = ["services", "relay", "memvault"] }
 mac-mgmt-common = { path = "../third_party/mac-mgmt/common", features = ["sentry"] }
 mac-mgmt-services = { path = "../third_party/mac-mgmt/mac-mgmt-services" }
+# the reduced UsbConfig types (shared with the dev mock-server)
+plan-ai-usb-config = { path = "../crates/usb-config" }
 # the memvault management CLI (the `memctl` subcommand); already in the graph
 # via mac-mgmt-agent/memvault — this just makes its entrypoint nameable
 memctl = { path = "../third_party/mac-mgmt/memvault/crates/memctl", default-features = false }

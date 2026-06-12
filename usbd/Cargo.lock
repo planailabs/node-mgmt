@@ -6951,6 +6951,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "plan-ai-usb-config"
+version = "0.1.0"
+dependencies = [
+ "mac-mgmt-common",
+ "schemars",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "plan-ai-usbd"
 version = "0.1.0"
 dependencies = [
@@ -6963,6 +6974,7 @@ dependencies = [
  "mac-mgmt-common",
  "mac-mgmt-services",
  "memctl",
+ "plan-ai-usb-config",
  "rand 0.9.4",
  "reqwest 0.13.2",
  "rustls",

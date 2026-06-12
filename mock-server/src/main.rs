@@ -285,13 +285,13 @@ impl ControlApi for Mock {
     }
     fn config_schema(&self) -> impl Future<Output = Value> + Send {
         // The REAL reduced subset schema, so the editor matches the daemon.
-        let schema = schemars::schema_for!(mac_mgmt_common::UsbConfig);
+        let schema = schemars::schema_for!(plan_ai_usb_config::UsbConfig);
         let v = serde_json::to_value(&schema).unwrap_or_else(|_| json!({}));
         async move { v }
     }
     fn set_config(&self, body: Value) -> impl Future<Output = Result<Value, String>> + Send {
         // Validate against UsbConfig (mirrors the daemon's PUT), then store.
-        let result = match mac_mgmt_common::UsbConfig::from_json(&body) {
+        let result = match plan_ai_usb_config::UsbConfig::from_json(&body) {
             Ok(_) => {
                 self.s.lock().unwrap().config = body.clone();
                 eprintln!("[mock] config saved");

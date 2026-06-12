@@ -1,0 +1,19 @@
+# The reduced USB config types (UsbConfig + the usb-only service sections),
+# shared by the usbd daemon and the dev mock-server (which serves the real
+# schema to the SPA config editor). Section types come from mac-mgmt-common —
+# UsbConfig stays a strict subset of the cluster config.
+[package]
+name = "plan-ai-usb-config"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "plan_ai_usb_config"
+path = "src/lib.rs"
+
+[dependencies]
+mac-mgmt-common = { path = "../../third_party/mac-mgmt/common" }
+schemars = { version = "1.2.1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

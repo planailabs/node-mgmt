@@ -17,10 +17,13 @@
 //! on macOS, so a future event loop could own the main thread).
 
 mod config;
-mod usb_config;
 mod control;
 mod run;
 mod services;
+
+/// The reduced config types live in crates/usb-config (shared with the dev
+/// mock-server, which serves the real schema to the SPA config editor).
+pub(crate) use plan_ai_usb_config as usb_config;
 
 use std::path::PathBuf;
 
