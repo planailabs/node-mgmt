@@ -102,6 +102,37 @@ npm run css:watch            # rebuild tailwind on design/markup changes
 The dev launcher is `scripts/run-nixos.sh` (staging + nixpkgs electron). Models
 and data default to `app/.run/` in dev; override with `PLANAI_PORTABLE_ROOT`.
 
+## Flow A2 — piece-wise dev against the real launcher
+
+Run the REAL bundled launcher (mounted components, control plane, update flow)
+with one locally-built piece swapped in via `--start-with-*` flags (each feeds
+an env override: `PLANAI_APP_DIR` / `PLANAI_SPA_DIR` / `PLANAI_USBD_BIN`).
+Needs a built bundle once (`make components bundle TARGET=linux-x64`).
+
+```sh
+make dev-spa        # build the SPA (scripts/build-spa.sh) + launch with --start-with-spa
+make dev-electron   # launch with --start-with-electron app   (needs: cd app && npm i)
+make dev-usbd       # cargo build usbd + launch with --start-with-usbd
+
+# or by hand, mixing overrides:
+dist/bundle/plan-ai.linux-x64.exe   --start-with-spa launcher/spa   --start-with-usbd usbd/target/release/usbd
+```
+
+Other inner loops:
+
+```sh
+make ui                              # SPA against the mock backend (dx hot reload + mock API)
+cd usbd && cargo build               # the USB daemon alone (run: target/debug/usbd usbd --offline)
+nix develop .#usbd-win               # cross-compile usbd for windows (cargo-zigbuild shell)
+nix develop .#usbd-mac               # …and for mac (Apple SDK via SDKROOT)
+scripts/build-spa.sh                 # SPA via nix (reproducible) into launcher/spa/
+```
+
+The usbd daemon's heavy machinery comes from `mac-mgmt-agent` in the
+`third_party/mac-mgmt` submodule; its reduced config types live in
+`crates/usb-config` (shared with the mock-server). Editing either rebuilds
+with plain `cargo build` in `usbd/`.
+
 ## Flow B — Prod (build shippable artifacts)
 
 Each artifact = the Electron app + the chosen ollama flavour + a relocatable
