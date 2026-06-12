@@ -33,14 +33,16 @@ pub fn run(up: &update::Updater) -> bool {
     ok
 }
 
-/// On startup: finish any update that a prior run left unapplied — whether it was
-/// interrupted mid-apply (the journal) OR was fully staged-and-ready but never
-/// applied because the process exited first (the pendrive marker, e.g. after a
+/// On startup (or, for the FHS host, after the child requested an apply): finish
+/// any update that a prior run left unapplied — whether it was interrupted
+/// mid-apply (the journal) OR was fully staged-and-ready but never applied
+/// because the process exited first (the pendrive marker, e.g. after a
 /// busy-mount teardown or a crash between download and apply). Both point at the
 /// staging folder; apply is idempotent + crash-safe, so re-running is safe. When
 /// the staging is gone, drop the stale markers + orphan temps and keep the intact
-/// old version (a fresh download will re-stage it).
-pub fn resume_if_interrupted() {
+/// old version (a fresh download will re-stage it). Returns true when an update
+/// was actually applied (the caller may relaunch onto the new version).
+pub fn resume_if_interrupted() -> bool {
     let root = paths::portable_root();
     let jp = journal_path(&root);
     let mp = update::pending_marker_path();
@@ -48,7 +50,7 @@ pub fn resume_if_interrupted() {
     let marker = if jp.exists() { Some(jp.clone()) } else if mp.exists() { Some(mp.clone()) } else { None };
     let Some(marker) = marker else {
         cleanup_orphans(&root);
-        return;
+        return false;
     };
     let staging = std::fs::read_to_string(&marker)
         .ok()
@@ -62,15 +64,17 @@ pub fn resume_if_interrupted() {
         (Some(staging), Some(remote)) if staging.exists() => {
             crate::log("resuming staged update apply (from pendrive marker)");
             let sel = update::read_selection();
-            apply_plan(&root, &staging, &remote, &sel, None);
+            let ok = apply_plan(&root, &staging, &remote, &sel, None);
             let _ = std::fs::remove_file(&jp);
             update::clear_pending_marker();
+            ok
         }
         _ => {
             crate::log("stale update marker — staging gone; keeping current version");
             let _ = std::fs::remove_file(&jp);
             update::clear_pending_marker();
             cleanup_orphans(&root);
+            false
         }
     }
 }
