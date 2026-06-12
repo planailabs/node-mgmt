@@ -9,11 +9,11 @@ version = "0.1.0"
 edition = "2024"
 description = "plan.ai USB daemon: spawn-from-mount services + heartbeat/probe/relay control plane"
 
-# Keep the historical binary name: the launcher resolves
-# <PLANAI_RESOURCES>/usbd/mac-mgmt[.exe] and spawns it with a leading `usbd`
-# arg (launcher/src/usbd.rs) — a contract from when this was `mac-mgmt usbd`.
+# The launcher resolves <PLANAI_RESOURCES>/usbd/usbd[.exe] (falling back to
+# the legacy `mac-mgmt[.exe]` name from when this lived in the mac-mgmt
+# daemon) and spawns it with a leading `usbd` arg (launcher/src/usbd.rs).
 [[bin]]
-name = "mac-mgmt"
+name = "usbd"
 path = "src/main.rs"
 
 [dependencies]
@@ -54,5 +54,7 @@ dioxus-i18n = { git = "https://github.com/mkg20001/dioxus-i18n.git", rev = "19c3
 
 [profile.release]
 opt-level = "z"
-lto = true
+# thin, not fat: fat LTO on this graph (libp2p + memvault + axum) costs ~8min
+# of single-threaded link time for a few hundred KB on a ~50MB binary.
+lto = "thin"
 strip = true

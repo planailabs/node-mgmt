@@ -148,8 +148,8 @@ in
   # ow-assets: linux squashfs + mac dmg (source = the store-imported hf+nltk assets)
   "ow-assets-squashfs" = mkSqfs "ow-assets" (stores.ow-assets or (throw "ow-assets not imported"));
   "ow-assets-dmg" = mkDmg { name = "ow-assets"; src = stores.ow-assets or (throw "ow-assets not imported"); };
-  # usbd: the plan.ai USB daemon binary at the component root (mac-mgmt[.exe]), so
-  # the launcher resolves <usbd>/mac-mgmt[.exe] under PLANAI_RESOURCES. Per-TARGET
+  # usbd: the plan.ai USB daemon binary at the component root (usbd[.exe]), so
+  # the launcher resolves <usbd>/usbd[.exe] under PLANAI_RESOURCES. Per-TARGET
   # in the shared pool (like runtime-*) so two linux arches don't collide; bundle.sh
   # renames the matching one to the fixed `usbd` name in each OS group dir. Per-OS
   # formats: linux squashfs, mac dmg, win dir. Win/mac/linux-arm64 are cross-built

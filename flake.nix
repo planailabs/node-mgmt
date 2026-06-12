@@ -536,7 +536,7 @@
           cargoRoot = "usbd";
           buildAndTestSubdir = "usbd";
           doCheck = false;
-          cargoBuildFlags = [ "--bin" "mac-mgmt" ];
+          cargoBuildFlags = [ "--bin" "usbd" ];
           # nodejs + tailwindcss_3: memvault-web's build.rs runs `npm run
           # tailwind:build` (mac-mgmt-agent's `memvault` feature pulls
           # memvault-web). Matches mac-mgmt's own overlay.nix daemon build inputs.
@@ -548,13 +548,13 @@
         };
         # `usbd` packaged as a launcher component: the binary at the component
         # ROOT (`mac-mgmt`), so when the launcher mounts `usbd.squashfs` at
-        # `<dist>/usbd/` the daemon lands at `PLANAI_RESOURCES/usbd/mac-mgmt` —
+        # `<dist>/usbd/` the daemon lands at `PLANAI_RESOURCES/usbd/usbd` —
         # exactly where `usbd::resolve_bin()` looks. Packed into a squashfs by the
         # bundle like the other components (runtime/ollama/ow-assets).
         usbdComponent = pkgs.runCommand "plan-ai-usbd-component" { } ''
           mkdir -p "$out"
-          cp ${usbd}/bin/mac-mgmt "$out/mac-mgmt"
-          chmod +x "$out/mac-mgmt"
+          cp ${usbd}/bin/usbd "$out/usbd"
+          chmod +x "$out/usbd"
         '';
         # Cross-compiled usb daemon for win/mac, built with cargo-zigbuild like the
         # launcher. macOS is Unix so the daemon source compiles unchanged; Windows
@@ -592,7 +592,7 @@
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
               export CARGO_TARGET_DIR="$PWD/target"
               cargo zigbuild --release --offline --target ${rustTarget} \
-                --manifest-path usbd/Cargo.toml --bin mac-mgmt
+                --manifest-path usbd/Cargo.toml --bin usbd
               runHook postBuild
             '';
             installPhase = ''
@@ -602,30 +602,30 @@
               runHook postInstall
             '';
           } // extraEnv);
-        usbd-win-x64 = usbdFor { rustTarget = "x86_64-pc-windows-gnu"; exe = "mac-mgmt.exe"; };
+        usbd-win-x64 = usbdFor { rustTarget = "x86_64-pc-windows-gnu"; exe = "usbd.exe"; };
         usbd-mac-arm64 = usbdFor {
-          rustTarget = "aarch64-apple-darwin"; exe = "mac-mgmt";
+          rustTarget = "aarch64-apple-darwin"; exe = "usbd";
           extraEnv = { SDKROOT = macosx-sdk; };
         };
         # linux-arm64: cross-compiled (the native `usbd` above covers the x86_64
         # host). glibc like the native build — the daemon runs inside the launcher's
         # FHS namespace on NixOS, where glibc is present.
-        usbd-linux-arm64 = usbdFor { rustTarget = "aarch64-unknown-linux-gnu"; exe = "mac-mgmt"; };
+        usbd-linux-arm64 = usbdFor { rustTarget = "aarch64-unknown-linux-gnu"; exe = "usbd"; };
         # Cross usbd packaged as launcher components (binary at the component ROOT,
         # like `usbdComponent`), so the launcher finds `<usbd>/mac-mgmt[.exe]`.
         usbdComponent-win-x64 = pkgs.runCommand "plan-ai-usbd-component-win-x64" { } ''
           mkdir -p "$out"
-          cp ${usbd-win-x64}/bin/mac-mgmt.exe "$out/mac-mgmt.exe"
+          cp ${usbd-win-x64}/bin/usbd.exe "$out/usbd.exe"
         '';
         usbdComponent-mac-arm64 = pkgs.runCommand "plan-ai-usbd-component-mac-arm64" { } ''
           mkdir -p "$out"
-          cp ${usbd-mac-arm64}/bin/mac-mgmt "$out/mac-mgmt"
-          chmod +x "$out/mac-mgmt"
+          cp ${usbd-mac-arm64}/bin/usbd "$out/usbd"
+          chmod +x "$out/usbd"
         '';
         usbdComponent-linux-arm64 = pkgs.runCommand "plan-ai-usbd-component-linux-arm64" { } ''
           mkdir -p "$out"
-          cp ${usbd-linux-arm64}/bin/mac-mgmt "$out/mac-mgmt"
-          chmod +x "$out/mac-mgmt"
+          cp ${usbd-linux-arm64}/bin/usbd "$out/usbd"
+          chmod +x "$out/usbd"
         '';
         # Shared dev-leg toolchain + env (nix/dev-env.nix), consumed by both the
         # interactive devshell and the bundled Docker image below.

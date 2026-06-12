@@ -26,13 +26,22 @@ pub fn resolve_bin() -> Option<PathBuf> {
         }
     }
     let res = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from)?;
-    let name = if cfg!(windows) { "mac-mgmt.exe" } else { "mac-mgmt" };
-    for c in [
-        res.join("usbd").join(name),
-        res.join("usbd").join("bin").join(name),
-    ] {
-        if c.exists() {
-            return Some(c);
+    // `usbd[.exe]` is the binary's name; `mac-mgmt[.exe]` is the legacy name
+    // from when the daemon lived in the mac-mgmt CLI — accept both so either
+    // side of an update window works.
+    let names: &[&str] = if cfg!(windows) {
+        &["usbd.exe", "mac-mgmt.exe"]
+    } else {
+        &["usbd", "mac-mgmt"]
+    };
+    for name in names {
+        for c in [
+            res.join("usbd").join(name),
+            res.join("usbd").join("bin").join(name),
+        ] {
+            if c.exists() {
+                return Some(c);
+            }
         }
     }
     None
