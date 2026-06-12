@@ -156,7 +156,20 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
 /// Call BEFORE the tokio runtime (single-threaded) — it sets env the daemon
 /// child inherits.
 pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
-    let home = crate::cache_root().join("usbd-home");
+    // The daemon home is DATA (Config-tab config.json, the SSH host key that
+    // IS the instance identity, memvault store, hermes home) — it lives on
+    // the stick (data/usbd), not in the per-host cache, so it travels with
+    // the drive. One-time migration from the old cache location.
+    let home = crate::paths::data_dir().join("usbd");
+    let legacy = crate::cache_root().join("usbd-home");
+    if !home.exists() && legacy.is_dir() {
+        match std::fs::rename(&legacy, &home) {
+            Ok(()) => log("usbd: migrated home from the host cache to data/usbd"),
+            // EXDEV (different filesystems) and friends: fall through to a
+            // fresh home — the old one only held a host-local identity.
+            Err(e) => log(&format!("usbd: home migration skipped: {e}")),
+        }
+    }
     if let Err(e) = std::fs::create_dir_all(&home) {
         log(&format!("usbd: create home failed: {e}"));
         return None;

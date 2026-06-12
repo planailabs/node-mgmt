@@ -114,10 +114,14 @@ fn run_main(mut args: Vec<String>) -> Result<()> {
         .with_context(|| format!("create home dir {}", home.display()))?;
 
     // Pin everything to the stick: HOME drives the supervisor socket, host key,
-    // and config dir. Done single-threaded, before the runtime.
+    // and config dir. MAC_MGMT_CONFIG_DIR is pinned explicitly too — on
+    // windows dirs::home_dir() ignores the HOME env var, so the agent's
+    // config/host-key dir would otherwise land in the host profile. Done
+    // single-threaded, before the runtime.
     // SAFETY: single-threaded startup, before the tokio runtime.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::set_var("MAC_MGMT_CONFIG_DIR", home.join(".config").join("mac-mgmt"));
     }
 
     let offline = cli.offline || env_flag("MAC_MGMT_OFFLINE");
