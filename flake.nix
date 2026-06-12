@@ -435,13 +435,11 @@
           chmod +x "$out/bin/"*
         '';
 
-        # The plan.ai USB daemon (`mac-mgmt usbd`): the reduced phone-home control
+        # The plan.ai USB daemon (`usbd`): the reduced phone-home control
         # plane the launcher spawns (it owns the supervisor + spawn-from-mount
         # services + heartbeat/probe/relay/config-sync). Built NATIVELY for the
-        # host — the linux `make test-nixos` runs it; win/mac usbd shipping is a
-        # follow-up (the launcher falls back to its own supervisor there). The
-        # daemon has a large dep tree (libp2p/memvault/russh), so the first build
-        # is slow; the git-dep hashes come from mac-mgmt's own extra-hashes.nix.
+        # host — the linux `make test-nixos` runs it. The daemon has a large
+        # dep tree (libp2p/memvault/russh), so the first build is slow.
         # memvault's build.rs embeds a precompiled wasm "extract guest"; building it
         # at daemon-build time fails in the sandbox (needs the wasm target + offline
         # cargo). mac-mgmt's own build sidesteps this by passing a prebuilt wasm via
@@ -465,24 +463,41 @@
             runHook postInstall
           '';
         };
+        # usbd is its own package (usbd/) on top of the mac-mgmt-agent crate
+        # from the submodule, so the build no longer compiles the daemon CLI
+        # blob (rocket/MCP servers/plan-ai-cloud/dashboard). The source is
+        # stitched: usbd/ beside the FULL third_party/mac-mgmt tree (incl. the
+        # nested memvault submodule and the workspace root Cargo.toml — cargo
+        # loads that root for the member path deps mac-mgmt-agent/common/
+        # mac-mgmt-services, and memvault crates resolve as ../memvault/…).
+        # Network parts (heartbeat/relay/sync) are a RUNTIME toggle
+        # (USBD_NETWORKED, set by the launcher from the drive's "mgmt" feature).
+        usbdSrc = pkgs.runCommand "plan-ai-usbd-src" { } ''
+          mkdir -p "$out/third_party"
+          cp -r ${./usbd} "$out/usbd"
+          cp -r ${./third_party/mac-mgmt} "$out/third_party/mac-mgmt"
+        '';
+        # the dioxus-fork git-dep hashes for usbd/Cargo.lock (memvault-web pins
+        # them; [patch.crates-io] lives in usbd/Cargo.toml since patches don't
+        # apply transitively). Same hashes as the SPA build.
+        usbdGitHashes = import ./usbd/cargo-git-hashes.nix {
+          inherit dioxusHash dioxusI18nHash;
+        };
         usbd = pkgs.rustPlatform.buildRustPackage {
-          pname = "mac-mgmt-usbd";
+          pname = "plan-ai-usbd";
           version = "0.1.0";
-          src = ./third_party/mac-mgmt;
+          src = usbdSrc;
           cargoLock = {
-            lockFile = ./third_party/mac-mgmt/Cargo.lock;
-            outputHashes = import ./third_party/mac-mgmt/extra-hashes.nix;
+            lockFile = ./usbd/Cargo.lock;
+            outputHashes = usbdGitHashes;
           };
-          buildAndTestSubdir = "daemon";
-          buildNoDefaultFeatures = true;
-          # Network parts (heartbeat/relay/sync) are a RUNTIME toggle now
-          # (USBD_NETWORKED, set by the launcher from the drive's "mgmt" feature).
-          buildFeatures = [ "usbd" ];
+          cargoRoot = "usbd";
+          buildAndTestSubdir = "usbd";
           doCheck = false;
           cargoBuildFlags = [ "--bin" "mac-mgmt" ];
           # nodejs + tailwindcss_3: memvault-web's build.rs runs `npm run
-          # tailwind:build` (the `memvault` feature pulls memvault-web). Matches
-          # mac-mgmt's own overlay.nix daemon build inputs.
+          # tailwind:build` (mac-mgmt-agent's `memvault` feature pulls
+          # memvault-web). Matches mac-mgmt's own overlay.nix daemon build inputs.
           nativeBuildInputs = [ pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3 ];
           buildInputs = [ pkgs.openssl ];
           PROTOC = "${pkgs.protobuf}/bin/protoc";
@@ -508,13 +523,14 @@
         # `usbd` above.
         usbdFor = { rustTarget, exe, extraEnv ? { } }:
           crossRustPlatform.buildRustPackage ({
-            pname = "mac-mgmt-usbd-${rustTarget}";
+            pname = "plan-ai-usbd-${rustTarget}";
             version = "0.1.0";
-            src = ./third_party/mac-mgmt;
+            src = usbdSrc;
             cargoLock = {
-              lockFile = ./third_party/mac-mgmt/Cargo.lock;
-              outputHashes = import ./third_party/mac-mgmt/extra-hashes.nix;
+              lockFile = ./usbd/Cargo.lock;
+              outputHashes = usbdGitHashes;
             };
+            cargoRoot = "usbd";
             doCheck = false;
             # Disable cargo-auditable (on by default in nixpkgs' buildRustPackage):
             # it injects `-Wl,--undefined=AUDITABLE_VERSION_INFO` to retain an embedded
@@ -532,9 +548,9 @@
             buildPhase = ''
               runHook preBuild
               export HOME="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
+              export CARGO_TARGET_DIR="$PWD/target"
               cargo zigbuild --release --offline --target ${rustTarget} \
-                -p mac-mgmt --bin mac-mgmt \
-                --no-default-features --features usbd
+                --manifest-path usbd/Cargo.toml --bin mac-mgmt
               runHook postBuild
             '';
             installPhase = ''
@@ -581,7 +597,7 @@
           #   nix build .#devshell-image && docker load < result
           devshell-image = import ./nix/docker.nix { inherit pkgs lib devEnv; };
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
-          inherit usbd usbdComponent;
+          inherit usbd usbdComponent memvaultExtractGuestWasm;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
           inherit usbdComponent-win-x64 usbdComponent-mac-arm64 usbdComponent-linux-arm64;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };
@@ -641,9 +657,8 @@
           shellHook = ''
             export CARGO_TARGET_DIR="$PWD/dist/.usbd-win-target"
             echo "usbd-win: cargo-zigbuild cross shell. Target dir: $CARGO_TARGET_DIR"
-            echo "  cd third_party/mac-mgmt && cargo zigbuild --release \\"
-            echo "    --target x86_64-pc-windows-gnu -p mac-mgmt --bin mac-mgmt \\"
-            echo "    --no-default-features --features usbd"
+            echo "  cargo zigbuild --release --manifest-path usbd/Cargo.toml \\"
+            echo "    --target x86_64-pc-windows-gnu --bin mac-mgmt"
           '';
         };
         # macOS cross-build harness for the usb daemon. macOS is Unix, so the
@@ -661,9 +676,8 @@
           shellHook = ''
             export CARGO_TARGET_DIR="$PWD/dist/.usbd-mac-target"
             echo "usbd-mac: cargo-zigbuild cross shell. Target dir: $CARGO_TARGET_DIR"
-            echo "  cd third_party/mac-mgmt && cargo zigbuild --release \\"
-            echo "    --target aarch64-apple-darwin -p mac-mgmt --bin mac-mgmt \\"
-            echo "    --no-default-features --features usbd"
+            echo "  cargo zigbuild --release --manifest-path usbd/Cargo.toml \\"
+            echo "    --target aarch64-apple-darwin --bin mac-mgmt"
           '';
         };
       });
