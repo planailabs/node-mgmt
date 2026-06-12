@@ -31,6 +31,7 @@ __pycache__/
 /spinner/target/
 /xtask/target/
 /mock-server/target/
+/usbd/target/
 /crates/*/target/
 /build.ninja
 /.ninja_log

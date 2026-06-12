@@ -1,0 +1,58 @@
+# The plan.ai USB daemon (`usbd`): the reduced phone-home control plane for
+# this stack, moved here from mac-mgmt's daemon crate (its old `usbd` feature).
+# The heavy machinery (assessment/heartbeat, supervisor, relay, embedded
+# memvault) comes from mac-mgmt-agent in the vendored submodule — so building
+# this package no longer builds the daemon's CLI/dashboard/MCP/cloud surface.
+[package]
+name = "plan-ai-usbd"
+version = "0.1.0"
+edition = "2024"
+description = "plan.ai USB daemon: spawn-from-mount services + heartbeat/probe/relay control plane"
+
+# Keep the historical binary name: the launcher resolves
+# <PLANAI_RESOURCES>/usbd/mac-mgmt[.exe] and spawns it with a leading `usbd`
+# arg (launcher/src/usbd.rs) — a contract from when this was `mac-mgmt usbd`.
+[[bin]]
+name = "mac-mgmt"
+path = "src/main.rs"
+
+[dependencies]
+mac-mgmt-agent = { path = "../third_party/mac-mgmt/mac-mgmt-agent", features = ["services", "relay", "memvault"] }
+mac-mgmt-common = { path = "../third_party/mac-mgmt/common", features = ["sentry"] }
+mac-mgmt-services = { path = "../third_party/mac-mgmt/mac-mgmt-services" }
+# the memvault management CLI (the `memctl` subcommand); already in the graph
+# via mac-mgmt-agent/memvault — this just makes its entrypoint nameable
+memctl = { path = "../third_party/mac-mgmt/memvault/crates/memctl", default-features = false }
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+humantime = "2"
+rand = "0.9"
+# same specs as mac-mgmt-agent so the graph unifies (rustls RING provider,
+# no aws-lc — see the launcher's reqwest comment)
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "query"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+schemars = { version = "1.2.1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# memvault-web (pulled by mac-mgmt-agent's `memvault` feature) is a Dioxus
+# 0.8-alpha app pinned to forks. [patch.crates-io] does not apply transitively
+# - it must live in the top-level manifest of whoever builds the graph - so
+# replicate memvault's patch set here, pinned by rev to the exact commits in
+# third_party/mac-mgmt/Cargo.lock (keeps the nix vendor hashes identical to
+# the flake's dioxusHash/dioxusI18nHash).
+[patch.crates-io]
+dioxus = { git = "https://github.com/mkg20001/dioxus.git", rev = "fed1de770a7b9723cef87c38dc5f61fca73f6a90" }
+dioxus-server = { git = "https://github.com/mkg20001/dioxus.git", rev = "fed1de770a7b9723cef87c38dc5f61fca73f6a90" }
+dioxus-i18n = { git = "https://github.com/mkg20001/dioxus-i18n.git", rev = "19c308daa1677760b88eda2877e50c56d4380924" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
