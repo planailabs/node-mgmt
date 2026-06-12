@@ -3,12 +3,14 @@
 # irrelevant — we take only the DLLs; they're version-agnostic), so a portable
 # kiosk that can't assume the VC++ redist is installed can carry them itself.
 #
-# Two consumers, one pin:
+# Three consumers, one pin:
 #   - nix/runtime.nix: bundle the full C++ runtime into the python root so torch
 #     loads (its torch_cpu/torch_python.dll link MSVCP140* — see runtime.nix).
 #   - flake.nix (llmfit-win-x64): ship vcruntime140*.dll beside llmfit.exe. It's an
 #     msvc-linked rust binary, so it dynamically links VCRUNTIME140.dll; on a machine
 #     with no VC++ redist it dies with "VCRUNTIME140.dll was not found" before main().
+#   - nix/builds.nix (llamacpp-windows-*-dir): upstream's win zips ship no C++
+#     runtime; drop the redist DLLs beside llama-server.exe.
 #
 # Bump: pick a newer msvc_runtime wheel from PyPI, then update url + hash here.
 { pkgs }:

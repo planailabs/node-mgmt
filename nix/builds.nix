@@ -80,6 +80,17 @@ let
   llamacppComponents = flake.packages.${builtins.currentSystem}.llamacppComponents;
   mkLlamacppDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
     "mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out";
+  # windows flavours: upstream's win zips don't ship the MSVC C++ runtime, and
+  # llama-server.exe links VCRUNTIME140/MSVCP140 — on a machine without the VC++
+  # redist it dies before main(). Drop the shared-pinned redist DLLs
+  # (nix/msvc-runtime.nix, same pin as the python runtime + llmfit.exe) at the
+  # component root beside llama-server.exe. -n: never clobber a DLL upstream
+  # starts shipping itself.
+  msvcDlls = (import ./msvc-runtime.nix { inherit pkgs; }).dlls;
+  mkLlamacppWinDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
+    mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out
+    cp -n ${msvcDlls}/*.dll $out/
+  '';
 
   # --- mac launcher .app, wrapped + ad-hoc signed in nix ---------------------
   # The standalone launcher binary is already nix (launcher-mac-arm64). Wrap it in
@@ -156,8 +167,8 @@ in
   "llamacpp-linux-arm64-squashfs" = mkSqfs "llamacpp-linux-arm64" (mkLlamacppDir "linux-arm64");
   "llamacpp-linux-arm64-vulkan-squashfs" = mkSqfs "llamacpp-linux-arm64-vulkan" (mkLlamacppDir "linux-arm64-vulkan");
   "llamacpp-darwin-dmg" = mkDmg { name = "llamacpp-darwin"; src = mkLlamacppDir "darwin"; };
-  "llamacpp-windows-amd64-dir" = mkLlamacppDir "windows-amd64";
-  "llamacpp-windows-amd64-vulkan-dir" = mkLlamacppDir "windows-amd64-vulkan";
+  "llamacpp-windows-amd64-dir" = mkLlamacppWinDir "windows-amd64";
+  "llamacpp-windows-amd64-vulkan-dir" = mkLlamacppWinDir "windows-amd64-vulkan";
 
   # hermes: the optional hermes-agent component (feature "hermes", default-off in
   # platforms.json — not on the image / not downloaded until enabled). Source is
