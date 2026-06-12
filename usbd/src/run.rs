@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use mac_mgmt_common::{DaemonConfig, UsbConfig};
+use mac_mgmt_common::DaemonConfig;
+use crate::usb_config::UsbConfig;
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio::time;
 
@@ -103,10 +104,12 @@ fn info_snapshot(ports: &ResolvedPorts, memvault_url: &Option<String>) -> InfoSn
         webui_port: ports.openwebui,
         memvault_port: ports.memvault,
         hermes_port: ports.hermes,
+        hermes_webui_port: ports.hermes_webui,
         llamacpp_port: ports.llamacpp,
         webui_url: ports.openwebui.map(|p| format!("http://127.0.0.1:{p}")),
         memvault_url: memvault_url.clone(),
         hermes_url: ports.hermes.map(|p| format!("http://127.0.0.1:{p}")),
+        hermes_webui_url: ports.hermes_webui.map(|p| format!("http://127.0.0.1:{p}")),
         llamacpp_url: ports.llamacpp.map(|p| format!("http://127.0.0.1:{p}")),
     }
 }

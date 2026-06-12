@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use mac_mgmt_common::UsbConfig;
+use crate::usb_config::UsbConfig;
 
 /// Config read candidates, in priority order: explicit `--config`,
 /// `<home>/config.json` (UI-editable), `<home>/config.toml`.

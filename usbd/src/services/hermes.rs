@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use anyhow::Result;
-use mac_mgmt_common::{OllamaConfig, UsbHermesConfig};
+use crate::usb_config::UsbHermesConfig;
+use mac_mgmt_common::OllamaConfig;
 
 use super::{resolve_port, Resources};
 use mac_mgmt_agent::managed_service::{ManagedService, ServiceMode, SpawnSpec, TunnelDef};

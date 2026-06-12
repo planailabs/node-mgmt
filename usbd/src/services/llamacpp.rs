@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use anyhow::Result;
-use mac_mgmt_common::UsbLlamaCppConfig;
+use crate::usb_config::UsbLlamaCppConfig;
 
 use super::{resolve_port, Resources};
 use mac_mgmt_agent::managed_service::{ManagedService, ServiceMode, SpawnSpec, TunnelDef};

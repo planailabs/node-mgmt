@@ -17,7 +17,7 @@ use axum::{
 use serde::Deserialize;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
-use mac_mgmt_common::UsbConfig;
+use crate::usb_config::UsbConfig;
 
 /// Effective runtime facts the dashboard shows (`GET /info`). Ports are the
 /// **resolved** ports (after any collision fallback), so links always work.
@@ -27,10 +27,12 @@ pub struct InfoSnapshot {
     pub webui_port: Option<u16>,
     pub memvault_port: Option<u16>,
     pub hermes_port: Option<u16>,
+    pub hermes_webui_port: Option<u16>,
     pub llamacpp_port: Option<u16>,
     pub webui_url: Option<String>,
     pub memvault_url: Option<String>,
     pub hermes_url: Option<String>,
+    pub hermes_webui_url: Option<String>,
     pub llamacpp_url: Option<String>,
 }
 

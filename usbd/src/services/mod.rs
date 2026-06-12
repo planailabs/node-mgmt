@@ -11,6 +11,7 @@
 //! inventory can never disagree.
 
 pub mod hermes;
+pub mod hermes_webui;
 pub mod llamacpp;
 pub mod memvault;
 pub mod ollama;
@@ -19,7 +20,7 @@ pub mod open_webui;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mac_mgmt_common::UsbConfig;
+use crate::usb_config::UsbConfig;
 
 use mac_mgmt_agent::managed_service::ManagedService;
 
@@ -48,6 +49,9 @@ pub struct Resources {
     pub hermes_python: PathBuf,
     /// `<resources>/hermes/share/web_dist` — the hermes dashboard SPA.
     pub hermes_web_dist: PathBuf,
+    /// `<resources>/hermes-webui` — the hermes web UI component (pure python/
+    /// static sources, run with the hermes component's python).
+    pub hermes_webui_dir: PathBuf,
     /// The mounted llama.cpp component's `llama-server` (optional "llamacpp"
     /// feature; GPU flavour picked by the launcher).
     pub llamacpp_bin: PathBuf,
@@ -101,6 +105,8 @@ impl Resources {
         });
         let hermes_web_dist = env_path("PLANAI_HERMES_WEB_DIST")
             .unwrap_or_else(|| hermes_root.join("share").join("web_dist"));
+        let hermes_webui_dir = env_path("PLANAI_HERMES_WEBUI_DIR")
+            .unwrap_or_else(|| res_root.join("hermes-webui"));
 
         let server_name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
         let llamacpp_bin = env_path("PLANAI_LLAMACPP_BIN").unwrap_or_else(|| {
@@ -129,6 +135,7 @@ impl Resources {
                 .filter(|s| !s.is_empty()),
             hermes_python,
             hermes_web_dist,
+            hermes_webui_dir,
             llamacpp_bin,
         }
     }
@@ -161,6 +168,7 @@ pub struct ResolvedPorts {
     pub openwebui: Option<u16>,
     pub memvault: Option<u16>,
     pub hermes: Option<u16>,
+    pub hermes_webui: Option<u16>,
     pub llamacpp: Option<u16>,
 }
 
@@ -192,6 +200,18 @@ pub fn build_usb_services(
         ports.hermes = Some(svc.port());
         services.push(Arc::new(svc));
     }
+    if cfg.hermes.enabled && cfg.hermes.webui_enabled {
+        if res.hermes_webui_dir.join("bootstrap.py").exists() {
+            let svc = hermes_webui::UsbHermesWebuiService::new(&cfg.hermes, res);
+            ports.hermes_webui = Some(svc.port());
+            services.push(Arc::new(svc));
+        } else {
+            tracing::warn!(
+                dir = %res.hermes_webui_dir.display(),
+                "hermes.webui_enabled but the hermes-webui component is not mounted — skipping"
+            );
+        }
+    }
     if cfg.llamacpp.enabled {
         let svc = llamacpp::UsbLlamaCppService::new(&cfg.llamacpp, res);
         ports.llamacpp = Some(svc.port());
@@ -217,6 +237,7 @@ mod tests {
             data_dir: PathBuf::from("/data/webui"),
             child_ld_library_path: None,
             hermes_python: PathBuf::from("/mnt/res/hermes/python/bin/python3"),
+            hermes_webui_dir: PathBuf::from("/mnt/res/hermes-webui"),
             hermes_web_dist: PathBuf::from("/mnt/res/hermes/share/web_dist"),
             llamacpp_bin: PathBuf::from("/mnt/res/llamacpp/build/bin/llama-server"),
         }

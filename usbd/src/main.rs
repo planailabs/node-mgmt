@@ -17,6 +17,7 @@
 //! on macOS, so a future event loop could own the main thread).
 
 mod config;
+mod usb_config;
 mod control;
 mod run;
 mod services;
