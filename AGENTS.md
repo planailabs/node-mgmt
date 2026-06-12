@@ -72,7 +72,7 @@ no trusted-user requirement. `make dev` covers local NixOS iteration.
 - **Rust launcher = control plane** (`launcher/`, static-musl on linux, cross-built
   for win/mac via cargo-zigbuild). On every platform it: mounts/extracts the
   `components/` it needs, sets `PLANAI_RESOURCES`, starts the **supervisor**
-  (`mac-mgmt-services`, a flake input) which spawns + restarts ollama + uvicorn,
+  (`mac-mgmt-services`, from the third_party/mac-mgmt submodule) which spawns + restarts ollama + uvicorn,
   serves the embedded SPA + control API on `127.0.0.1` (`PLANAI_UI_PORT`, default
   8088), exports `PLANAI_UI_URL`, then runs Electron. `launcher/src/`:
   `config.rs` (child env), `paths.rs` (resource resolution), `control.rs`
