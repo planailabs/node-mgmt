@@ -48,6 +48,22 @@ struct RealApi {
     /// gracefully). Set from `PLANAI_USBD_URL` by the launcher when it spawns
     /// the daemon.
     usbd_url: Option<String>,
+    /// Model-download jobs (id → state). llmfit's serve API has NO download
+    /// or installed endpoints (v0.9.x) — the launcher owns the downloads:
+    /// `ollama pull` via the local server's API first, and when the model
+    /// isn't in the ollama registry, a GGUF download for llama.cpp via the
+    /// llmfit BINARY (`llmfit download --output-dir <models>/gguf`).
+    downloads: Arc<std::sync::Mutex<std::collections::HashMap<String, DlJob>>>,
+    dl_seq: std::sync::atomic::AtomicU64,
+}
+
+/// State of one model download, polled by the SPA via
+/// `GET /api/llmfit/download/<id>/status` (status/progress_pct/message).
+#[derive(Clone, Default)]
+struct DlJob {
+    status: String,
+    progress_pct: f64,
+    message: String,
 }
 
 /// Start the control server. Returns the base URL; the server runs on a task.
@@ -71,6 +87,8 @@ pub async fn run_server(
         apply_requested,
         electron,
         usbd_url: std::env::var("PLANAI_USBD_URL").ok(),
+        downloads: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        dl_seq: std::sync::atomic::AtomicU64::new(1),
     });
 
     // Drain supervisor notifications → fan out to the SSE log subscribers.
@@ -339,11 +357,65 @@ impl ControlApi for RealApi {
 
     fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send {
         let base = self.llmfit_url.clone();
-        async move { proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await }
+        let downloads = self.downloads.clone();
+        // llmfit serve only exposes system/models endpoints — installed +
+        // download status are launcher-owned (see `downloads`).
+        async move {
+            if path.starts_with("/api/v1/installed") {
+                return installed_reply().await;
+            }
+            if let Some(id) =
+                path.strip_prefix("/api/v1/download/").and_then(|r| r.strip_suffix("/status"))
+            {
+                let job = downloads.lock().unwrap().get(id).cloned();
+                return match job {
+                    Some(j) => ProxyReply {
+                        status: 200,
+                        body: serde_json::json!({
+                            "status": j.status, "progress_pct": j.progress_pct, "message": j.message,
+                        })
+                        .to_string()
+                        .into_bytes(),
+                    },
+                    None => err_reply(404, "unknown download id"),
+                };
+            }
+            proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await
+        }
     }
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
         let base = self.llmfit_url.clone();
-        async move { proxy_or_unavailable(base, |b| async move { proxy::post(&b, &path, &body).await }).await }
+        let local: Option<ProxyReply> = if path.starts_with("/api/v1/download") {
+            let model = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from));
+            Some(match model {
+                Some(model) => {
+                    let id = format!(
+                        "dl-{}",
+                        self.dl_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    );
+                    self.downloads.lock().unwrap().insert(
+                        id.clone(),
+                        DlJob { status: "starting".into(), progress_pct: 0.0, message: String::new() },
+                    );
+                    tokio::spawn(run_download(self.downloads.clone(), id.clone(), model));
+                    ProxyReply {
+                        status: 200,
+                        body: serde_json::json!({ "id": id }).to_string().into_bytes(),
+                    }
+                }
+                None => err_reply(422, "missing \"model\""),
+            })
+        } else {
+            None
+        };
+        async move {
+            match local {
+                Some(r) => r,
+                None => proxy_or_unavailable(base, |b| async move { proxy::post(&b, &path, &body).await }).await,
+            }
+        }
     }
 
     fn config(&self) -> impl Future<Output = serde_json::Value> + Send {
@@ -417,6 +489,148 @@ where
     match call(b).await {
         Ok(r) => ProxyReply { status: r.status, body: r.body },
         Err(e) => err_reply(502, &format!("llmfit proxy: {e}")),
+    }
+}
+
+/// The local ollama server's base url (the RESOLVED running port).
+fn ollama_base() -> String {
+    format!("http://{}:{}", crate::config::OLLAMA_HOST, crate::running_ollama_port())
+}
+
+/// `GET /api/llmfit/installed` — the models the local ollama server has
+/// (its `/api/tags`), as the `{"installed": [names]}` shape the SPA expects.
+async fn installed_reply() -> ProxyReply {
+    let url = format!("{}/api/tags", ollama_base());
+    let names: Vec<String> = match proxy::get(&url, "").await {
+        Ok(r) => serde_json::from_slice::<serde_json::Value>(&r.body)
+            .ok()
+            .and_then(|v| {
+                v.get("models").and_then(|m| m.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    ProxyReply {
+        status: 200,
+        body: serde_json::json!({ "installed": names }).to_string().into_bytes(),
+    }
+}
+
+type DlMap = Arc<std::sync::Mutex<std::collections::HashMap<String, DlJob>>>;
+
+fn dl_set(map: &DlMap, id: &str, status: &str, pct: f64, msg: &str) {
+    if let Some(j) = map.lock().unwrap().get_mut(id) {
+        j.status = status.into();
+        j.progress_pct = pct;
+        j.message = msg.into();
+    }
+}
+
+/// One model download: `ollama pull` through the local server (streamed for
+/// progress); when the model isn't in the ollama registry, fall back to a
+/// GGUF download for llama.cpp via the llmfit binary (best-quant selection),
+/// into `<models>/gguf/` where the usbd llama.cpp service finds it.
+async fn run_download(map: DlMap, id: String, model: String) {
+    use futures_util::StreamExt;
+
+    dl_set(&map, &id, "downloading", 0.0, "ollama pull");
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/pull", ollama_base());
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "model": model, "stream": true }))
+        .send()
+        .await;
+
+    let mut registry_miss = false;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            // ndjson stream: {"status":..., "total":..., "completed":...}
+            let mut stream = r.bytes_stream();
+            let mut buf = Vec::new();
+            let mut failed: Option<String> = None;
+            while let Some(chunk) = stream.next().await {
+                let Ok(chunk) = chunk else { break };
+                buf.extend_from_slice(&chunk);
+                while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=nl).collect();
+                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else { continue };
+                    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                        failed = Some(err.to_string());
+                        continue;
+                    }
+                    let st = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                    let pct = match (
+                        v.get("completed").and_then(|c| c.as_f64()),
+                        v.get("total").and_then(|t| t.as_f64()),
+                    ) {
+                        (Some(c), Some(t)) if t > 0.0 => c / t * 100.0,
+                        _ => 0.0,
+                    };
+                    if st == "success" {
+                        dl_set(&map, &id, "complete", 100.0, "pulled into ollama");
+                        return;
+                    }
+                    dl_set(&map, &id, "downloading", pct, st);
+                }
+            }
+            match failed {
+                // "file does not exist" / "pull model manifest" errors mean the
+                // model isn't in the ollama registry → try the GGUF fallback.
+                Some(e) => {
+                    crate::log(&format!("ollama pull {model}: {e} — trying GGUF fallback"));
+                    registry_miss = true;
+                }
+                None => {
+                    // stream ended without an explicit success — assume done.
+                    dl_set(&map, &id, "complete", 100.0, "pulled into ollama");
+                    return;
+                }
+            }
+        }
+        Ok(r) => {
+            crate::log(&format!("ollama pull {model}: HTTP {} — trying GGUF fallback", r.status()));
+            registry_miss = true;
+        }
+        Err(e) => {
+            crate::log(&format!("ollama pull {model}: {e} — trying GGUF fallback"));
+            registry_miss = true;
+        }
+    }
+
+    if !registry_miss {
+        return;
+    }
+    let Some(lf) = std::env::var_os("PLANAI_LLMFIT_BIN").map(std::path::PathBuf::from) else {
+        dl_set(&map, &id, "failed", 0.0, "not in the ollama registry and llmfit is unavailable");
+        return;
+    };
+    let gguf_dir = crate::paths::models_dir().join("gguf");
+    let _ = std::fs::create_dir_all(&gguf_dir);
+    dl_set(&map, &id, "downloading", 0.0, "GGUF from HuggingFace (for llama.cpp)");
+    let model2 = model.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(lf)
+            .args(["download", &model2, "--output-dir"])
+            .arg(&gguf_dir)
+            .arg("--json")
+            .output()
+    })
+    .await;
+    match out {
+        Ok(Ok(o)) if o.status.success() => {
+            dl_set(&map, &id, "complete", 100.0, "GGUF saved for llama.cpp");
+        }
+        Ok(Ok(o)) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let line = err.lines().last().unwrap_or("llmfit download failed");
+            dl_set(&map, &id, "failed", 0.0, line);
+        }
+        _ => dl_set(&map, &id, "failed", 0.0, "llmfit download failed to run"),
     }
 }
 

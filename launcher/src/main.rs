@@ -1234,9 +1234,13 @@ fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
             }
         }
     }
+    // The download fallback (serve.rs run_download) shells back into llmfit.
+    std::env::set_var("PLANAI_LLMFIT_BIN", lf);
     match Command::new(lf)
         .args(["serve", "--host", "127.0.0.1", "--port", LLMFIT_PORT])
-        .env("OLLAMA_HOST", "127.0.0.1:11434")
+        // the CONFIGURED ollama port, not a hardcoded 11434 — the stick's
+        // server may run elsewhere
+        .env("OLLAMA_HOST", format!("{}:{}", config::OLLAMA_HOST, config::ollama_port()))
         .spawn()
     {
         Ok(child) => {
@@ -1369,7 +1373,7 @@ fn ensure_resources() -> Option<PathBuf> {
 /// The ollama port the running stack uses, so `plan-ai ollama …` talks to the live
 /// server: PLANAI_OLLAMA_PORT if inherited, else the daemon's seeded config.json,
 /// else the well-known default.
-fn running_ollama_port() -> u16 {
+pub(crate) fn running_ollama_port() -> u16 {
     if let Some(p) = std::env::var("PLANAI_OLLAMA_PORT").ok().and_then(|p| p.parse().ok()) {
         return p;
     }

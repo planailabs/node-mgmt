@@ -52,7 +52,9 @@ impl UsbLlamaCppService {
     }
 
     /// The GGUF to serve: the configured path, else the first local ollama
-    /// model's weights blob.
+    /// model's weights blob, else the first downloaded GGUF in
+    /// `<models>/gguf/` (the launcher's llmfit fallback puts HuggingFace
+    /// models that aren't in the ollama registry there).
     fn resolve_model(&self) -> Option<PathBuf> {
         if let Some(m) = &self.model {
             let p = PathBuf::from(m);
@@ -61,8 +63,20 @@ impl UsbLlamaCppService {
             }
             tracing::warn!("llamacpp.model {m} not found — falling back to the ollama store");
         }
-        first_ollama_gguf(&self.models_dir)
+        first_ollama_gguf(&self.models_dir).or_else(|| first_dir_gguf(&self.models_dir.join("gguf")))
     }
+}
+
+/// The first `*.gguf` (sorted) in a flat dir of downloaded weights.
+fn first_dir_gguf(dir: &Path) -> Option<PathBuf> {
+    let mut ggufs: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("gguf")))
+        .collect();
+    ggufs.sort();
+    ggufs.into_iter().next()
 }
 
 /// Find the first pulled ollama model's weights blob (a plain GGUF): walk
