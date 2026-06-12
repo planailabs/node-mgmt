@@ -110,7 +110,22 @@ fn fmt_notif(n: &Notification) -> String {
 async fn static_handler(uri: Uri) -> impl IntoResponse {
     let p = uri.path().trim_start_matches('/');
     let p = if p.is_empty() { "index.html" } else { p };
+    // Dev override (`--start-with-spa DIR` → PLANAI_SPA_DIR): serve the SPA
+    // from disk instead of the embedded assets, so a locally-built SPA can be
+    // iterated without rebuilding the launcher. Paths are sanitized (no `..`).
+    let spa_dir = std::env::var_os("PLANAI_SPA_DIR").map(std::path::PathBuf::from);
     let serve = |path: &str| {
+        if let Some(dir) = &spa_dir {
+            if !path.split('/').any(|seg| seg == "..") {
+                if let Ok(data) = std::fs::read(dir.join(path)) {
+                    let mime = mime_guess::from_path(path).first_or_octet_stream();
+                    return Some(
+                        ([(header::CONTENT_TYPE, mime.as_ref().to_string())], data).into_response(),
+                    );
+                }
+            }
+            return None;
+        }
         Spa::get(path).map(|f| {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
             ([(header::CONTENT_TYPE, mime.as_ref().to_string())], f.data.into_owned()).into_response()

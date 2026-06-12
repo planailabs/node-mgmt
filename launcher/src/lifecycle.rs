@@ -381,8 +381,17 @@ impl Ctx {
             }
         }
         // The Electron app itself ships as a component (app-<os>): mount/link it
-        // and run Electron from the mounted tree.
-        if let Some(app) = pick_base(&comp, "app-") {
+        // and run Electron from the mounted tree. Dev override
+        // (`--start-with-electron DIR` → PLANAI_APP_DIR): use a local unpacked
+        // app tree instead of mounting the component.
+        if let Some(dir) = std::env::var_os("PLANAI_APP_DIR").map(PathBuf::from) {
+            if dir.is_dir() {
+                log(&format!("app: dev override — {}", dir.display()));
+                self.app_dir = Some(dir);
+            } else {
+                log(&format!("app: PLANAI_APP_DIR {} is not a directory — ignoring", dir.display()));
+            }
+        } else if let Some(app) = pick_base(&comp, "app-") {
             match provide(&comp, &app, &dist.join("app"), &tools, force_extract) {
                 Ok(k) => {
                     self.mounts.push(Mount { dest: dist.join("app"), kind: k });

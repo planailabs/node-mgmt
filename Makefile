@@ -39,7 +39,8 @@ XTASK := nix run .\#xtask --
 
 .PHONY: all dev ui download download-curl vendor-lock update update-deps ollama openwebui wheel \
         runtime runtimes app spa components bundle bundles image update-tarball tarball-upload ninja seed models test \
-        test-usb test-vm test-nixos test-clean test-mac test-win test-all clean help
+        test-usb test-vm test-nixos test-clean test-mac test-win test-all clean help \
+        dev-spa dev-electron dev-usbd
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
 	$(XTASK) build all
@@ -64,6 +65,20 @@ tarball-upload: update-tarball ## upload the update tarball to a web-agency webs
 
 dev: ## minimal NixOS build + run (development mode)
 	./scripts/dev.sh
+
+# dev-* run the BUILT bundle launcher (make bundle TARGET=linux-x64) with one
+# locally-built piece overriding its component — everything else (components,
+# update flow) stays the launcher's own. See the --start-with-* flags.
+dev-spa: ## launch the bundle with a locally built SPA (scripts/build-spa.sh)
+	./scripts/build-spa.sh
+	dist/bundle/plan-ai.linux-x64.exe --start-with-spa launcher/spa
+
+dev-electron: ## launch the bundle with the local app/ tree (needs: cd app && npm i)
+	dist/bundle/plan-ai.linux-x64.exe --start-with-electron app
+
+dev-usbd: ## launch the bundle with a locally built usbd (cargo build --release)
+	cd usbd && cargo build --release
+	dist/bundle/plan-ai.linux-x64.exe --start-with-usbd usbd/target/release/usbd
 
 ui: ## preview the SPA against the mock backend (dx serve + mock API on :9999)
 	@echo "==> tailwind + mock API (:9999) + dx serve (hot reload)"

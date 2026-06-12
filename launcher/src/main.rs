@@ -1390,7 +1390,7 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
     let mounted = ensure_resources().is_some();
     let bin = match tool {
         "ollama" if mounted => Some(paths::ollama_binary()).filter(|b| b.exists()),
-        "mac-mgmt" => usbd::resolve_bin(),
+        "usbd" | "mac-mgmt" => usbd::resolve_bin(),
         _ => None,
     };
     let bin = match bin {
@@ -1449,8 +1449,41 @@ fn main() {
             // rest of argv + stdio (ollama also gets OLLAMA_HOST/OLLAMA_MODELS for
             // the running server). Never returns.
             Some("ollama") => run_tool_passthrough("ollama", a.collect()),
+            Some("usbd") => run_tool_passthrough("usbd", a.collect()),
             Some("mac-mgmt") => run_tool_passthrough("mac-mgmt", a.collect()),
             _ => {}
+        }
+    }
+
+    // Dev overrides: `--start-with-electron DIR` / `--start-with-spa DIR` /
+    // `--start-with-usbd PATH` run a locally-built piece while everything else
+    // comes from the component pool (or the update server). They just feed the
+    // existing env overrides (PLANAI_APP_DIR / PLANAI_SPA_DIR /
+    // PLANAI_USBD_BIN), set BEFORE the env snapshot so relaunches keep them.
+    {
+        let mut it = std::env::args().skip(1);
+        while let Some(a) = it.next() {
+            let var = match a.as_str() {
+                "--start-with-electron" => "PLANAI_APP_DIR",
+                "--start-with-spa" => "PLANAI_SPA_DIR",
+                "--start-with-usbd" => "PLANAI_USBD_BIN",
+                _ => continue,
+            };
+            let Some(val) = it.next() else {
+                log(&format!("{a} needs a path argument"));
+                std::process::exit(2);
+            };
+            let mut p = PathBuf::from(&val);
+            p = p.canonicalize().unwrap_or(p);
+            // --start-with-usbd accepts the unpacked component DIR or the binary.
+            if var == "PLANAI_USBD_BIN" && p.is_dir() {
+                let names: &[&str] = if cfg!(windows) { &["usbd.exe", "mac-mgmt.exe"] } else { &["usbd", "mac-mgmt"] };
+                if let Some(bin) = names.iter().map(|n| p.join(n)).find(|c| c.exists()) {
+                    p = bin;
+                }
+            }
+            log(&format!("dev override: {var}={}", p.display()));
+            std::env::set_var(var, &p);
         }
     }
 
