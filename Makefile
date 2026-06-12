@@ -1,6 +1,12 @@
 # plan-ai-usb-minimal — pipeline entrypoints.
 # Run inside `nix develop` (Linux build leg). TARGET defaults to the host.
 TARGET ?=
+# TARGET prunes the xtask/ninja graph: with TARGET set, components/bundles are
+# generated for that platform only (PLANAI_PLATFORMS is xtask's selection knob;
+# unset → usb.lock .targets = everything, the update-server/CI flow).
+ifneq ($(TARGET),)
+export PLANAI_PLATFORMS ?= $(TARGET)
+endif
 
 # Subset the whole build (runtimes, components, bundles, image) to specific
 # platforms instead of usb.lock's full .targets. Space/comma separated, e.g.

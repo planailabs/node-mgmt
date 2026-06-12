@@ -335,8 +335,10 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     ib_deps.extend(srcs(&["scripts/import-build-component.sh", "scripts/store-import.sh", "scripts/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]));
     stamp_edge("comp-ow-assets-sqfs", &ib_deps, "./scripts/import-build-component.sh ow-assets vendor/ow-assets ow-assets-squashfs dist/components/ow-assets.squashfs", "nix squashfs: ow-assets");
     comp_stamps.push(stamp("comp-ow-assets-sqfs"));
-    stamp_edge("comp-ow-assets-dmg", &ib_deps, "./scripts/import-build-component.sh ow-assets vendor/ow-assets ow-assets-dmg dist/components/ow-assets.dmg", "nix dmg: ow-assets");
-    comp_stamps.push(stamp("comp-ow-assets-dmg"));
+    if targets.iter().any(|t| target_os(t) == "mac") {
+        stamp_edge("comp-ow-assets-dmg", &ib_deps, "./scripts/import-build-component.sh ow-assets vendor/ow-assets ow-assets-dmg dist/components/ow-assets.dmg", "nix dmg: ow-assets");
+        comp_stamps.push(stamp("comp-ow-assets-dmg"));
+    }
     // usbd: the plan.ai USB daemon, the control plane the launcher spawns on
     // EVERY platform. Built in nix (linux-x64 native; win/mac/linux-arm64
     // cross-compiled via cargo-zigbuild — see flake `usbdFor`). Per-TARGET in the
@@ -390,11 +392,20 @@ fn render_ninja(targets: &[String], ollama_keys: &[String]) -> String {
     // classifier matches the basename). Pure python/static sources running on
     // the hermes component's python — ONE shared component for all platforms
     // (like ow-assets): linux squashfs + mac dmg + win zip.
+    let oses: std::collections::HashSet<&str> = targets.iter().map(|t| target_os(t)).collect();
     for (attr, out) in [
         ("hermes-webui-squashfs", "dist/components/hermes-webui.squashfs"),
         ("hermes-webui-dmg", "dist/components/hermes-webui.dmg"),
         ("hermes-webui-dir", "dist/components/hermes-webui.zip"),
     ] {
+        let os = match attr {
+            "hermes-webui-squashfs" => "linux",
+            "hermes-webui-dmg" => "mac",
+            _ => "win",
+        };
+        if !oses.contains(os) {
+            continue;
+        }
         let stamp_name = format!("comp-{}", out.rsplit('/').next().unwrap().replace('.', "-"));
         stamp_edge(&stamp_name, &nix_comp_srcs,
             &format!("./scripts/nix-component.sh {attr} {out}"),
