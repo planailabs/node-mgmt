@@ -12,7 +12,9 @@ endif
 # platforms instead of usb.lock's full .targets. Space/comma separated, e.g.
 #   make image PLATFORMS=linux-x64
 # xtask reads PLANAI_PLATFORMS when (re)generating the ninja graph.
-PLATFORMS ?=
+# Defaults to TARGET, so `make components bundle TARGET=linux-x64` builds that
+# platform's graph only (set PLATFORMS explicitly to widen/override).
+PLATFORMS ?= $(TARGET)
 export PLANAI_PLATFORMS = $(PLATFORMS)
 
 # --- nix develop guard ------------------------------------------------------
