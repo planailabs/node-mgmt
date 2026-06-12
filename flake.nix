@@ -505,6 +505,59 @@
             runHook postInstall
           '';
         };
+        # The memvault web UI client: memvault-web's WASM bundle + static assets
+        # (tailwind comes from the crate's build.rs), dx-built like the SPA
+        # above. The output is dx's `public/` directory, shipped ADJACENT to the
+        # usbd binary in every usbd component — dioxus-server serves
+        # `<exe dir>/public` when DIOXUS_PUBLIC_PATH is unset, so the in-process
+        # memvault web app (usbd's run.rs::maybe_serve_memvault) finds it there.
+        # Pure wasm + static files, so ONE build feeds all four usbd targets.
+        # `--no-default-features --features web` keeps the server's native deps
+        # (tokio/mio) out of the wasm build — the same @client split as
+        # mac-mgmt's build-memvault.sh.
+        #
+        # CRITICAL: src is the SAME stitched usbdSrc tree the usbd binary is
+        # built from. mac-mgmt gets client/server consistency by dx-building
+        # both legs in one invocation from one checkout; usbd's server leg is
+        # cargo/zigbuild-built, so we replicate the part that actually matters:
+        # the dioxus-fullstack macro hashes `CARGO_MANIFEST_DIR:module_path`
+        # into every server-fn endpoint (/api/<fn><xxh64>), so the client and
+        # the server must compile memvault-web from the IDENTICAL /build path
+        # or every endpoint 404s under hydration.
+        memvaultWebClient = wasmRustPlatform.buildRustPackage {
+          pname = "memvault-web-client";
+          version = "0.1.0";
+          src = usbdSrc;
+          cargoRoot = "third_party/mac-mgmt/memvault";
+          cargoLock = {
+            lockFile = ./third_party/mac-mgmt/memvault/Cargo.lock;
+            outputHashes = import ./third_party/mac-mgmt/memvault/extra-hashes.nix;
+          };
+          nativeBuildInputs = spaTools;
+          buildPhase = ''
+            runHook preBuild
+            export HOME="$TMPDIR" CARGO_NET_OFFLINE=true
+            cd third_party/mac-mgmt/memvault/crates/memvault-web
+            dx build --platform web --release --no-default-features --features web
+            cd ../../../../..
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out"
+            cp -r third_party/mac-mgmt/memvault/target/dx/memvault-web/release/web/public/. "$out/"
+            # usbd is cargo-built (not dx-built), so the manganis link section
+            # in the server binary still holds placeholders: the SSR'd
+            # `document::Stylesheet { asset!("/public/tailwind.css") }` href
+            # can't resolve to the hashed filename and 404s. Link the unhashed
+            # copy (served from the public root) straight from the index.html
+            # shell so the page is styled before — and regardless of — WASM
+            # hydration.
+            sed -i 's|</head>|<link rel="stylesheet" href="/tailwind.css"></head>|' "$out/index.html"
+            runHook postInstall
+          '';
+          doCheck = false;
+        };
         # usbd is its own package (usbd/) on top of the mac-mgmt-agent crate
         # from the submodule, so the build no longer compiles the daemon CLI
         # blob (rocket/MCP servers/plan-ai-cloud/dashboard). The source is
@@ -550,12 +603,15 @@
         # `usbd` packaged as a launcher component: the binary at the component
         # ROOT (`mac-mgmt`), so when the launcher mounts `usbd.squashfs` at
         # `<dist>/usbd/` the daemon lands at `PLANAI_RESOURCES/usbd/usbd` —
-        # exactly where `usbd::resolve_bin()` looks. Packed into a squashfs by the
-        # bundle like the other components (runtime/ollama/ow-assets).
+        # exactly where `usbd::resolve_bin()` looks. The memvault web UI ships
+        # beside it as `public/` (dioxus-server's `<exe dir>/public` fallback).
+        # Packed into a squashfs by the bundle like the other components
+        # (runtime/ollama/ow-assets).
         usbdComponent = pkgs.runCommand "plan-ai-usbd-component" { } ''
           mkdir -p "$out"
           cp ${usbd}/bin/usbd "$out/usbd"
           chmod +x "$out/usbd"
+          cp -r ${memvaultWebClient} "$out/public"
         '';
         # Cross-compiled usb daemon for win/mac, built with cargo-zigbuild like the
         # launcher. macOS is Unix so the daemon source compiles unchanged; Windows
@@ -617,16 +673,19 @@
         usbdComponent-win-x64 = pkgs.runCommand "plan-ai-usbd-component-win-x64" { } ''
           mkdir -p "$out"
           cp ${usbd-win-x64}/bin/usbd.exe "$out/usbd.exe"
+          cp -r ${memvaultWebClient} "$out/public"
         '';
         usbdComponent-mac-arm64 = pkgs.runCommand "plan-ai-usbd-component-mac-arm64" { } ''
           mkdir -p "$out"
           cp ${usbd-mac-arm64}/bin/usbd "$out/usbd"
           chmod +x "$out/usbd"
+          cp -r ${memvaultWebClient} "$out/public"
         '';
         usbdComponent-linux-arm64 = pkgs.runCommand "plan-ai-usbd-component-linux-arm64" { } ''
           mkdir -p "$out"
           cp ${usbd-linux-arm64}/bin/usbd "$out/usbd"
           chmod +x "$out/usbd"
+          cp -r ${memvaultWebClient} "$out/public"
         '';
         # Shared dev-leg toolchain + env (nix/dev-env.nix), consumed by both the
         # interactive devshell and the bundled Docker image below.
@@ -640,7 +699,7 @@
           #   nix build .#devshell-image && docker load < result
           devshell-image = import ./nix/docker.nix { inherit pkgs lib devEnv; };
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
-          inherit usbd usbdComponent memvaultExtractGuestWasm;
+          inherit usbd usbdComponent memvaultExtractGuestWasm memvaultWebClient;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
           inherit usbdComponent-win-x64 usbdComponent-mac-arm64 usbdComponent-linux-arm64;
           launcher-win-x64 = launcherFor { zigTarget = "x86_64-pc-windows-gnu"; outDir = "x86_64-pc-windows-gnu"; };

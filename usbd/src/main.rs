@@ -124,6 +124,8 @@ fn run_main(mut args: Vec<String>) -> Result<()> {
         std::env::set_var("MAC_MGMT_CONFIG_DIR", home.join(".config").join("mac-mgmt"));
     }
 
+    pin_memvault_webui_assets(&home);
+
     let offline = cli.offline || env_flag("MAC_MGMT_OFFLINE");
     let opts = run::UsbdOpts {
         home,
@@ -155,6 +157,46 @@ fn init_tracing() {
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
         .try_init();
+}
+
+/// Resolve the memvault web UI's static assets (the dx-built WASM client).
+///
+/// dioxus-server serves them from `DIOXUS_PUBLIC_PATH`, falling back to
+/// `<exe dir>/public` — which is where the usbd component ships them (see the
+/// flake's `memvaultWebClient` + `usbdComponent*`). A MISSING directory makes
+/// dioxus' router construction panic when memvault is enabled, so for runs
+/// without packaged assets (plain `cargo` dev builds) point the env at an
+/// empty dir under home: the UI degrades to SSR-only HTML and `/api/v1` keeps
+/// working instead of the daemon crashing.
+///
+/// Single-threaded, before the tokio runtime (it sets process env).
+fn pin_memvault_webui_assets(home: &std::path::Path) {
+    if std::env::var_os("DIOXUS_PUBLIC_PATH").is_some() {
+        return;
+    }
+    let adjacent = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("public")));
+    if adjacent.as_ref().is_some_and(|p| p.is_dir()) {
+        return; // dioxus' own <exe dir>/public fallback will find it
+    }
+    let stub = home.join(".cache").join("webui-public-stub");
+    let _ = std::fs::create_dir_all(&stub);
+    // A minimal-but-parseable index.html: dioxus' SSR shell parser needs the
+    // `id="main"` mount node plus closing </head> and </body> tags.
+    let _ = std::fs::write(
+        stub.join("index.html"),
+        "<!doctype html><html><head></head><body><div id=\"main\"></div></body></html>",
+    );
+    tracing::warn!(
+        "memvault web UI assets not found next to the executable; serving \
+         SSR-only (no WASM client) from {}",
+        stub.display()
+    );
+    // SAFETY: single-threaded startup, before the tokio runtime.
+    unsafe {
+        std::env::set_var("DIOXUS_PUBLIC_PATH", &stub);
+    }
 }
 
 /// True for `1`/`true`/`yes`/`on` (case-insensitive).
