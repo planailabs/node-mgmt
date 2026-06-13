@@ -18,6 +18,31 @@ die()  { printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2; exit 1; }
 # --- prerequisites ----------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1 (enter 'nix develop')"; }
 
+# --- test drive provisioning ------------------------------------------------
+# Seed a staged drive-root with update.json + platforms.json so the launcher
+# treats it as an already-provisioned drive and runs from the LOCAL pushed
+# components — instead of bootstrapping a full download from the PROD update
+# server (the launcher sets bootstrap_update when either file is absent). Mirrors
+# what make-usb-image.sh writes onto a real drive, so the remote test validates
+# the locally-built artifacts rather than whatever prod currently ships.
+#
+#   seed_drive_manifest <staged-drive-root> <platform>
+#
+# <staged-drive-root> must already mirror the remote drive layout (the launcher
+# at the root + components/<platform>/…); the manifest is generated from it, so
+# its entries match what gets pushed. The URL is a dead localhost address: the
+# test never auto-fetches (bootstrap is off), and a manual check can't reach prod.
+seed_drive_manifest() {
+  local drive="$1" platform="$2"
+  need jq
+  local commit; commit="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo test)"
+  ( cd "$REPO_ROOT" && nix run ".#xtask" -- gen-manifest "$drive" \
+      --version "0.0.0-test" --commit "$commit" --url "http://127.0.0.1:1/" \
+      --out "$drive/update.json" ) || die "gen-manifest failed for $drive"
+  printf '{"platforms":["%s"]}\n' "$platform" > "$drive/platforms.json"
+  log "seeded update.json + platforms.json ($platform) — launcher runs from the local pool"
+}
+
 # --- temp output dirs -------------------------------------------------------
 # Build each step into a FRESH temp dir, then atomically swap it in. A failed /
 # interrupted step then never leaves a partial output for a later step to consume

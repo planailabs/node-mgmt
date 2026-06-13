@@ -44,20 +44,27 @@ log "remote workdir: $HOST:$REMOTE"
 # as .zip (the update-tarball format); the burned image carries them UNPACKED, so
 # mirror that here: unpack each component zip into its target folder + drop the zip
 # before pushing, so the remote sees exactly what a real drive holds (used in place).
-ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
-scp "${SSH_OPTS[@]}" -q "$EXE" "$HOST:$REMOTE/plan-ai.exe"
 [ -d "$POOL/win-x64" ] || die "no components/win-x64 group in $POOL — run scripts/bundle.sh win-x64"
-STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
-cp -a "$POOL/win-x64" "$STAGE/win-x64"
+# Stage a drive-root MIRROR locally (launcher + components/win-x64/) so we can seed
+# update.json/platforms.json from the exact contents we push — without those the
+# launcher bootstraps a full prod download instead of using the local pool.
+STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"; cleanup' EXIT
+mkdir -p "$STAGE/components"
+cp "$EXE" "$STAGE/plan-ai.exe"
+cp -a "$POOL/win-x64" "$STAGE/components/win-x64"
 shopt -s globstar nullglob
-for z in "$STAGE/win-x64"/**/*.zip; do
+for z in "$STAGE/components/win-x64"/**/*.zip; do
   [ -f "$z" ] || continue
   tgt="${z%.zip}"; rm -rf "$tgt"; mkdir -p "$tgt"
   need unzip; unzip -qo "$z" -d "$tgt" || die "unzip failed: $z"
   rm -f "$z"
 done
 shopt -u globstar nullglob
-scp "${SSH_OPTS[@]}" -q -r "$STAGE/win-x64" "$HOST:$REMOTE/components/" || true
+seed_drive_manifest "$STAGE" win-x64
+ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
+scp "${SSH_OPTS[@]}" -q "$STAGE/plan-ai.exe" "$HOST:$REMOTE/plan-ai.exe"
+scp "${SSH_OPTS[@]}" -q "$STAGE/update.json" "$STAGE/platforms.json" "$HOST:$REMOTE/"
+scp "${SSH_OPTS[@]}" -q -r "$STAGE/components/win-x64" "$HOST:$REMOTE/components/" || true
 
 # Supervisor script: starts the launcher, polls health, writes a result file. Shipped
 # as a real .ps1 and run with -File so PowerShell actually executes the whole thing.
