@@ -639,7 +639,7 @@
             nativeBuildInputs = [
               pkgs.cargo-zigbuild pkgs.zig
               pkgs.pkg-config pkgs.protobuf pkgs.nodejs pkgs.tailwindcss_3
-            ];
+            ] ++ lib.optionals (lib.hasInfix "apple-darwin" rustTarget) [ pkgs.python3 pkgs.rcodesign ];
             buildInputs = [ pkgs.openssl ];
             PROTOC = "${pkgs.protobuf}/bin/protoc";
             MEMVAULT_EXTRACT_GUEST_WASM = "${memvaultExtractGuestWasm}/memvault_extract_guest.wasm";
@@ -656,6 +656,15 @@
               runHook preInstall
               mkdir -p "$out/bin"
               cp "target/${rustTarget}/release/${exe}" "$out/bin/${exe}"
+              ${lib.optionalString (lib.hasInfix "apple-darwin" rustTarget) ''
+                # zig links libobjc.A.dylib twice -> modern dyld SIGABRTs before main()
+                # ("duplicate linked dylib"), so usbd never starts on mac. Repoint the
+                # duplicate to its alias and re-sign ad-hoc (the edit voids zig's linker
+                # signature). Same fix as the launcher/spinner; no-op without a duplicate.
+                chmod +w "$out/bin/${exe}"
+                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/bin/${exe}"
+                rcodesign sign "$out/bin/${exe}" "$out/bin/${exe}"
+              ''}
               runHook postInstall
             '';
           } // extraEnv);
