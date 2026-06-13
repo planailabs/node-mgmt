@@ -63,7 +63,9 @@ shopt -u globstar nullglob
 seed_drive_manifest "$STAGE" win-x64
 ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
 scp "${SSH_OPTS[@]}" -q "$STAGE/plan-ai.exe" "$HOST:$REMOTE/plan-ai.exe"
-scp "${SSH_OPTS[@]}" -q "$STAGE/update.json" "$STAGE/platforms.json" "$HOST:$REMOTE/"
+# Per-file targets: Windows scp fails the multi-source→dir form ("Failure").
+scp "${SSH_OPTS[@]}" -q "$STAGE/update.json" "$HOST:$REMOTE/update.json"
+scp "${SSH_OPTS[@]}" -q "$STAGE/platforms.json" "$HOST:$REMOTE/platforms.json"
 scp "${SSH_OPTS[@]}" -q -r "$STAGE/components/win-x64" "$HOST:$REMOTE/components/" || true
 
 # Supervisor script: starts the launcher, polls health, writes a result file. Shipped

@@ -46,7 +46,8 @@ cp -al "$POOL/mac-arm64" "$STAGE/components/mac-arm64" 2>/dev/null || cp -a "$PO
 seed_drive_manifest "$STAGE" mac-arm64
 ssh "$HOST" "mkdir -p '$REMOTE/components'"
 scp -q "$DMG" "$HOST:$REMOTE/plan-ai.dmg"
-scp -q "$STAGE/update.json" "$STAGE/platforms.json" "$HOST:$REMOTE/"
+scp -q "$STAGE/update.json" "$HOST:$REMOTE/update.json"
+scp -q "$STAGE/platforms.json" "$HOST:$REMOTE/platforms.json"
 scp -q -r "$POOL/mac-arm64" "$HOST:$REMOTE/components/" || true
 
 log "mount dmg + run launcher; assert ollama + Open-WebUI serve (≤6min cold start)"
