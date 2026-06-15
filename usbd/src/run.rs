@@ -251,7 +251,14 @@ pub async fn run_stack(opts: UsbdOpts) -> Result<StackHandle> {
     };
 
     relay_mgr.sync_ssh_keys();
+    // Register all tunnel kinds with the relay manager up front (parity with the
+    // upstream mac-mgmt daemon) — regular + overrides + file + shell (the last also
+    // registers the virtual service-restart/restart-daemon handlers). Refreshed later
+    // via LoopState::update_relay_tunnels on health tick / install / config apply.
     relay_mgr.update_tunnel_defs(svc_mgr.collect_tunnels());
+    relay_mgr.update_tunnel_overrides(svc_mgr.collect_tunnel_overrides());
+    relay_mgr.update_file_tunnel_defs(svc_mgr.collect_file_tunnels());
+    relay_mgr.update_shell_tunnel_defs(svc_mgr.collect_shell_tunnels());
 
     // Kick the initial install + start.
     svc_mgr.retry_failed_installs();
@@ -334,6 +341,46 @@ impl LoopState {
         } else {
             vec![]
         };
+        // File + shell tunnels announced alongside regular tunnels (parity with the
+        // upstream mac-mgmt daemon's heartbeat); shapes mirror its hand-built payload.
+        let file_tunnels: Vec<serde_json::Value> = if self.cfg.relay.tunnels_enabled {
+            self.svc_mgr
+                .collect_file_tunnels()
+                .iter()
+                .map(|ft| {
+                    let mut val = serde_json::json!({
+                        "name": ft.name(), "service": ft.service, "path": ft.path(),
+                        "writable": ft.writable(), "description": ft.description(),
+                    });
+                    let obj = val.as_object_mut().unwrap();
+                    if let mac_mgmt_agent::managed_service::FileTunnelDef::Folder { include, .. } = &ft.def {
+                        obj.insert("kind".into(), "directory".into());
+                        obj.insert("include".into(), serde_json::to_value(include).unwrap_or(serde_json::Value::Null));
+                    } else {
+                        obj.insert("kind".into(), "file".into());
+                    }
+                    val
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let shell_tunnels: Vec<serde_json::Value> = if self.cfg.relay.tunnels_enabled {
+            self.svc_mgr
+                .collect_shell_tunnels()
+                .iter()
+                .map(|st| {
+                    serde_json::json!({
+                        "name": st.def.name, "service": st.service, "description": st.def.description,
+                        "requires_arg": st.def.arg_template.is_some(),
+                        "arg_label": st.def.arg_template.as_ref().map(|t| &t.label),
+                        "arg_placeholder": st.def.arg_template.as_ref().map(|t| &t.placeholder),
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         let sample = self.assessor.latest_sample_snapshot();
         let services_extended = self.assessor.latest_probes_snapshot();
         let service_samples = self.svc_mgr.collect_service_samples().await;
@@ -354,8 +401,8 @@ impl LoopState {
             &self.host_key,
             services,
             tunnels,
-            vec![],
-            vec![],
+            file_tunnels,
+            shell_tunnels,
             None,
             self.relay_proxy_url(),
             sample,
@@ -401,8 +448,15 @@ impl LoopState {
     fn update_relay_tunnels(&self) {
         if self.cfg.relay.tunnels_enabled {
             self.relay_mgr.update_tunnel_defs(self.svc_mgr.collect_tunnels());
+            self.relay_mgr.update_tunnel_overrides(self.svc_mgr.collect_tunnel_overrides());
+            self.relay_mgr.update_file_tunnel_defs(self.svc_mgr.collect_file_tunnels());
+            // also (re)registers the virtual service-restart/restart-daemon handlers.
+            self.relay_mgr.update_shell_tunnel_defs(self.svc_mgr.collect_shell_tunnels());
         } else {
             self.relay_mgr.update_tunnel_defs(vec![]);
+            self.relay_mgr.update_tunnel_overrides(std::collections::HashMap::new());
+            self.relay_mgr.update_file_tunnel_defs(vec![]);
+            self.relay_mgr.update_shell_tunnel_defs(vec![]);
         }
     }
 
