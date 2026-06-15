@@ -1,0 +1,309 @@
+# loader.toml — the single declarative manifest the shared loader build tool (xtask,
+# in the third_party/loader submodule) derives EVERYTHING from. Nothing plan.ai-specific
+# lives in the engine; it all lives here. See third_party/loader for the engine.
+#
+# `@loader/<script>` in a cmd/src is rewritten to the loader scripts dir
+# (third_party/loader/scripts) at render time; `./scripts/<script>` stays project-local.
+schema = 1
+
+# ── on-drive update manifest identity + classification ──────────────────────
+[manifest]
+product    = "plan-ai-usb"
+update_url = "https://usb-update.plan.ai"
+
+[manifest.classify]
+exact = [
+  ["plan-ai.linux-x64.exe",   "linux-x64"],
+  ["plan-ai.linux-arm64.exe", "linux-arm64"],
+  ["plan-ai.exe",             "win-x64"],
+  ["plan-ai.dmg",             "mac-arm64"],
+]
+substring = [
+  ["linux",   ["linux-x64", "linux-arm64"]],
+  ["nixos",   ["linux-x64", "linux-arm64"]],
+  ["darwin",  ["mac-arm64"]],
+  ["-mac-",   ["mac-arm64"]],
+  ["windows", ["win-x64"]],
+  ["-win-",   ["win-x64"]],
+]
+tools = ["linux-x64", "linux-arm64"]
+
+[manifest.feature_classify]
+hermes    = ["hermes"]
+llamacpp  = ["llamacpp"]
+openwebui = ["runtime-", "ow-assets"]
+
+[manifest.image_prep]
+seed_features_default       = true
+drop_default_off_from_image = true
+
+[manifest.upload]
+default_tarball = "dist/plan-ai-update.tar.gz"
+
+# ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
+[layout]
+launcher_name  = "plan-ai"
+image_name     = "plan-ai-usb.img"
+volume_label   = "PLANAI"
+launchers_dir  = "launchers"
+components_dir = "components/{os}"
+models_dir     = "models"
+manifest_file  = "update.json"
+selection_file = "platforms.json"
+[layout.launcher_artifact]
+"linux-x64"   = "plan-ai.linux-x64.exe"
+"linux-arm64" = "plan-ai.linux-arm64.exe"
+"win-x64"     = "plan-ai.exe"
+"mac-arm64"   = "plan-ai.dmg"
+
+# ── platforms ───────────────────────────────────────────────────────────────
+[targets]
+known       = ["linux-x64", "linux-arm64", "win-x64", "mac-arm64"]
+select_env  = "PLANAI_PLATFORMS"
+select_lock = "targets"
+[targets.alias]
+"nixos-x64"   = "linux-x64"
+"nixos-arm64" = "linux-arm64"
+[targets.os_match]
+win = ["win", "windows"]
+mac = ["mac", "darwin"]
+
+# ── features (name + default-on) ────────────────────────────────────────────
+[[feature]]
+name = "openwebui"
+default = true
+[[feature]]
+name = "hermes"
+default = false
+[[feature]]
+name = "llamacpp"
+default = false
+[[feature]]
+name = "mgmt"
+default = false
+
+# ── FHS package set (injected into buildFHSEnv by nix/loader) ─────────────────
+[fhs]
+name       = "planai-fhs"
+run_script = 'exec "$@"'
+systems    = ["x86_64-linux", "aarch64-linux"]
+target_pkgs = [
+  "glibc", "gcc-unwrapped.lib", "zlib",
+  "glib", "gtk3", "nss", "nspr", "atk", "at-spi2-atk", "at-spi2-core",
+  "cairo", "pango", "gdk-pixbuf", "cups", "dbus", "expat", "libdrm",
+  "libxkbcommon", "mesa", "libgbm", "alsa-lib", "freetype", "fontconfig",
+  "libGL", "systemd",
+  "libx11", "libxcomposite", "libxcursor", "libxdamage",
+  "libxext", "libxfixes", "libxi", "libxrender",
+  "libxtst", "libxcb", "libxrandr", "libxscrnsaver",
+]
+
+# ── flavour key catalogs (per-GPU expansion for ollama / llama.cpp) ──────────
+[flavours.ollama]
+keys = ["linux-amd64", "linux-arm64", "linux-amd64-rocm", "darwin", "windows-amd64"]
+[flavours.llamacpp]
+keys = [
+  "linux-amd64", "linux-amd64-vulkan", "linux-arm64", "linux-arm64-vulkan",
+  "darwin", "windows-amd64", "windows-amd64-vulkan",
+]
+
+# ── leaf/source-producing steps (impure project scripts) ─────────────────────
+[[step]]
+name = "download"
+cmd  = "./scripts/fetch-vendor.sh"
+src  = ["usb.lock", "vendor.lock.json"]
+desc = "download"
+[[step]]
+name = "wheel"
+cmd  = "./scripts/build-openwebui.sh"
+deps = ["download"]
+desc = "openwebui wheel"
+[[step]]
+name = "app"
+cmd  = "(cd app && npm ci)"
+src  = ["app/package.json", "app/package-lock.json"]
+desc = "electron deps"
+[[step]]
+name = "spa"
+cmd  = "./scripts/build-spa.sh"
+src_tree = ["launcher/spa-src"]
+desc = "dioxus spa"
+[[step]]
+name = "runtime"
+per  = "target"
+cmd  = "./scripts/make-runtime.sh {target}"
+deps = ["download"]
+desc = "runtime {target}"
+[[step]]
+name = "models"
+cmd  = "./scripts/seed-models.sh"
+deps = ["download"]
+src  = ["usb.lock", "./scripts/seed-models.sh", "@loader/lib.sh"]
+desc = "seed models"
+
+# ── shared source-input bundles ──────────────────────────────────────────────
+[srcgroups]
+pack   = ["@loader/pack-component.sh", "@loader/lib.sh"]
+nix    = ["@loader/nix-component.sh", "@loader/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]
+import = ["@loader/import-build-component.sh", "@loader/store-import.sh", "@loader/lib.sh", "nix/builds.nix", "nix/stores.nix", "flake.nix"]
+
+# ── components ───────────────────────────────────────────────────────────────
+# group 1 = the comp_jobs pass (ow-assets pack, runtime/target, ollama/flavour),
+# group 2 = ow-assets sqfs/dmg, usbd, llamacpp, hermes, hermes-webui.
+
+[[component]]
+name = "ow-assets"
+feature = "openwebui"
+per = "shared"
+group = 1
+builder = "pack"
+src_stamp = "wheel"
+srcgroup = "pack"
+stamp = "comp-ow-assets"
+cmd = "@loader/pack-component.sh ow-assets"
+desc = "pack ow-assets"
+
+[[component]]
+name = "runtime"
+feature = "openwebui"
+per = "target"
+group = 1
+builder = "import-build"
+store_name = "runtime-{target}"
+src_dir = "dist/runtime/{target}"
+src_stamp = "runtime-{target}"
+srcgroup = "import"
+[component.format]
+linux = { ext = "squashfs", attr = "runtime-{target}-squashfs", desc = "nix squashfs: runtime-{target}" }
+mac   = { ext = "dmg",      attr = "runtime-{target}-dmg",      desc = "nix dmg: runtime-{target}" }
+win   = { ext = "zip",      attr = "runtime-{target}-dir",      desc = "nix dir: runtime-{target}" }
+
+[[component]]
+name = "ollama"
+feature = "openwebui"
+per = "flavour"
+flavour = "ollama"
+group = 1
+builder = "nix"
+src_stamp = "download"
+srcgroup = "nix"
+[component.format]
+linux = { ext = "squashfs", attr = "ollama-{key}-squashfs", desc = "nix squashfs: ollama-{key}" }
+mac   = { ext = "dmg",      attr = "ollama-{key}-dmg",      desc = "nix dmg: ollama-{key}" }
+win   = { ext = "zip",      attr = "ollama-{key}-dir",      desc = "nix component: ollama-{key}" }
+
+[[component]]
+name = "ow-assets-sqfs"
+feature = "openwebui"
+per = "shared"
+group = 2
+builder = "import-build"
+store_name = "ow-assets"
+src_dir = "vendor/ow-assets"
+src_stamp = "wheel"
+srcgroup = "import"
+shared_os = "linux"
+stamp = "comp-ow-assets-sqfs"
+attr = "ow-assets-squashfs"
+out  = "dist/components/ow-assets.squashfs"
+desc = "nix squashfs: ow-assets"
+
+[[component]]
+name = "ow-assets-dmg"
+feature = "openwebui"
+per = "shared"
+group = 2
+builder = "import-build"
+store_name = "ow-assets"
+src_dir = "vendor/ow-assets"
+src_stamp = "wheel"
+srcgroup = "import"
+shared_os = "mac"
+stamp = "comp-ow-assets-dmg"
+attr = "ow-assets-dmg"
+out  = "dist/components/ow-assets.dmg"
+desc = "nix dmg: ow-assets"
+
+[[component]]
+name = "usbd"
+feature = "core"
+per = "target"
+group = 2
+builder = "nix"
+srcgroup = "nix"
+[component.format]
+linux = { ext = "squashfs", attr = "usbd-{target}-squashfs", desc = "nix component: usbd-{target}" }
+mac   = { ext = "dmg",      attr = "usbd-{target}-dmg",      desc = "nix component: usbd-{target}" }
+win   = { ext = "zip",      attr = "usbd-{target}-dir",      desc = "nix component: usbd-{target}" }
+
+[[component]]
+name = "llamacpp"
+feature = "llamacpp"
+per = "flavour"
+flavour = "llamacpp"
+group = 2
+builder = "nix"
+srcgroup = "nix"
+[component.format]
+linux = { ext = "squashfs", attr = "llamacpp-{key}-squashfs", desc = "nix component: llamacpp-{key}" }
+mac   = { ext = "dmg",      attr = "llamacpp-{key}-dmg",      desc = "nix component: llamacpp-{key}" }
+win   = { ext = "zip",      attr = "llamacpp-{key}-dir",      desc = "nix component: llamacpp-{key}" }
+
+[[component]]
+name = "hermes"
+feature = "hermes"
+per = "target"
+group = 2
+builder = "nix"
+srcgroup = "nix"
+src_extra = ["nix/hermes.nix"]
+src_tree  = ["hermes"]
+[component.format]
+linux = { ext = "squashfs", attr = "hermes-{target}-squashfs", desc = "nix component: hermes-{target}" }
+mac   = { ext = "dmg",      attr = "hermes-{target}-dmg",      desc = "nix component: hermes-{target}" }
+win   = { ext = "zip",      attr = "hermes-{target}-dir",      desc = "nix component: hermes-{target}" }
+
+[[component]]
+name = "hermes-webui"
+feature = "hermes"
+per = "shared-os"
+group = 2
+builder = "nix"
+srcgroup = "nix"
+[component.format]
+linux = { ext = "squashfs", attr = "hermes-webui-squashfs", out = "dist/components/hermes-webui.squashfs", stamp = "comp-hermes-webui-squashfs", desc = "nix component: hermes-webui-squashfs" }
+mac   = { ext = "dmg",      attr = "hermes-webui-dmg",      out = "dist/components/hermes-webui.dmg",      stamp = "comp-hermes-webui-dmg",      desc = "nix component: hermes-webui-dmg" }
+win   = { ext = "zip",      attr = "hermes-webui-dir",      out = "dist/components/hermes-webui.zip",      stamp = "comp-hermes-webui-zip",      desc = "nix component: hermes-webui-dir" }
+
+# ── bundle + final artifacts ──────────────────────────────────────────────────
+[bundle]
+per = "target"
+cmd = "@loader/bundle.sh {target}"
+deps = ["components", "spa", "app"]
+src  = ["launcher/Cargo.toml", "launcher/Cargo.lock", "spinner/Cargo.toml", "spinner/Cargo.lock", "@loader/bundle.sh", "@loader/lib.sh", "flake.nix"]
+src_tree = ["launcher/src", "spinner/src", "crates"]
+desc = "bundle {target}"
+
+[[artifact]]
+name = "image"
+out  = "dist/plan-ai-usb.img"
+cmd  = "@loader/make-usb-image.sh"
+deps_bundles = true
+deps_steps   = ["models"]
+src  = ["@loader/make-usb-image.sh", "@loader/lib.sh", "flake.nix"]
+src_tree = ["xtask/src", "crates"]
+desc = "usb image"
+default = true
+
+[[artifact]]
+name = "update-tarball"
+out  = "dist/plan-ai-update.tar.gz"
+cmd  = "./scripts/make-update-tarball.sh"
+deps_bundles = true
+src  = ["./scripts/make-update-tarball.sh"]
+src_tree = ["xtask/src", "crates"]
+desc = "update tarball"
+
+[[launch]]
+name = "dev"
+cmd  = "./scripts/dev.sh"
