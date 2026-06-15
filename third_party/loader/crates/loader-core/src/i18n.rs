@@ -55,3 +55,20 @@ pub fn t_args(key: &str, brand: &str, args: &[(&str, i64)]) -> String {
     }
     key.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `{$brand}` is filled from the caller, and numeric args interpolate alongside it —
+    /// the whole reason the launcher's locales could move upstream.
+    #[test]
+    fn brand_and_numeric_args_interpolate() {
+        std::env::set_var("LANG", "en-US.UTF-8");
+        assert_eq!(t("already-running", "Acme"), "Acme is already running.");
+        let p = t_args("provisioning-progress", "Acme", &[("done", 2), ("total", 5)]);
+        assert!(p.contains("Acme") && p.contains("(2/5)"), "got: {p}");
+        // An unknown key falls back to the key itself.
+        assert_eq!(t("no-such-key", "Acme"), "no-such-key");
+    }
+}
