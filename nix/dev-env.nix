@@ -40,6 +40,9 @@ let
     qemu cloud-utils
     # NixOS launch test (make test-nixos runs the bundle headless under Xvfb)
     xvfb-run
+    # push the devshell Docker image to a registry (make docker-push) without a
+    # docker daemon — reads the dockerTools archive, writes to docker://<repo>.
+    skopeo
   ];
 
   # Generic prebuilt binaries (electron-builder helpers; Open-WebUI native wheels;

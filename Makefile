@@ -21,7 +21,7 @@ endif
 # Artifact builds go through ninja via the xtask orchestrator (built offline by nix).
 XTASK := nix run .\#xtask --
 
-.PHONY: all ninja makefile runtimes components bundles update-tarball tarball-upload download wheel app spa runtime bundle image models dev dev-spa dev-electron dev-usbd vendor-lock update update-deps test test-nixos test-usb test-vm test-all ui seed ollama openwebui download-curl test-clean test-mac test-win clean help
+.PHONY: all ninja makefile runtimes components bundles update-tarball tarball-upload download wheel app spa runtime bundle image models dev dev-spa dev-electron dev-usbd vendor-lock update update-deps test test-nixos test-usb test-vm test-all ui seed ollama openwebui download-curl test-clean test-mac test-win docker-image docker-push clean help
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
 	$(XTASK) build all
@@ -140,6 +140,15 @@ test-mac: ## run the mac launcher on a remote mac (set MAC_TARGET=<ssh host>)
 
 test-win: ## run the win launcher on a remote windows box (set WIN_TARGET=<ssh host>)
 	./scripts/test-win.sh
+
+docker-image: ## build the devshell as a Docker image (result = a loadable archive)
+	nix build .#devshell-image
+	@echo "==> loadable image at ./result — 'docker load < result' or 'make docker-push IMAGE_REPO=...'"
+
+docker-push: ## push the devshell image to $(IMAGE_REPO) via skopeo (no docker daemon)
+	@test -n "$(IMAGE_REPO)" || { echo 'set IMAGE_REPO=<registry/repo:tag>'; exit 1; }
+	img=$$(nix build .#devshell-image --no-link --print-out-paths); \
+	  skopeo --insecure-policy copy docker-archive:$$img docker://$(IMAGE_REPO)
 
 clean: ## remove all build outputs (ninja graph + dist + every crate's target/)
 	@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo "ninja -t clean"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi

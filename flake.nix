@@ -696,6 +696,24 @@
         # Shared dev-leg toolchain + env (nix/dev-env.nix), consumed by both the
         # interactive devshell and the bundled Docker image below.
         devEnv = import ./nix/dev-env.nix { inherit pkgs lib spaTools; };
+        # The reusable dev-environment base (shell + Docker image) from the loader
+        # submodule; this project supplies the package set, env, and project shellHook.
+        loaderDev = import ./third_party/loader/nix/loader/devshell.nix { inherit pkgs lib; };
+        # Project-specific shell setup: init the build's submodules + print pinned versions.
+        projectShellHook = ''
+          if [ -f .gitmodules ]; then
+            [ -e third_party/plan-ai-design/assets/input.css ] || \
+              { echo "==> initialising plan-ai-design submodule"; git submodule update --init --recursive third_party/plan-ai-design || true; }
+            [ -e third_party/mac-mgmt/mac-mgmt-services/Cargo.toml ] || \
+              { echo "==> initialising mac-mgmt submodule"; git submodule update --init --recursive third_party/mac-mgmt || true; }
+            [ -e third_party/loader/crates/loader-engine/Cargo.toml ] || \
+              { echo "==> initialising loader submodule"; git submodule update --init --recursive third_party/loader || true; }
+          fi
+          if [ -f usb.lock ]; then
+            echo "plan-ai-usb-minimal — pinned versions:"
+            jq -r '"  ollama     \(.ollama.version)\n  open-webui \(.openwebui.version)\n  python     \(.python)"' usb.lock
+          fi
+        '';
       in {
         packages = {
           inherit (vendorPkgs) vendor ollamaComponents llamacppComponents;
@@ -703,7 +721,7 @@
           # NixOS build leg — no Dockerfile/daemon). Same toolchain + env as
           # `nix develop`, so `make` runs unchanged inside the container:
           #   nix build .#devshell-image && docker load < result
-          devshell-image = import ./nix/docker.nix { inherit pkgs lib devEnv; };
+          devshell-image = loaderDev.mkDevImage { name = "plan-ai-usb-devshell"; packages = devEnv.packages; env = devEnv.env; };
           inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           inherit usbd usbdComponent memvaultExtractGuestWasm memvaultWebClient;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
@@ -749,7 +767,7 @@
           // lib.optionalAttrs (builtins.any (a: a.target == "aarch64-unknown-linux-musl") vendorLock.llmfit.assets) {
             llmfit-linux-arm64 = llmfitBin (llmfitAsset "aarch64-unknown-linux-musl");
           };
-        devShells.default = import ./nix/devshell.nix { inherit pkgs lib spaTools; };
+        devShells.default = loaderDev.mkDevShell { packages = devEnv.packages; env = devEnv.env; shellHook = projectShellHook; };
         # Windows cross-build harness for the usb daemon (`mac-mgmt usbd`). Exposes
         # the same toolchain/env the nix `usbd` derivation uses, but interactive +
         # incremental: `nix develop .#usbd-win` then run cargo-zigbuild against the

@@ -478,6 +478,21 @@ name = "test-win"
 help = "run the win launcher on a remote windows box (set WIN_TARGET=<ssh host>)"
 recipe = ["./scripts/test-win.sh"]
 [[make.target]]
+name = "docker-image"
+help = "build the devshell as a Docker image (result = a loadable archive)"
+recipe = [
+  "nix build .#devshell-image",
+  "@echo \"==> loadable image at ./result — 'docker load < result' or 'make docker-push IMAGE_REPO=...'\"",
+]
+[[make.target]]
+name = "docker-push"
+help = "push the devshell image to $(IMAGE_REPO) via skopeo (no docker daemon)"
+recipe = [
+  "@test -n \"$(IMAGE_REPO)\" || { echo 'set IMAGE_REPO=<registry/repo:tag>'; exit 1; }",
+  "img=$$(nix build .#devshell-image --no-link --print-out-paths); \\",
+  "  skopeo --insecure-policy copy docker-archive:$$img docker://$(IMAGE_REPO)",
+]
+[[make.target]]
 name = "clean"
 help = "remove all build outputs (ninja graph + dist + every crate's target/)"
 recipe = [
