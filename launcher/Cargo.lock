@@ -1049,11 +1049,14 @@ name = "loader-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fs2",
  "futures-util",
+ "notify-rust",
  "reqwest",
  "rustls",
  "sha2",
  "tokio",
+ "which",
 ]
 
 [[package]]
