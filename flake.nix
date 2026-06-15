@@ -64,9 +64,15 @@
             ./third_party/mac-mgmt       # config-ui + common path deps
           ];
         };
+        # xtask + its engine/manifest now live in the loader submodule; build it
+        # from there (self.submodules brings the tree into the flake source).
         xtaskSrc = lib.fileset.toSource {
           root = ./.;
-          fileset = lib.fileset.unions [ ./xtask ./crates/manifest ];
+          fileset = lib.fileset.unions [
+            ./third_party/loader/crates/xtask
+            ./third_party/loader/crates/loader-engine
+            ./third_party/loader/crates/loader-manifest
+          ];
         };
         # the launcher crate without spa-src (the SPA is its own derivation,
         # passed in via PLANAI_SPA_DIST — see launcherFor)
@@ -142,9 +148,9 @@
           pname = "xtask";
           version = "0.1.0";
           src = xtaskSrc;
-          cargoRoot = "xtask";
-          buildAndTestSubdir = "xtask";
-          cargoLock.lockFile = ./xtask/Cargo.lock;
+          cargoRoot = "third_party/loader/crates/xtask";
+          buildAndTestSubdir = "third_party/loader/crates/xtask";
+          cargoLock.lockFile = ./third_party/loader/crates/xtask/Cargo.lock;
           doCheck = false;
           meta.mainProgram = "xtask";
         };
