@@ -24,62 +24,20 @@ let
   stores = import ./stores.nix;
   ollamaComponents = flake.packages.${builtins.currentSystem}.ollamaComponents;
 
-  # squashfs of a source dir — same mksquashfs flags as scripts/lib.sh pack_squashfs,
-  # so the loader mounts it identically. nix owns the build + content-addressed cache.
-  mkSqfs = name: src: pkgs.runCommand "${name}.squashfs"
-    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
-    "mksquashfs ${src} $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet";
-
-  # A closure's store paths packed as a squashfs whose ROOT holds each path by its
-  # hash-name (mksquashfs adds multiple absolute sources at the root by basename), so
-  # <mnt>/<hash> == /nix/store/<hash>. The launcher squashfuse-mounts this and provides
-  # it as /nix/store inside an outer namespace (bind or overlay) — no `nix-store
-  # --import`, hence no trusted-user requirement on NixOS. Keep flags == mkSqfs so the
-  # embedded squashfuse_ll mounts it identically.
-  mkClosureSqfs = ci: pkgs.runCommand "nixos-fhs.squashfs"
-    { nativeBuildInputs = [ pkgs.squashfsTools ]; }
-    "mksquashfs $(cat ${ci}/store-paths) $out -comp zstd -processors $NIX_BUILD_CORES -all-root -no-xattrs -noappend -quiet";
-
-  # --- mac dmg components, built in a Linux VM ------------------------------
-  # An HFS+ dmg needs a privileged loop-mount, impossible in a plain sandbox. So
-  # build it inside a QEMU VM (fast with KVM) where we're root and the kernel has
-  # loop + hfsplus. The real mount + `cp -a` preserves symlinks + exec bits +
-  # signatures (a .app needs them); hard links are copied as independent files
-  # (the Linux HFS+ driver can't create them — same as lib.sh pack_dmg). libdmg
-  # then compresses the bare HFS+ to a UDIF dmg. This makes dmgs pure, cached nix
-  # derivations instead of host sudo calls.
+  # The generic component packers (mkSqfs / mkClosureSqfs / mkExtractDir / mkDmg)
+  # now live in the shared loader nix lib (third_party/loader/nix/loader), so any
+  # consuming product reuses them. We keep the historical local names so the
+  # derivation table below is unchanged. mkDmg is curried with our libdmg pin.
+  loader = import ../third_party/loader/nix/loader { inherit pkgs; nixpkgs = flake.inputs.nixpkgs; };
   libdmg = flake.packages.${builtins.currentSystem}.libdmg-hfsplus;
-  vmTools = pkgs.vmTools.override {
-    rootModules = [ "virtio_pci" "virtio_mmio" "virtio_blk" "virtio_balloon"
-      "virtio_rng" "ext4" "virtiofs" "crc32c" "loop" "hfsplus" ];
-  };
-  # memSize must exceed the bare HFS+ raw (it lives in the VM's RAM tmpfs) — bump it
-  # for large components (the runtime). Host has 30G; 6G is plenty for a ~2.7G raw.
-  mkDmg = { name, src, vol ? "PlanAI", memSize ? 2048 }:
-    vmTools.runInLinuxVM (pkgs.runCommand "${name}.dmg"
-      { nativeBuildInputs = [ pkgs.hfsprogs pkgs.util-linux ]; inherit memSize; }
-      ''
-        raw=$TMPDIR/raw.hfs
-        # size from du -l (each hard-link name counted, since cp breaks them) + a
-        # per-file catalog pad + slack; over-provision is free (UDIF compresses it).
-        kb=$(du -slk ${src} | cut -f1); nfiles=$(find ${src} | wc -l)
-        truncate -s $(( kb * 1024 + nfiles * 4096 + 256*1024*1024 )) $raw
-        mkfs.hfsplus -v "${vol}" $raw
-        mkdir -p $TMPDIR/mnt
-        mount -t hfsplus -o loop $raw $TMPDIR/mnt
-        cp -a --no-preserve=links ${src}/. $TMPDIR/mnt/
-        umount $TMPDIR/mnt
-        ${libdmg}/bin/dmg dmg $raw $out
-      '');
-  # an ollama flavour extracted to a plain directory (the repack is already a store
-  # path). The windows component ships as a dir (used in place on FAT32); darwin's
-  # extracted tree feeds mkDmg.
-  mkOllamaDir = key: pkgs.runCommand "ollama-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
-    "mkdir -p $out && tar -xf ${ollamaComponents}/ollama-${key}.tar.gz -C $out";
-  # a llama.cpp flavour, same shape (the normalised tar.gz from nix/vendor.nix).
+  mkSqfs = loader.mkSqfs;
+  mkClosureSqfs = loader.mkClosureSqfs;
+  mkDmg = loader.mkDmg { inherit libdmg; };
+
+  # extract an ollama/llama.cpp flavour to a plain dir (repack is already a store path).
+  mkOllamaDir = key: loader.mkExtractDir "ollama-${key}" "${ollamaComponents}/ollama-${key}.tar.gz";
   llamacppComponents = flake.packages.${builtins.currentSystem}.llamacppComponents;
-  mkLlamacppDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; }
-    "mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out";
+  mkLlamacppDir = key: loader.mkExtractDir "llamacpp-${key}" "${llamacppComponents}/llamacpp-${key}.tar.gz";
   # windows flavours: upstream's win zips don't ship the MSVC C++ runtime, and
   # llama-server.exe links VCRUNTIME140/MSVCP140 — on a machine without the VC++
   # redist it dies before main(). Drop the shared-pinned redist DLLs

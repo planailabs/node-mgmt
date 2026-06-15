@@ -452,21 +452,16 @@
         # Built per linux arch: the FHS closure is the target machine's /nix/store
         # paths (glibc, gtk3, …), so an aarch64 NixOS needs an aarch64-linux closure.
         # We have native aarch64 builders, so each just builds on its own system.
-        mkNixosFhs = fhsSystem:
-          let fhsPkgs = import nixpkgs { system = fhsSystem; };
-          in fhsPkgs.buildFHSEnv {
-            name = "planai-fhs";
-            runScript = "${fhsPkgs.writeShellScript "planai-fhs-run" ''exec "$@"''}";
-            targetPkgs = p: with p; [
-              glibc gcc-unwrapped.lib zlib
-              glib gtk3 nss nspr atk at-spi2-atk at-spi2-core cairo pango gdk-pixbuf
-              cups dbus expat libdrm libxkbcommon mesa libgbm alsa-lib
-              freetype fontconfig libGL systemd
-              libx11 libxcomposite libxcursor libxdamage
-              libxext libxfixes libxi libxrender libxtst
-              libxcb libxrandr libxscrnsaver
-            ];
-          };
+        # The buildFHSEnv builder lives in the shared loader nix lib; the package
+        # set is DATA from loader.toml [fhs] (so any product supplies its own libs).
+        loaderFhs = import ./third_party/loader/nix/loader/fhs.nix { inherit nixpkgs; };
+        loaderToml = builtins.fromTOML (builtins.readFile ./loader.toml);
+        mkNixosFhs = fhsSystem: loaderFhs {
+          system = fhsSystem;
+          name = loaderToml.fhs.name;
+          runScript = loaderToml.fhs.run_script;
+          targetPkgNames = loaderToml.fhs.target_pkgs;
+        };
         nixosFhs = mkNixosFhs "x86_64-linux";
         nixosFhs-arm64 = mkNixosFhs "aarch64-linux";
 

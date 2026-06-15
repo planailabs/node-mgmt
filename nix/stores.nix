@@ -1,16 +1,5 @@
-# Reads the per-import records written by scripts/store-import.sh
-# (dist/.stores/<name> contains a single store path) into an attrset
-#   { <name> = builtins.storePath "/nix/store/…"; }
-#
-# PER-STEP by construction: each store-import writes its OWN record, and this reads
-# whatever is present at eval time — there is no whole-graph "gen-stores" barrier to
-# re-run. A new/changed import is picked up on the next `nix-build --impure` with no
-# regeneration step. Requires --impure (storePath + reading dist/.stores outside the
-# flake). Empty until the first import is recorded.
-let
-  dir = ../dist/.stores;
-  read = name: builtins.storePath (builtins.readFile (dir + "/${name}"));
-in
-if builtins.pathExists dir
-then builtins.mapAttrs (name: _type: read name) (builtins.readDir dir)
-else { }
+# The dist/.stores reader now lives in the shared loader nix lib; this thin
+# wrapper passes the project's dist/.stores dir. (Records are written by the
+# loader's store-import.sh; see third_party/loader/nix/loader/stores.nix.)
+# Requires --impure (storePath + reading dist/.stores outside the flake).
+import ../third_party/loader/nix/loader/stores.nix { distStores = ../dist/.stores; }
