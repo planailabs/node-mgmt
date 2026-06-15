@@ -158,12 +158,13 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn new(exe: PathBuf, here: PathBuf, in_fhs: bool, args: Vec<OsString>, env0: Vec<(OsString, OsString)>, instance_lock: Option<std::fs::File>) -> Self {
+    pub fn new(exe: PathBuf, here: PathBuf, args: Vec<OsString>, env0: Vec<(OsString, OsString)>, instance_lock: Option<std::fs::File>) -> Self {
         let comp_dir = components_dir(&here);
         Ctx {
             exe,
             here,
-            in_fhs,
+            // FHS is the loader's concern: are we the re-exec'd NixOS sandbox child?
+            in_fhs: crate::in_fhs(),
             args,
             env0,
             instance_lock,

@@ -221,16 +221,20 @@ pub fn is_nixos() -> bool {
         && (Path::new("/etc/NIXOS").exists() || Path::new("/run/current-system/sw").exists())
 }
 
+/// Are we the copy re-executed inside the NixOS FHS sandbox (`PLANAI_FHS_REEXEC`)? The
+/// host parent already took the run lock and mounted the components, so the child only
+/// walks the stack. Always false off NixOS — the var is set solely by [`maybe_run_in_fhs`].
+pub fn in_fhs() -> bool {
+    std::env::var_os("PLANAI_FHS_REEXEC").is_some()
+}
+
 /// NixOS FHS entry: squashfuse-mount (or extract) the FHS-closure store, then in an
 /// outer bubblewrap namespace provide it as /nix/store and re-exec OURSELF as a child
 /// (PLANAI_FHS_REEXEC=1). Returns the child's exit code, or None when the FHS path
 /// doesn't apply / can't be set up (caller runs bare).
 #[cfg(target_os = "linux")]
 pub fn maybe_run_in_fhs(exe: &Path, comp: Option<&Path>, spinner: &SpinnerHandle) -> Option<i32> {
-    if std::env::var_os("PLANAI_FHS_REEXEC").is_some()
-        || std::env::var_os("PLANAI_DEV").is_some()
-        || !is_nixos()
-    {
+    if in_fhs() || std::env::var_os("PLANAI_DEV").is_some() || !is_nixos() {
         return None;
     }
     let comp = comp?;
@@ -356,12 +360,13 @@ pub fn acquire_instance_lock() -> Result<std::fs::File, bool> {
 
 /// Take the single-instance guard for a host run, ready to hand to the lifecycle
 /// [`crate::lifecycle::Ctx`]. The FHS child is part of the same run (the host already
-/// holds the lock), so it never takes its own → `None`. If another instance already
+/// holds the lock), so it never takes its own → `None` — FHS is the loader's concern,
+/// so the detection is internal, not a caller parameter. If another instance already
 /// holds it, a second launch would fight over the supervisor socket + ports, so notify
 /// the user (localized, `{$brand}`) and exit. `Err(false)` from the primitive (couldn't
 /// create the lock file) proceeds unguarded → `None`.
-pub fn acquire_run_lock(brand: &str, in_fhs: bool) -> Option<std::fs::File> {
-    if in_fhs {
+pub fn acquire_run_lock(brand: &str) -> Option<std::fs::File> {
+    if in_fhs() {
         return None;
     }
     match acquire_instance_lock() {

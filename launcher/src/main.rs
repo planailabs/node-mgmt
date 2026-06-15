@@ -517,14 +517,11 @@ fn main() {
     let exe = std::env::current_exe().expect("current_exe");
     let here = exe.parent().expect("exe parent").to_path_buf();
 
-    // Are we the re-executed copy running inside the NixOS FHS sandbox? If so the
-    // host parent already took the lock and mounted the components — we just run.
-    let in_fhs = std::env::var_os("PLANAI_FHS_REEXEC").is_some();
-
-    // Single-instance guard — taken by the host process only (the FHS child is part of
-    // the same run). Held until exit (or handed over on relaunch); a second launch is
-    // notified + exits inside loader-core. Brand fills the localized "already running".
-    let instance_lock = loader_core::acquire_run_lock("plan.ai", in_fhs);
+    // Single-instance guard — held until exit (or handed over on relaunch); a second
+    // launch is notified + exits inside loader-core. The FHS re-exec (NixOS) is entirely
+    // the loader's concern, so it's not threaded through here: acquire_run_lock and the
+    // lifecycle Ctx both detect it internally. Brand fills the localized "already running".
+    let instance_lock = loader_core::acquire_run_lock("plan.ai");
 
     // Choose ollama/open-webui ports up front (host picks; the supervisor + FHS
     // child inherit via env). Falls back off 11434/8080 when a host service holds
@@ -535,7 +532,7 @@ fn main() {
     // apply, relaunch — is the shared lifecycle state machine (loader-core),
     // driven by the plan.ai project bodies (mounts + session + splash text).
     loader_core::lifecycle::run(
-        loader_core::lifecycle::Ctx::new(exe, here, in_fhs, args, env0, instance_lock),
+        loader_core::lifecycle::Ctx::new(exe, here, args, env0, instance_lock),
         Box::new(project::PlanAi::new()),
     );
 }
