@@ -1,7 +1,7 @@
 ## plan.ai dashboard — Deutsch.
 
 # top chrome
-chrome-tagline = usb · offline
+chrome-tagline = node-mgmt · offline
 tab-dashboard = Übersicht
 tab-models = Modelle
 tab-webui = Open WebUI

@@ -2,7 +2,7 @@
 ## (theme toggle, language picker, data table) at runtime; keep keys app-specific.
 
 # top chrome
-chrome-tagline = usb · offline
+chrome-tagline = node-mgmt · offline
 tab-dashboard = Dashboard
 tab-models = Models
 tab-webui = Open WebUI

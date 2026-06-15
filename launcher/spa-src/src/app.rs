@@ -191,7 +191,7 @@ pub fn App() -> Element {
 
         div { class: "bg-canvas text-fg h-screen flex flex-col overflow-hidden",
             // top chrome
-            header { class: "topbar",
+            header { class: "topbar px-6",
                 div { class: "flex items-center gap-3",
                     span { class: "font-mono text-fg-strong font-semibold tracking-tight",
                         "plan"

@@ -23,7 +23,7 @@ pub fn ConfigView() -> Element {
     let sch = schema.read().clone().flatten();
 
     rsx! {
-        div { class: "flex-1 min-h-0 overflow-auto",
+        div { class: "flex-1 min-h-0 overflow-auto p-6",
             Card {
                 if let Some(note) = saved_note.read().clone() {
                     p { class: "td-muted text-sm mb-2", "{note}" }
