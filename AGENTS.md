@@ -246,7 +246,10 @@ impure/project steps: download, build-openwebui, make-runtime, seed-models, test
 build) · `app/` (thin Electron shell) · `.gitlab-ci.yml` (build-all under nix).
 
 **`third_party/loader` (the build framework submodule, `git@git.plan.ai:plan-ai/loader-builder`).**
-The reusable, project-agnostic loader framework: `crates/loader-manifest` (the
+**Its `third_party/loader/AGENTS.md` is the full reference** — the `loader.toml` schema,
+every crate/lib/script, how a new product consumes it, and the load-bearing gotchas;
+read it before changing anything that crosses the seam. In short, the reusable,
+project-agnostic loader framework: `crates/loader-manifest` (the
 update-manifest schema/diff; classification is data-driven via `ClassifyTable` built
 from `loader.toml`), `crates/loader-engine` (parses `loader.toml`, renders
 `build.ninja` + the `Makefile`), `crates/xtask` (the whole build tool — all
