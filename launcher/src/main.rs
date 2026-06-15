@@ -18,8 +18,10 @@ mod apply;
 mod control;
 mod i18n;
 mod lifecycle;
-mod net;
 mod paths;
+// The shared HTTP client now lives in loader-core; re-export it so `crate::net::*`
+// (used by serve/proxy/control/usbd/config/update/apply) keeps resolving.
+pub(crate) use loader_core::net;
 mod proxy;
 mod serve;
 mod update;

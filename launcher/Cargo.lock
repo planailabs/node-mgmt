@@ -1045,6 +1045,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "loader-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "reqwest",
+ "rustls",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "loader-manifest"
 version = "0.1.0"
 dependencies = [
@@ -1276,6 +1288,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "libc",
+ "loader-core",
  "loader-manifest",
  "mac-mgmt-services",
  "mime_guess",

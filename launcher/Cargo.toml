@@ -18,6 +18,7 @@ mac-mgmt-services = { path = "../third_party/mac-mgmt/mac-mgmt-services" }
 plan-ai-control-api = { path = "../crates/control-api" }
 # shared update-manifest schema + diff + platform classification (also used by the
 # build tool xtask) — the updater reads/writes these manifests.
+loader-core = { path = "../third_party/loader/crates/loader-core" }
 loader-manifest = { path = "../third_party/loader/crates/loader-manifest" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "net", "io-util", "sync", "signal", "fs"] }
 anyhow = "1"
