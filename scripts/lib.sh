@@ -4,8 +4,13 @@
 set -euo pipefail
 
 # --- paths ------------------------------------------------------------------
+# REPO_ROOT is the PROJECT root (where flake.nix, usb.lock, dist/ live). When these
+# scripts are vendored in a submodule (third_party/loader/scripts), $SCRIPT_DIR/..
+# would resolve to the submodule, re-rooting dist/ + the `nix build` cwd. The build
+# engine therefore exports PLANAI_REPO_ROOT=$PWD before invoking ninja; we honour it
+# and only fall back to $SCRIPT_DIR/.. when unset (so in-tree use still works).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="${PLANAI_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 USB_LOCK="$REPO_ROOT/usb.lock"
 VENDOR_DIR="$REPO_ROOT/vendor"
 DIST_DIR="$REPO_ROOT/dist"
