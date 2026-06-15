@@ -491,6 +491,10 @@ fn apply_dev_overrides(run: &RunArgs) {
 }
 
 fn main() {
+    // Pin the cache dir name before anything touches cache_root() — incl. the CLI
+    // subcommands below, which run before the lifecycle would set it from the Project.
+    loader_core::set_cache_dir_name(project::CACHE_DIR_NAME);
+
     let cli = Cli::parse();
     // Internal subcommands / passthroughs — each runs and exits (never returns).
     if let Some(cmd) = cli.cmd {

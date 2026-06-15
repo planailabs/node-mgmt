@@ -41,9 +41,18 @@ impl PlanAi {
     }
 }
 
+/// The host-local cache leaf dir (`~/.cache/<name>`, `%LOCALAPPDATA%\<name>`, …).
+/// Single source for both the Product impl and the early `main()` set (so CLI
+/// subcommands that touch the cache before the lifecycle agree).
+pub const CACHE_DIR_NAME: &str = "plan-ai-node-mgmt";
+
 impl Project for PlanAi {
     fn brand(&self) -> &str {
         "plan.ai"
+    }
+
+    fn cache_dir_name(&self) -> &str {
+        CACHE_DIR_NAME
     }
 
     /// Mount the components on the HOST and export the env the stack inherits.
