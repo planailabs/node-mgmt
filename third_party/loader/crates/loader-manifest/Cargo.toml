@@ -1,0 +1,10 @@
+[package]
+name = "loader-manifest"
+version = "0.1.0"
+edition = "2021"
+description = "Project-agnostic update-manifest schema, classification, sha256 + diff. Used by both the build tool (loader xtask) and the loader-core updater so there is one source of truth (no schema drift). Classification is data-driven via ClassifyTable so any product can describe its own platform/feature layout."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"

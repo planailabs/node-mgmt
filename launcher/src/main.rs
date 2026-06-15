@@ -14,20 +14,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod config;
-mod apply;
 mod control;
 mod i18n;
 mod lifecycle;
 mod paths;
 mod proxy;
 mod serve;
-mod update;
 mod usbd;
 
-// The FHS-entry / component-mount / pool-discovery / splash / cache+lock substrate +
-// the shared HTTP client now live in the loader-core runtime crate; re-export them so
-// the lifecycle state machine + the project glue below keep referring to `crate::*`.
-pub(crate) use loader_core::net;
+// The FHS-entry / component-mount / pool-discovery / splash / cache+lock substrate, the
+// shared HTTP client, and the crash-safe self-updater (update + apply) now live in the
+// loader-core runtime crate; re-export them so the lifecycle state machine + the project
+// glue below keep referring to `crate::*`.
+pub(crate) use loader_core::{apply, net, update};
 pub(crate) use loader_core::{
     acquire_instance_lock, cache_root, components_dir, external_roots, is_nixos, kill_spinner,
     log, notify, pick_base, pool_drive_root, provide, show_splash, teardown, Mount, Splash,
@@ -394,7 +393,7 @@ fn run_serve() -> ! {
 /// any interrupted apply, then apply the staged update. For ops + integration tests
 /// (drive it with PLANAI_PORTABLE_ROOT + PLANAI_CACHE + a local update server).
 fn run_self_update() -> ! {
-    apply::resume_if_interrupted();
+    apply::resume_if_interrupted(&i18n::t("applying-update"));
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     let up = update::Updater::new();
     rt.block_on(update::check_and_predownload(up.clone()));
@@ -402,7 +401,7 @@ fn run_self_update() -> ! {
     use plan_ai_control_api::UpdateState;
     log(&format!("self-update: state={:?} {}/{}", st.state, st.done, st.total));
     if st.state == UpdateState::Ready {
-        let applied = apply::run(&up);
+        let applied = apply::run(&up, &i18n::t("applying-update"));
         log(&format!("self-update: applied={applied}"));
         std::process::exit(if applied { 0 } else { 1 });
     }

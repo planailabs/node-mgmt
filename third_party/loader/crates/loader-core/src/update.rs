@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use plan_ai_control_api::{UpdateState, UpdateStatus};
+use loader_manifest::{UpdateState, UpdateStatus};
 use loader_manifest::{self as manifest, Manifest, Selection};
 
-use crate::{cache_root, net, paths};
+use crate::{cache_root, net, portable_root};
 
 /// A verified, staged update awaiting apply.
 pub struct Pending {
@@ -50,10 +50,10 @@ impl Updater {
 }
 
 fn local_manifest_path() -> PathBuf {
-    paths::portable_root().join("update.json")
+    portable_root().join("update.json")
 }
 fn platforms_path() -> PathBuf {
-    paths::portable_root().join("platforms.json")
+    portable_root().join("platforms.json")
 }
 
 pub fn load_local() -> Option<Manifest> {
@@ -106,7 +106,7 @@ fn staging_dir(commit: &str) -> PathBuf {
 /// (`apply::resume_if_interrupted`). Written when the delta is staged + ready;
 /// cleared once applied (or when already up to date).
 pub fn pending_marker_path() -> PathBuf {
-    paths::portable_root().join(".update-pending.json")
+    portable_root().join(".update-pending.json")
 }
 
 /// Record a staged-and-ready update on the pendrive so a restart applies it.
@@ -151,7 +151,7 @@ fn failed(msg: String) -> UpdateStatus {
 }
 
 /// Human-readable byte size for logs + the splash throughput indicator (1.5 GiB, …).
-pub(crate) fn human_bytes(n: u64) -> String {
+pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut f = n as f64;
     let mut i = 0usize;
@@ -179,7 +179,7 @@ pub(crate) fn entry_artifact(e: &manifest::Entry) -> Option<&str> {
 /// counts as present only when its unpacked target dir exists AND is non-empty (a
 /// half-wiped/failed unpack shouldn't pass). Unsafe/odd paths are treated as present
 /// (never our business to re-fetch).
-pub(crate) fn artifact_present(root: &Path, e: &manifest::Entry) -> bool {
+pub fn artifact_present(root: &Path, e: &manifest::Entry) -> bool {
     let Some(rel) = entry_artifact(e) else { return true };
     if !manifest::is_safe_path(rel) {
         return true;
@@ -275,7 +275,7 @@ pub async fn check_and_predownload(up: Handle) {
     // Diff against the local manifest — adjusted for missing on-disk artifacts (a
     // heal of just those at the same version, or a full re-fetch across versions;
     // see local_for_plan).
-    let local = local_for_plan(&remote, &sel, &paths::portable_root());
+    let local = local_for_plan(&remote, &sel, &portable_root());
     match &local {
         Some(l) => crate::log(&format!("update: local version {} (commit {})", l.version, short(&l.commit))),
         None => crate::log("update: no local manifest (or repairing) — fetching every wanted component"),

@@ -236,7 +236,7 @@ impl Ctx {
                 prog_stop.store(true, Ordering::Relaxed);
                 let _ = prog.join();
                 kill_spinner(&self.spinner); // close the download gauge before apply's own
-                apply::run(&self.updater) // stages → drive (verified, atomic, commits update.json)
+                apply::run(&self.updater, &i18n::t("applying-update")) // stages → drive (verified, atomic, commits update.json)
             }
             Err(e) => {
                 prog_stop.store(true, Ordering::Relaxed);
@@ -299,7 +299,7 @@ impl Ctx {
         }
         // Finish any update apply that a prior run left mid-way (before we
         // mount the components it may be replacing).
-        apply::resume_if_interrupted();
+        apply::resume_if_interrupted(&i18n::t("applying-update"));
         let root = cache_root().join("root");
         let dist = root.join("dist");
         let tools = root.join("tools");
@@ -644,9 +644,9 @@ impl Ctx {
     /// same crash-resume path a reboot uses.
     fn apply(&mut self) -> Phase {
         self.applied = if self.updater.pending.lock().unwrap().is_some() {
-            apply::run(&self.updater)
+            apply::run(&self.updater, &i18n::t("applying-update"))
         } else {
-            apply::resume_if_interrupted()
+            apply::resume_if_interrupted(&i18n::t("applying-update"))
         };
         Phase::Flush
     }

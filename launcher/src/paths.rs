@@ -5,26 +5,9 @@
 
 use std::path::PathBuf;
 
-pub fn resources_root() -> PathBuf {
-    std::env::var_os("PLANAI_RESOURCES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("dist"))
-}
-
-pub fn portable_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("PLANAI_PORTABLE_ROOT") {
-        return PathBuf::from(p);
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-fn ensure_dir(p: PathBuf) -> PathBuf {
-    let _ = std::fs::create_dir_all(&p);
-    p
-}
+// The generic resolution (resources_root / portable_root / ensure_dir) lives in
+// loader-core; the project-specific resolvers below build on it.
+pub use loader_core::{ensure_dir, portable_root, resources_root};
 
 pub fn models_dir() -> PathBuf {
     ensure_dir(portable_root().join("models"))

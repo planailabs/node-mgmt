@@ -1,0 +1,9 @@
+[package]
+name = "loader-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Project-agnostic build engine for the loader framework: parses loader.toml and renders a ninja build graph (+ target/flavour resolution). The plan.ai-specific data (targets, features, components, FHS, classification, layout) lives entirely in the consumer's loader.toml — this crate carries only the generic emission logic."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

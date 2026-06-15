@@ -12,20 +12,20 @@ use std::path::{Path, PathBuf};
 use loader_manifest::{self as manifest, Manifest};
 use serde_json::json;
 
-use crate::{paths, update};
+use crate::{portable_root, update};
 
 fn journal_path(root: &Path) -> PathBuf {
     root.join(".update-applying.json")
 }
 
 /// Apply the pending staged update (from a `Check`). Returns true if it applied.
-pub fn run(up: &update::Updater) -> bool {
+pub fn run(up: &update::Updater, applying_text: &str) -> bool {
     let Some(pending) = up.pending.lock().unwrap().take() else {
         return false;
     };
-    let root = paths::portable_root();
+    let root = portable_root();
     write_journal(&root, &pending.staging, &pending.remote.commit);
-    let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.sel, Some(up));
+    let ok = apply_plan(&root, &pending.staging, &pending.remote, &pending.sel, Some(up), applying_text);
     let _ = std::fs::remove_file(journal_path(&root));
     // The staged update is now on the drive — drop the pendrive "in flight" marker
     // so the next launch doesn't try to re-apply it.
@@ -42,8 +42,8 @@ pub fn run(up: &update::Updater) -> bool {
 /// the staging is gone, drop the stale markers + orphan temps and keep the intact
 /// old version (a fresh download will re-stage it). Returns true when an update
 /// was actually applied (the caller may relaunch onto the new version).
-pub fn resume_if_interrupted() -> bool {
-    let root = paths::portable_root();
+pub fn resume_if_interrupted(applying_text: &str) -> bool {
+    let root = portable_root();
     let jp = journal_path(&root);
     let mp = update::pending_marker_path();
     // Prefer the apply journal (mid-apply); fall back to the staged-ready marker.
@@ -64,7 +64,7 @@ pub fn resume_if_interrupted() -> bool {
         (Some(staging), Some(remote)) if staging.exists() => {
             crate::log("resuming staged update apply (from pendrive marker)");
             let sel = update::read_selection();
-            let ok = apply_plan(&root, &staging, &remote, &sel, None);
+            let ok = apply_plan(&root, &staging, &remote, &sel, None, applying_text);
             let _ = std::fs::remove_file(&jp);
             update::clear_pending_marker();
             ok
@@ -88,7 +88,7 @@ fn write_journal(root: &Path, staging: &Path, commit: &str) {
 
 /// Copy staged files into place (verified, atomic per file), delete pruned files,
 /// then commit the manifest last. `up` (when present) drives the progress splash.
-fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, sel: &manifest::Selection, up: Option<&update::Updater>) -> bool {
+fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, sel: &manifest::Selection, up: Option<&update::Updater>, applying_text: &str) -> bool {
     // Same local-or-None decision as the download (local_for_plan): a component missing
     // from the drive means a full re-fetch, so apply must place the full set too (the
     // staging holds exactly what the download fetched). Files absent from staging are
@@ -101,7 +101,7 @@ fn apply_plan(root: &Path, staging: &Path, remote: &Manifest, sel: &manifest::Se
         plan.to_download.len(), plan.to_delete.len(), plan.to_wipe_dirs.len(), root.display(), remote.version, commit,
     ));
     let total_bytes: u64 = plan.to_download.iter().map(|e| e.size.unwrap_or(0)).sum();
-    let mut splash = crate::show_splash(crate::SplashOpts { text: &crate::i18n::t("applying-update"), progress: true });
+    let mut splash = crate::show_splash(crate::SplashOpts { text: applying_text, progress: true });
     let mut done = 0u64;
     let mut done_bytes = 0u64;
     // Log a terminal progress line at most every ~5% (so a 60k-file windows apply
