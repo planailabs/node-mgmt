@@ -52,6 +52,17 @@ STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"; cleanup' EXIT
 mkdir -p "$STAGE/components"
 cp "$EXE" "$STAGE/plan-ai.exe"
 cp -a "$POOL/win-x64" "$STAGE/components/win-x64"
+# Generate the manifest BEFORE unpacking — the .zip files must still be on disk so
+# the manifest scanner emits ZIP entries (path=foo.zip, target=foo/), exactly like
+# make-usb-image does for the burned image. If we unpacked first, the scanner would
+# instead record every unpacked file individually; the launcher's provision check
+# (artifact_present per file) would then flag any not-byte-perfectly-pushed file as
+# "missing" and re-fetch the whole pool from the update server (its URL fallback
+# reaches PROD) — i.e. the test would silently validate the prod build, not this one.
+seed_drive_manifest "$STAGE" win-x64
+# Now mirror the burned image: unpack each component zip into its target folder and
+# drop the zip, so the remote sees exactly what a real drive holds (used in place).
+# artifact_present(zip) checks the unpacked target dir, so the manifest still matches.
 shopt -s globstar nullglob
 for z in "$STAGE/components/win-x64"/**/*.zip; do
   [ -f "$z" ] || continue
@@ -60,7 +71,6 @@ for z in "$STAGE/components/win-x64"/**/*.zip; do
   rm -f "$z"
 done
 shopt -u globstar nullglob
-seed_drive_manifest "$STAGE" win-x64
 ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
 scp "${SSH_OPTS[@]}" -q "$STAGE/plan-ai.exe" "$HOST:$REMOTE/plan-ai.exe"
 # Per-file targets: Windows scp fails the multi-source→dir form ("Failure").
