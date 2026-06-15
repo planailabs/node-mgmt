@@ -215,6 +215,9 @@
               cp -r ${./crates} crates && chmod -R u+w crates
               mkdir -p third_party/mac-mgmt
               cp -r ${./third_party/mac-mgmt}/mac-mgmt-services third_party/mac-mgmt/mac-mgmt-services
+              # the launcher's update-manifest dep now lives in the loader submodule.
+              mkdir -p third_party/loader/crates
+              cp -r ${./third_party/loader/crates/loader-manifest} third_party/loader/crates/loader-manifest
               chmod -R u+w third_party
               cp -r ${launcherSrc}/. src && chmod -R u+w src && cd src
               # crates.io deps from the vendored cargo lock
