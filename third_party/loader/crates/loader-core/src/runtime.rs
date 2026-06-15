@@ -394,6 +394,46 @@ pub fn cache_root() -> PathBuf {
     base.unwrap_or_else(std::env::temp_dir).join("plan-ai")
 }
 
+/// Flush filesystem write buffers to disk on exit, so data the stack wrote to the
+/// (USB) drive — service data dirs, model stores under the portable root — is
+/// persisted before the user pulls it, then tell them (in their locale) it's safe to
+/// unplug. Best-effort; call AFTER tearing the component mounts down for max safety.
+pub fn flush_drive(brand: &str) {
+    #[cfg(unix)]
+    {
+        // sync(1) flushes all mounted filesystems' buffers (incl. the USB).
+        let _ = Command::new("sync").status();
+    }
+    #[cfg(windows)]
+    {
+        // Flush the volume that holds the portable root (models/ + data/).
+        let root = portable_root();
+        if let Some(drive) = root.to_str().map(|s| s.trim_start_matches(r"\\?\")).and_then(|s| s.chars().next()) {
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command",
+                       &format!("Write-VolumeCache -DriveLetter {drive}")])
+                .status();
+        }
+    }
+    notify(brand, &crate::i18n::t("safe-to-unplug", brand));
+}
+
+/// Locate the prepared component tree (PLANAI_RESOURCES). A running launcher mounts it
+/// at `<cache>/root/dist` and exports the env; a standalone CLI invocation inherits
+/// neither, so fall back to that well-known path and export it so resource resolvers
+/// work. None if nothing's mounted.
+pub fn ensure_resources() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from).filter(|p| p.exists()) {
+        return Some(p);
+    }
+    let dist = cache_root().join("root").join("dist");
+    if dist.exists() {
+        std::env::set_var("PLANAI_RESOURCES", &dist);
+        return Some(dist);
+    }
+    None
+}
+
 /// Pick the component flavour base name present in `comp` for this OS's format.
 pub fn pick_base(comp: &Path, prefix: &str) -> Option<String> {
     for ent in fs::read_dir(comp).ok()?.flatten() {
@@ -495,6 +535,23 @@ pub fn detach_stale_mount(dest: &Path) {
 pub fn override_dir(slot: &str) -> Option<PathBuf> {
     let key = format!("PLANAI_OVERRIDE_{}", slot.to_ascii_uppercase().replace('-', "_"));
     std::env::var_os(key).map(PathBuf::from).filter(|p| p.is_dir())
+}
+
+/// Apply `--with <slot>=<dir>` dev overrides to the process env: each becomes a
+/// `PLANAI_OVERRIDE_<SLOT>` var [`override_dir`]/[`provide_or_override`] read at mount
+/// time. Generic over every mounted slot. `Err` carries a malformed spec for the caller
+/// to surface; call this BEFORE snapshotting the env so a post-update relaunch keeps them.
+pub fn apply_slot_overrides(specs: &[String]) -> Result<(), String> {
+    for spec in specs {
+        let Some((name, dir)) = spec.split_once('=') else {
+            return Err(format!("--with: expected <slot>=<dir>, got {spec}"));
+        };
+        let key = format!("PLANAI_OVERRIDE_{}", name.to_ascii_uppercase().replace('-', "_"));
+        let p = Path::new(dir).canonicalize().unwrap_or_else(|_| PathBuf::from(dir));
+        log(&format!("dev override: {key}={}", p.display()));
+        std::env::set_var(&key, &p);
+    }
+    Ok(())
 }
 
 /// Make an override dir available at `dest` (symlink; junction/copy on windows) — the

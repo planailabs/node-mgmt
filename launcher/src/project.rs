@@ -14,7 +14,7 @@ use std::process::Command;
 use loader_core::lifecycle::{PrepareCtx, Project, SessionCtx};
 
 use crate::{
-    cache_root, control, detect_llamacpp, detect_ollama, electron_in, electron_target, i18n,
+    cache_root, control, detect_llamacpp, detect_ollama, electron_in, electron_target,
     kill_spinner, log, pick_base, prepare_llmfit, serve, start_llmfit, supervisor_socket_path,
     update, usbd, Mount,
 };
@@ -44,22 +44,6 @@ impl PlanAi {
 impl Project for PlanAi {
     fn brand(&self) -> &str {
         "plan.ai"
-    }
-
-    fn text(&self, key: &str) -> String {
-        i18n::t(key)
-    }
-
-    fn provision_progress(&self) -> Box<dyn Fn(u64, u64, u64) -> String + Send + Sync> {
-        Box::new(|done, total, rate_bps| {
-            // Text carries the throughput indicator (refreshed each tick so the
-            // rate stays live); the percent gauge is driven separately.
-            let mut text = i18n::t_args("provisioning-progress", &[("done", done as i64), ("total", total as i64)]);
-            if rate_bps > 0 {
-                text.push_str(&format!(" — {}/s", update::human_bytes(rate_bps)));
-            }
-            text
-        })
     }
 
     /// Mount the components on the HOST and export the env the stack inherits.
@@ -345,9 +329,5 @@ impl Project for PlanAi {
             let _ = c.kill();
             let _ = c.wait();
         }
-    }
-
-    fn flush_drive(&self) {
-        crate::flush_drive();
     }
 }

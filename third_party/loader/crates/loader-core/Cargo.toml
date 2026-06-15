@@ -2,7 +2,7 @@
 name = "loader-core"
 version = "0.1.0"
 edition = "2021"
-description = "Project-agnostic loader runtime: shared HTTP client (net), the FHS-entry / component-mount / pool-discovery / splash / cache+lock substrate, and the crash-safe self-updater (update + apply). The consuming launcher re-exports these and drives them; project specifics (electron/control-plane/UI/flavour-detection/i18n) stay in the launcher."
+description = "Project-agnostic loader runtime: shared HTTP client (net), the FHS-entry / component-mount / pool-discovery / splash / cache+lock substrate, the run lifecycle, the brand-parameterized lifecycle locales (i18n), and the crash-safe self-updater (update + apply). The consuming launcher re-exports these and drives them; project specifics (electron/control-plane/UI/flavour-detection) stay in the launcher."
 
 [dependencies]
 loader-manifest = { path = "../loader-manifest" }
@@ -18,3 +18,6 @@ which = "7"
 fs2 = "0.4"
 notify-rust = "4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# Brand-parameterized lifecycle locales (the launcher isn't Dioxus, so fluent direct).
+fluent = "0.16"
+unic-langid = "0.9"

@@ -30,10 +30,6 @@ getrandom = "0.2"
 fs2 = "0.4"
 # locate a dialog tool (zenity/kdialog/yad) on $PATH for the NixOS splash fallback
 which = "7"
-# FTL (Fluent) translations for the user-facing notifications, mirroring the
-# SPA's dioxus-i18n FTL approach (the launcher isn't Dioxus, so fluent direct).
-fluent = "0.16"
-unic-langid = "0.9"
 # serve the embedded Dioxus SPA + control API over localhost (phase 3)
 axum = "0.8"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }

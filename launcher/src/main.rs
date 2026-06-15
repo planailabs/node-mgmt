@@ -17,7 +17,6 @@ use clap::Parser;
 
 mod config;
 mod control;
-mod i18n;
 mod paths;
 mod project;
 mod proxy;
@@ -28,7 +27,7 @@ mod usbd;
 // shared HTTP client, and the crash-safe self-updater (update + apply) now live in the
 // loader-core runtime crate; re-export them so the lifecycle state machine + the project
 // glue below keep referring to `crate::*`.
-pub(crate) use loader_core::{apply, net, update};
+pub(crate) use loader_core::{net, update};
 pub(crate) use loader_core::{
     acquire_instance_lock, cache_root, external_roots, kill_spinner, log, notify, pick_base,
     Mount, SpinnerHandle,
@@ -125,30 +124,6 @@ fn detect_llamacpp(comp: &Path) -> Option<(String, String)> {
         }
     }
     None
-}
-
-/// Flush filesystem write buffers to disk on exit, so data the stack wrote to the
-/// (USB) drive — Open-WebUI's DATA_DIR, ollama models under the portable root — is
-/// persisted before the user pulls it, then tell the user it's safe to unplug.
-/// Best-effort; call AFTER tearing the component mounts down for maximum safety.
-fn flush_drive() {
-    #[cfg(unix)]
-    {
-        // sync(1) flushes all mounted filesystems' buffers (incl. the USB).
-        let _ = Command::new("sync").status();
-    }
-    #[cfg(windows)]
-    {
-        // Flush the volume that holds the portable root (models/ + data/).
-        let root = paths::portable_root();
-        if let Some(drive) = root.to_str().map(|s| s.trim_start_matches(r"\\?\")).and_then(|s| s.chars().next()) {
-            let _ = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command",
-                       &format!("Write-VolumeCache -DriveLetter {drive}")])
-                .status();
-        }
-    }
-    notify("plan.ai", &i18n::t("safe-to-unplug"));
 }
 
 /// Find the Electron executable inside a provided app component tree (the dir the
@@ -360,43 +335,6 @@ fn run_serve() -> ! {
     std::process::exit(code);
 }
 
-/// `plan-ai self-update`: check the update server, pre-download the delta, resume
-/// any interrupted apply, then apply the staged update. For ops + integration tests
-/// (drive it with PLANAI_PORTABLE_ROOT + PLANAI_CACHE + a local update server).
-fn run_self_update() -> ! {
-    apply::resume_if_interrupted(&i18n::t("applying-update"));
-    let rt = tokio::runtime::Runtime::new().expect("runtime");
-    let up = update::Updater::new();
-    rt.block_on(update::check_and_predownload(up.clone()));
-    let st = up.status();
-    use plan_ai_control_api::UpdateState;
-    log(&format!("self-update: state={:?} {}/{}", st.state, st.done, st.total));
-    if st.state == UpdateState::Ready {
-        let applied = apply::run(&up, &i18n::t("applying-update"));
-        log(&format!("self-update: applied={applied}"));
-        std::process::exit(if applied { 0 } else { 1 });
-    }
-    std::process::exit(if st.state == UpdateState::Idle { 0 } else { 1 });
-}
-
-/// Locate the prepared component tree (PLANAI_RESOURCES). A running launcher mounts
-/// it at `<cache>/root/dist` and exports the env; a standalone CLI invocation
-/// (`plan-ai ollama …`) inherits neither, so fall back to that well-known path and
-/// export it so `paths::*` / `usbd::resolve_bin` resolve. None if nothing's mounted.
-fn ensure_resources() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("PLANAI_RESOURCES").map(PathBuf::from).filter(|p| p.exists()) {
-        return Some(p);
-    }
-    let dist = cache_root().join("root").join("dist");
-    if dist.exists() {
-        std::env::set_var("PLANAI_RESOURCES", &dist);
-        // models/ + data/ live beside the cache root's runtime; the daemon seeds the
-        // portable root too. Only set if unset so an explicit override wins.
-        return Some(dist);
-    }
-    None
-}
-
 /// The ollama port the running stack uses, so `plan-ai ollama …` talks to the live
 /// server: PLANAI_OLLAMA_PORT if inherited, else the daemon's seeded config.json,
 /// else the well-known default.
@@ -418,7 +356,7 @@ pub(crate) fn running_ollama_port() -> u16 {
 /// Run a bundled tool (`ollama` / `mac-mgmt`) with the launcher's mounted runtime,
 /// forwarding argv + stdio and exiting with the child's status. Never returns.
 fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
-    let mounted = ensure_resources().is_some();
+    let mounted = loader_core::ensure_resources().is_some();
     let bin = match tool {
         "ollama" if mounted => Some(paths::ollama_binary()).filter(|b| b.exists()),
         "usbd" | "mac-mgmt" => usbd::resolve_bin(),
@@ -527,15 +465,12 @@ enum Cmd {
 /// post-update relaunch — which restores env0 — keeps them).
 fn apply_dev_overrides(run: &RunArgs) {
     let canon = |d: &Path| d.canonicalize().unwrap_or_else(|_| d.to_path_buf());
-    for spec in &run.with {
-        let Some((name, dir)) = spec.split_once('=') else {
-            log(&format!("--with: expected <slot>=<dir>, got {spec}"));
-            std::process::exit(2);
-        };
-        let key = format!("PLANAI_OVERRIDE_{}", name.to_ascii_uppercase().replace('-', "_"));
-        let p = canon(Path::new(dir));
-        log(&format!("dev override: {key}={}", p.display()));
-        std::env::set_var(&key, &p);
+    // The generic `--with <slot>=<dir>` component override lives in loader-core (it
+    // pairs with the mount-time `provide_or_override`); only the plan.ai-specific
+    // `--start-with-*` env overrides below stay here.
+    if let Err(e) = loader_core::apply_slot_overrides(&run.with) {
+        log(&e);
+        std::process::exit(2);
     }
     if let Some(d) = &run.start_with_electron {
         std::env::set_var("PLANAI_APP_DIR", canon(d));
@@ -564,7 +499,7 @@ fn main() {
             Cmd::Supervisor { socket } => run_supervisor(&socket.unwrap_or_else(supervisor_socket_path)),
             Cmd::ServeStack => run_serve_stack(),
             Cmd::Serve => run_serve(),
-            Cmd::SelfUpdate => run_self_update(),
+            Cmd::SelfUpdate => std::process::exit(update::self_update("plan.ai")),
             Cmd::Ollama { args } => run_tool_passthrough("ollama", args),
             Cmd::Usbd { args } => run_tool_passthrough("usbd", args),
             Cmd::MacMgmt { args } => run_tool_passthrough("mac-mgmt", args),
@@ -597,7 +532,7 @@ fn main() {
             Ok(f) => Some(f),
             Err(true) => {
                 log("another plan.ai instance is already running — exiting");
-                notify("plan.ai", &i18n::t("already-running"));
+                notify("plan.ai", &loader_core::i18n::t("already-running", "plan.ai"));
                 std::process::exit(0);
             }
             Err(false) => None, // couldn't create the lock file — proceed unguarded

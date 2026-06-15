@@ -1,0 +1,9 @@
+# Generic loader-lifecycle notification strings (English). {$brand} is the
+# product name supplied by the consuming project; nothing here is plan.ai-specific.
+already-running = {$brand} is already running.
+safe-to-unplug = Data written — drive can now be removed.
+starting-preparing = Starting {$brand} — preparing the runtime…
+provisioning = First run — downloading {$brand} onto the drive…
+provisioning-progress = First run — downloading {$brand} onto the drive… ({$done}/{$total})
+update-applied-restart = Update applied — please start {$brand} again.
+applying-update = Updating {$brand}…

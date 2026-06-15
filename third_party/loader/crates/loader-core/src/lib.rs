@@ -5,6 +5,8 @@
 pub mod net;
 mod runtime;
 pub use runtime::*;
+/// Brand-parameterized lifecycle locales (`{$brand}` filled from the project's name).
+pub mod i18n;
 /// The crash-safe self-updater: manifest diff + download (`update`) and the
 /// power-loss-safe apply onto the drive (`apply`).
 pub mod apply;

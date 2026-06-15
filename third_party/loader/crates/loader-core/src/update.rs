@@ -405,6 +405,36 @@ pub async fn check_and_predownload(up: Handle) {
     });
 }
 
+/// Ops / integration self-update (no UI): resume any interrupted apply, check the
+/// update server, pre-download the delta, then apply the staged update. Returns a
+/// process exit code. `brand` fills the localized "applying…" text. Drive it with
+/// PLANAI_PORTABLE_ROOT + PLANAI_CACHE + a local update server.
+pub fn self_update(brand: &str) -> i32 {
+    let applying = crate::i18n::t("applying-update", brand);
+    crate::apply::resume_if_interrupted(&applying);
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            crate::log(&format!("self-update runtime: {e}"));
+            return 1;
+        }
+    };
+    let up = Updater::new();
+    rt.block_on(check_and_predownload(up.clone()));
+    let st = up.status();
+    crate::log(&format!("self-update: state={:?} {}/{}", st.state, st.done, st.total));
+    if st.state == UpdateState::Ready {
+        let applied = crate::apply::run(&up, &applying);
+        crate::log(&format!("self-update: applied={applied}"));
+        return if applied { 0 } else { 1 };
+    }
+    if st.state == UpdateState::Idle {
+        0
+    } else {
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

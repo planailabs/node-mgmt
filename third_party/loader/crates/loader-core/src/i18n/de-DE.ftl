@@ -1,0 +1,9 @@
+# Generische Loader-Lebenszyklus-Meldungen (Deutsch). {$brand} ist der vom
+# konsumierenden Projekt gelieferte Produktname; nichts hier ist plan.ai-spezifisch.
+already-running = {$brand} läuft bereits.
+safe-to-unplug = Daten geschrieben - Laufwerk kann jetzt entfernt werden.
+starting-preparing = {$brand} startet — Laufzeit wird vorbereitet…
+provisioning = Erster Start — {$brand} wird auf das Laufwerk geladen…
+provisioning-progress = Erster Start — {$brand} wird auf das Laufwerk geladen… ({$done}/{$total})
+update-applied-restart = Update angewendet — bitte {$brand} erneut starten.
+applying-update = {$brand} wird aktualisiert…

@@ -43,17 +43,13 @@ pub type AppHandle = Arc<Mutex<Option<Child>>>;
 pub const APPLY_REQUESTED_EXIT: i32 = 75;
 
 /// What the project plugs into the lifecycle. The lifecycle owns the phase sequencing,
-/// the FHS-child delegation, the updater + splash plumbing, and the apply/relaunch
-/// decisions; the project supplies the bodies below.
+/// the FHS-child delegation, the updater + splash plumbing, the brand-parameterized
+/// lifecycle locales (`crate::i18n`), the drive flush, and the apply/relaunch decisions;
+/// the project supplies only the genuinely product-specific bodies below.
 pub trait Project: Send {
-    /// Notification title (the product brand).
+    /// The product brand — the notification title, and the `{$brand}` filled into every
+    /// localized lifecycle string (provisioning / applying / safe-to-unplug / …).
     fn brand(&self) -> &str;
-    /// Localized text for a lifecycle string key (`provisioning`, `starting-preparing`,
-    /// `applying-update`, `update-applied-restart`).
-    fn text(&self, key: &str) -> String;
-    /// A `Send + Sync` formatter for the provisioning progress line `(done, total,
-    /// rate_bps) -> String`, called from the gauge thread.
-    fn provision_progress(&self) -> Box<dyn Fn(u64, u64, u64) -> String + Send + Sync>;
     /// Mount the components on the host (set the child env, push Mounts, resolve the
     /// app dir). Return `false` to abort the run (a required mount failed). On the FHS
     /// child (`ctx.in_fhs`) this only resolves the app dir from the inherited resources.
@@ -64,8 +60,6 @@ pub trait Project: Send {
     /// Stop the session's services (BEFORE the component mounts are torn down, so
     /// nothing executes from a mount when it is unmounted).
     fn teardown_session(&mut self);
-    /// Flush drive write buffers + the "safe to unplug" notification.
-    fn flush_drive(&self);
 }
 
 /// What [`Project::prepare_mounts`] gets: where to mount + the accumulators it fills.
@@ -217,15 +211,16 @@ impl Ctx {
         if self.comp_dir.is_none() {
             log("no components on the drive — provisioning from the update server");
         }
-        if let Some(s) = show_splash(SplashOpts { text: &project.text("provisioning"), progress: true }) {
+        let brand = project.brand().to_string();
+        if let Some(s) = show_splash(SplashOpts { text: &crate::i18n::t("provisioning", &brand), progress: true }) {
             *self.spinner.lock().unwrap() = Some(s);
         }
         let prog_stop = Arc::new(AtomicBool::new(false));
-        let prog_text = project.provision_progress();
         let prog = {
             let up = self.updater.clone();
             let sp = self.spinner.clone();
             let stop = prog_stop.clone();
+            let brand = brand.clone();
             std::thread::spawn(move || {
                 let mut last = u8::MAX;
                 while !stop.load(Ordering::Relaxed) {
@@ -243,7 +238,17 @@ impl Ctx {
                                     splash.set_progress(pct);
                                     last = pct;
                                 }
-                                splash.set_text(&prog_text(st.done, st.total, st.rate_bps));
+                                // Text carries the throughput indicator (refreshed each
+                                // tick so the rate stays live); the gauge drives percent.
+                                let mut text = crate::i18n::t_args(
+                                    "provisioning-progress",
+                                    &brand,
+                                    &[("done", st.done as i64), ("total", st.total as i64)],
+                                );
+                                if st.rate_bps > 0 {
+                                    text.push_str(&format!(" — {}/s", update::human_bytes(st.rate_bps)));
+                                }
+                                splash.set_text(&text);
                             }
                         }
                     }
@@ -257,7 +262,7 @@ impl Ctx {
                 prog_stop.store(true, Ordering::Relaxed);
                 let _ = prog.join();
                 kill_spinner(&self.spinner); // close the download gauge before apply's own
-                apply::run(&self.updater, &project.text("applying-update"))
+                apply::run(&self.updater, &crate::i18n::t("applying-update", &brand))
             }
             Err(e) => {
                 prog_stop.store(true, Ordering::Relaxed);
@@ -294,7 +299,7 @@ impl Ctx {
         }
 
         // Splash ASAP — it covers the slow first-run mount/extract below.
-        if let Some(splash) = show_splash(SplashOpts { text: &project.text("starting-preparing"), progress: false }) {
+        if let Some(splash) = show_splash(SplashOpts { text: &crate::i18n::t("starting-preparing", project.brand()), progress: false }) {
             *self.spinner.lock().unwrap() = Some(splash);
         }
 
@@ -316,7 +321,7 @@ impl Ctx {
             }
         }
         // Finish any update apply a prior run left mid-way (before mounting what it replaces).
-        apply::resume_if_interrupted(&project.text("applying-update"));
+        apply::resume_if_interrupted(&crate::i18n::t("applying-update", project.brand()));
         let root = cache_root().join("root");
         let dist = root.join("dist");
         let tools = root.join("tools");
@@ -411,7 +416,7 @@ impl Ctx {
     /// updater staged it; after a Delegate the child staged it, so apply from the
     /// pendrive marker (the same crash-resume path a reboot uses).
     fn apply(&mut self, project: &mut dyn Project) -> Phase {
-        let text = project.text("applying-update");
+        let text = crate::i18n::t("applying-update", project.brand());
         self.applied = if self.updater.pending.lock().unwrap().is_some() {
             apply::run(&self.updater, &text)
         } else {
@@ -426,7 +431,7 @@ impl Ctx {
         if self.in_fhs {
             return Phase::Done;
         }
-        project.flush_drive();
+        crate::flush_drive(project.brand());
         if self.applied {
             Phase::Relaunch
         } else {
@@ -439,7 +444,7 @@ impl Ctx {
     /// read-only image (mac dmg) still maps the OLD bytes → notify instead.
     fn relaunch(&mut self, project: &mut dyn Project) -> Phase {
         if !self.exe.starts_with(portable_root()) {
-            crate::notify(project.brand(), &project.text("update-applied-restart"));
+            crate::notify(project.brand(), &crate::i18n::t("update-applied-restart", project.brand()));
             return Phase::Done;
         }
         // Release the single-instance lock NOW: the relaunched process takes it during
@@ -464,7 +469,7 @@ impl Ctx {
                 Err(e) => log(&format!("relaunch: spawn {} failed: {e}", self.exe.display())),
             }
         }
-        crate::notify(project.brand(), &project.text("update-applied-restart"));
+        crate::notify(project.brand(), &crate::i18n::t("update-applied-restart", project.brand()));
         Phase::Done
     }
 
