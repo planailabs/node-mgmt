@@ -29,8 +29,7 @@ mod usbd;
 // glue below keep referring to `crate::*`.
 pub(crate) use loader_core::{net, update};
 pub(crate) use loader_core::{
-    acquire_instance_lock, cache_root, external_roots, kill_spinner, log, notify, pick_base,
-    Mount, SpinnerHandle,
+    cache_root, external_roots, kill_spinner, log, pick_base, Mount, SpinnerHandle,
 };
 
 
@@ -522,22 +521,10 @@ fn main() {
     // host parent already took the lock and mounted the components — we just run.
     let in_fhs = std::env::var_os("PLANAI_FHS_REEXEC").is_some();
 
-    // Single-instance guard — taken by the host process only (the FHS child is
-    // part of the same run). A second launch would fight over the supervisor
-    // socket + ports, so bail out. Held until exit (or handed over on relaunch).
-    let instance_lock = if in_fhs {
-        None
-    } else {
-        match acquire_instance_lock() {
-            Ok(f) => Some(f),
-            Err(true) => {
-                log("another plan.ai instance is already running — exiting");
-                notify("plan.ai", &loader_core::i18n::t("already-running", "plan.ai"));
-                std::process::exit(0);
-            }
-            Err(false) => None, // couldn't create the lock file — proceed unguarded
-        }
-    };
+    // Single-instance guard — taken by the host process only (the FHS child is part of
+    // the same run). Held until exit (or handed over on relaunch); a second launch is
+    // notified + exits inside loader-core. Brand fills the localized "already running".
+    let instance_lock = loader_core::acquire_run_lock("plan.ai", in_fhs);
 
     // Choose ollama/open-webui ports up front (host picks; the supervisor + FHS
     // child inherit via env). Falls back off 11434/8080 when a host service holds

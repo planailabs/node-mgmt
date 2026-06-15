@@ -354,6 +354,27 @@ pub fn acquire_instance_lock() -> Result<std::fs::File, bool> {
     }
 }
 
+/// Take the single-instance guard for a host run, ready to hand to the lifecycle
+/// [`crate::lifecycle::Ctx`]. The FHS child is part of the same run (the host already
+/// holds the lock), so it never takes its own → `None`. If another instance already
+/// holds it, a second launch would fight over the supervisor socket + ports, so notify
+/// the user (localized, `{$brand}`) and exit. `Err(false)` from the primitive (couldn't
+/// create the lock file) proceeds unguarded → `None`.
+pub fn acquire_run_lock(brand: &str, in_fhs: bool) -> Option<std::fs::File> {
+    if in_fhs {
+        return None;
+    }
+    match acquire_instance_lock() {
+        Ok(f) => Some(f),
+        Err(true) => {
+            log(&format!("another {brand} instance is already running — exiting"));
+            notify(brand, &crate::i18n::t("already-running", brand));
+            std::process::exit(0);
+        }
+        Err(false) => None,
+    }
+}
+
 /// The prepared component tree (`PLANAI_RESOURCES`), where the mounted components
 /// (runtime/ ollama/ ow-assets/ …) live. Falls back to `dist` for dev layouts.
 pub fn resources_root() -> PathBuf {
