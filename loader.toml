@@ -291,7 +291,7 @@ cmd  = "@loader/make-usb-image.sh"
 deps_bundles = true
 deps_steps   = ["models"]
 src  = ["@loader/make-usb-image.sh", "@loader/lib.sh", "flake.nix"]
-src_tree = ["xtask/src", "crates"]
+src_tree = ["third_party/loader/crates", "crates"]
 desc = "usb image"
 default = true
 
@@ -301,7 +301,7 @@ out  = "dist/plan-ai-update.tar.gz"
 cmd  = "./scripts/make-update-tarball.sh"
 deps_bundles = true
 src  = ["./scripts/make-update-tarball.sh"]
-src_tree = ["xtask/src", "crates"]
+src_tree = ["third_party/loader/crates", "crates"]
 desc = "update tarball"
 
 [[launch]]

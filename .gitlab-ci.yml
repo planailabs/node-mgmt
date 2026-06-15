@@ -19,7 +19,7 @@ default:
     paths: [vendor/, app/node_modules/]
 
 variables:
-  GIT_SUBMODULE_STRATEGY: recursive   # plan-ai-design
+  GIT_SUBMODULE_STRATEGY: recursive   # plan-ai-design, mac-mgmt, loader (build framework)
 
 # ---------------------------------------------------------------------------
 lint:
