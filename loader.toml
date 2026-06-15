@@ -28,10 +28,10 @@ substring = [
 ]
 tools = ["linux-x64", "linux-arm64"]
 
-[manifest.feature_classify]
-hermes    = ["hermes"]
-llamacpp  = ["llamacpp"]
-openwebui = ["runtime-", "ow-assets"]
+# [manifest.feature_classify] is DERIVED from each [[component]].feature at build time
+# (authoritative — no basename guessing; see Config::feature_classify_table). Add
+# explicit entries here only to override / cover files no component produces; they are
+# merged on top of the derived map.
 
 [manifest.image_prep]
 seed_features_default       = true
@@ -180,7 +180,7 @@ win   = { ext = "zip",      attr = "runtime-{target}-dir",      desc = "nix dir:
 
 [[component]]
 name = "ollama"
-feature = "openwebui"
+feature = "core"          # the LLM engine is core (the dashboard talks to it directly), NOT gated by openwebui
 per = "flavour"
 flavour = "ollama"
 group = 1
