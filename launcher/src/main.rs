@@ -341,7 +341,7 @@ pub(crate) fn running_ollama_port() -> u16 {
     if let Some(p) = std::env::var("PLANAI_OLLAMA_PORT").ok().and_then(|p| p.parse().ok()) {
         return p;
     }
-    let cfg = cache_root().join("usbd-home").join("config.json");
+    let cfg = usbd::home().join("config.json");
     if let Ok(s) = std::fs::read_to_string(&cfg) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
             if let Some(p) = v.get("ollama").and_then(|o| o.get("port")).and_then(|p| p.as_u64()) {

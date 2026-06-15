@@ -63,6 +63,15 @@ pub fn socket_path() -> PathBuf {
     runtime_dir().join("services.sock")
 }
 
+/// The daemon's home dir — DATA (Config-tab `config.json`, the SSH host key that
+/// IS the instance identity, memvault store, hermes home). On the stick
+/// (`data/usbd`) so it travels with the drive, NOT the per-host cache. Single
+/// source of truth so the writer ([`spawn`]/`seed_config`) and readers (e.g.
+/// `running_ollama_port`) can never drift to different paths.
+pub fn home() -> PathBuf {
+    crate::paths::data_dir().join("usbd")
+}
+
 fn pick_port() -> u16 {
     TcpListener::bind(("::1", 0))
         .ok()
@@ -170,7 +179,7 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
     // IS the instance identity, memvault store, hermes home) — it lives on
     // the stick (data/usbd), not in the per-host cache, so it travels with
     // the drive. One-time migration from the old cache location.
-    let home = crate::paths::data_dir().join("usbd");
+    let home = home();
     let legacy = crate::cache_root().join("usbd-home");
     if !home.exists() && legacy.is_dir() {
         match std::fs::rename(&legacy, &home) {
