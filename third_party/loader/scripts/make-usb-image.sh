@@ -34,7 +34,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 need nix
 
-OUT="$DIST_DIR/plan-ai-usb.img"
+OUT="$DIST_DIR/$(loader_cfg '.layout.image_name')"
 while [ $# -gt 0 ]; do
   case "$1" in
     --size-mb) shift 2 ;;   # accepted + ignored (size derived in the derivation)
@@ -47,17 +47,18 @@ done
 
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 BUNDLE="$DIST_DIR/bundle"
-UPDATE_URL="${PLANAI_UPDATE_URL:-https://usb-update.plan.ai}"
+UPDATE_URL="${PLANAI_UPDATE_URL:-$(loader_cfg '.manifest.update_url')}"
+VOLUME="$(loader_cfg '.layout.volume_label')"
+PRODUCT="$(loader_cfg '.manifest.product')"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 declare -a FILES=()
 add_if() { [ -e "$1" ] || return 0; FILES+=("$1"); log "include $(basename "$1")"; }
 shopt -s nullglob
-# the standalone launchers, one per target (the app itself rides inside
-# components/<target>/ as app-<target>). linux ships both arches, so the *.exe glob
-# matches plan-ai.linux-x64.exe / plan-ai.linux-arm64.exe; win/mac are single-arch.
-for f in "$BUNDLE"/plan-ai.*.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do add_if "$f"; done
+# the standalone launchers, one per target — names from loader.toml
+# [layout.launcher_artifact] (the app itself rides inside components/<target>/).
+while IFS= read -r name; do add_if "$BUNDLE/$name"; done < <(loader_cfg '.layout.launcher_artifact | .[]')
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || die "no launchers in $BUNDLE — run scripts/bundle.sh <target> first"
 
@@ -89,22 +90,20 @@ cp -al "$POOL" "$DRIVE/components" 2>/dev/null || cp -a "$POOL" "$DRIVE/componen
 [ -d "$TOOLSDIR" ] && { cp -al "$TOOLSDIR" "$DRIVE/tools" 2>/dev/null || cp -a "$TOOLSDIR" "$DRIVE/tools"; }
 [ "$HAVE_MODELS" = yes ] && { cp -al "$MODELS" "$DRIVE/models" 2>/dev/null || cp -a "$MODELS" "$DRIVE/models"; }
 
-cat > "$DRIVE/README.txt" <<EOF
-plan.ai — portable offline AI (Ollama + Open-WebUI), v$VERSION
-
-Run on (each launcher mounts the matching app + runtime from /components/<target>/):
-  Linux x64  : chmod +x ./plan-ai.linux-x64.exe    then  ./plan-ai.linux-x64.exe
-  Linux arm64: chmod +x ./plan-ai.linux-arm64.exe  then  ./plan-ai.linux-arm64.exe
-  Windows    : run plan-ai.exe
-  macOS      : open plan-ai.dmg, then double-click plan.ai.app inside it
-
-First launch unpacks/mounts the runtime for your machine into a local cache;
-models and your data live in /models and /data on this drive. Everything runs
-offline. (On FAT32 the unix exec bit is not stored — Linux may need a chmod +x
-on the launcher; macOS ships a .dmg so the .app keeps its bit + signature.)
-
-Report an issue / get help: https://git.plan.ai/plan-ai/usb
-EOF
+# README: product + launcher list from loader.toml [layout.launcher_artifact].
+{
+  echo "$PRODUCT — portable offline app, v$VERSION"
+  echo
+  echo "Launchers on this drive (each mounts its app + runtime from /components/<target>/):"
+  loader_toml_json | jq -er '.layout.launcher_artifact | to_entries[] | "  \(.key): \(.value)"'
+  echo
+  echo "First launch unpacks/mounts the runtime for your machine into a local cache;"
+  echo "models and your data live in /models and /data on this drive. Everything runs"
+  echo "offline. (On FAT32 the unix exec bit is not stored — Linux may need a chmod +x"
+  echo "on the launcher; macOS ships a .dmg so the .app keeps its bit + signature.)"
+  echo
+  echo "Update server: $UPDATE_URL"
+} > "$DRIVE/README.txt"
 
 # update manifest: scan the assembled drive-root directly (it IS exactly the drive
 # contents — no electron *-unpacked dirs, unlike $BUNDLE). xtask shares the schema +
@@ -118,13 +117,13 @@ log "update.json -> drive root (url=$UPDATE_URL commit=${COMMIT:0:8})"
 # platforms.json: which platforms this USB keeps. The image ships ALL the platforms
 # it was built with, so seed it with all of them — otherwise the launcher would
 # create it with only the CURRENT platform on first run and prune the others.
+# map each present launcher filename back to its target via [layout.launcher_artifact].
 PLATS=()
-for f in "${FILES[@]}"; do case "$(basename "$f")" in
-  plan-ai.linux-x64.exe)   PLATS+=(linux-x64) ;;
-  plan-ai.linux-arm64.exe) PLATS+=(linux-arm64) ;;
-  plan-ai.exe)             PLATS+=(win-x64) ;;
-  plan-ai.dmg)             PLATS+=(mac-arm64) ;;
-esac; done
+for f in "${FILES[@]}"; do
+  t="$(loader_toml_json | jq -er --arg b "$(basename "$f")" \
+        '.layout.launcher_artifact | to_entries[] | select(.value==$b) | .key' 2>/dev/null || true)"
+  [ -n "$t" ] && PLATS+=("$t")
+done
 printf '%s\n' "${PLATS[@]}" | jq -Rsc '{platforms: (split("\n") | map(select(length>0)))}' > "$DRIVE/platforms.json"
 log "platforms.json -> drive root ($(jq -c .platforms "$DRIVE/platforms.json"))"
 
@@ -164,7 +163,7 @@ mb=$(( bytes / 1048576 * 115 / 100 + 128 ))
 log "FAT32 image: ${mb}MB from drive-root $(du -sh "$DRIVE" | cut -f1) -> $OUT"
 rm -f "$OUT"
 "$TOOLS/bin/truncate" -s "${mb}M" "$OUT"
-"$TOOLS/bin/mkfs.vfat" -F 32 -n PLANAI "$OUT" >/dev/null
+"$TOOLS/bin/mkfs.vfat" -F 32 -n "$VOLUME" "$OUT" >/dev/null
 # Copy the drive-root CONTENTS (not the dir) to the image root. `*` skips dotfiles —
 # the drive-root has none. mcopy -s recurses incl. empty dirs.
 "$TOOLS/bin/mcopy" -i "$OUT" -s -Q -b "$DRIVE"/* ::/

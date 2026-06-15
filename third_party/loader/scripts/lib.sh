@@ -43,6 +43,21 @@ publish_dir() {  # <tmp-dir> <final-dir>
   rm -rf "$final.prev" 2>/dev/null || true
 }
 
+# --- loader.toml accessors --------------------------------------------------
+# The image/bundle scripts derive their drive layout from loader.toml [layout] +
+# [manifest] (no hardcoded product names). Parse the TOML once via python3 (tomllib;
+# the devshell ships python >=3.11) and query with jq.
+loader_toml_json() {
+  [ -n "${_LOADER_TOML_JSON:-}" ] && { printf '%s' "$_LOADER_TOML_JSON"; return; }
+  need python3
+  [ -f "$REPO_ROOT/loader.toml" ] || die "loader.toml not found at $REPO_ROOT"
+  _LOADER_TOML_JSON="$(python3 -c 'import tomllib,json,sys; json.dump(tomllib.load(open(sys.argv[1],"rb")),sys.stdout)' "$REPO_ROOT/loader.toml")" \
+    || die "failed to parse loader.toml"
+  printf '%s' "$_LOADER_TOML_JSON"
+}
+# loader_cfg <jq-filter> -> value from loader.toml (e.g. '.layout.image_name')
+loader_cfg() { need jq; loader_toml_json | jq -er "$1" || die "loader.toml: missing $1"; }
+
 # --- usb.lock accessors -----------------------------------------------------
 # lock <jq-filter> -> value from usb.lock
 lock() {
