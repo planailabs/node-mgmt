@@ -9,3 +9,6 @@ pub use runtime::*;
 /// power-loss-safe apply onto the drive (`apply`).
 pub mod apply;
 pub mod update;
+/// The run lifecycle: the Phase state machine + the `Project` trait the consumer's
+/// launcher implements (mounts, session, splash text).
+pub mod lifecycle;

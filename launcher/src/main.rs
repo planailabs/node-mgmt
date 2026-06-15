@@ -18,8 +18,8 @@ use clap::Parser;
 mod config;
 mod control;
 mod i18n;
-mod lifecycle;
 mod paths;
+mod project;
 mod proxy;
 mod serve;
 mod usbd;
@@ -30,46 +30,15 @@ mod usbd;
 // glue below keep referring to `crate::*`.
 pub(crate) use loader_core::{apply, net, update};
 pub(crate) use loader_core::{
-    acquire_instance_lock, cache_root, components_dir, external_roots, is_nixos, kill_spinner,
-    log, notify, pick_base, pool_drive_root, provide, show_splash, teardown, Mount,
-    SpinnerHandle, SplashOpts,
+    acquire_instance_lock, cache_root, external_roots, kill_spinner, log, notify, pick_base,
+    Mount, SpinnerHandle,
 };
-#[cfg(target_os = "linux")]
-pub(crate) use loader_core::maybe_run_in_fhs;
 
 
 /// Shared handle to the Electron child so the update-apply endpoint can terminate
-/// it (→ main's wait returns → apply runs). Held by main (waits) + the server.
-pub type ElectronHandle = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
-/// Does the drive need (re)provisioning from the update server before we can run?
-///   - first run: no component pool AND no local manifest (the original trigger), or
-///   - repair: a local manifest exists but lists a component for THIS platform whose
-///     on-disk artifact is gone (deleted / corrupted / a partial burn). Either way we
-///     run the updater, which — because a component is missing — does a FULL re-fetch
-///     to the remote version (update::local_for_plan), keeping the set consistent
-///     instead of mixing a re-fetched component with stale siblings.
-/// Pins PLANAI_PORTABLE_ROOT from the pool first so the on-disk check (and the apply
-/// that follows) target the USB root, not the process cwd. A dev/flat pool without a
-/// manifest still runs directly (no blocking network fetch) — preserving old behavior.
-fn pool_needs_provision(comp_dir: Option<&PathBuf>) -> bool {
-    if std::env::var_os("PLANAI_PORTABLE_ROOT").is_none() {
-        if let Some(root) = comp_dir.and_then(|c| pool_drive_root(c)) {
-            std::env::set_var("PLANAI_PORTABLE_ROOT", root);
-        }
-    }
-    match update::load_local() {
-        None => comp_dir.is_none(),
-        Some(m) => {
-            let sel = update::read_selection();
-            let root = paths::portable_root();
-            let missing = m.files.iter().any(|e| e.wanted_by(&sel) && !update::artifact_present(&root, e));
-            if missing {
-                log("components missing on the drive — repairing from the update server");
-            }
-            missing
-        }
-    }
-}
+/// it (→ the session's wait returns → apply runs). Held by the session + the server.
+/// The lifecycle owns this type; the launcher's serve/proxy refer to it by this alias.
+pub type ElectronHandle = loader_core::lifecycle::AppHandle;
 
 fn lib_present(names: &[&str]) -> bool {
     let dirs = [
@@ -641,8 +610,12 @@ fn main() {
     config::init_ports();
 
     // Everything else — provisioning, mounting, the session, teardown, update
-    // apply, relaunch — is the lifecycle state machine (see lifecycle.rs).
-    lifecycle::run(lifecycle::Ctx::new(exe, here, in_fhs, args, env0, instance_lock));
+    // apply, relaunch — is the shared lifecycle state machine (loader-core),
+    // driven by the plan.ai project bodies (mounts + session + splash text).
+    loader_core::lifecycle::run(
+        loader_core::lifecycle::Ctx::new(exe, here, in_fhs, args, env0, instance_lock),
+        Box::new(project::PlanAi::new()),
+    );
 }
 
 #[cfg(test)]

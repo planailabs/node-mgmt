@@ -521,6 +521,16 @@ pub fn link_override(dir: &Path, dest: &Path) -> std::io::Result<MountKind> {
     Ok(MountKind::None)
 }
 
+/// `provide()`, unless a dev override dir is set for `slot` (`PLANAI_OVERRIDE_<slot>`,
+/// e.g. via `--with <slot>=<dir>`) — then link that local folder in place instead.
+/// Generic "replace this component with this folder"; used by a consumer's mount loop.
+pub fn provide_or_override(comp: &Path, base: &str, dest: &Path, slot: &str, tools_dir: &Path, force_extract: bool) -> std::io::Result<MountKind> {
+    match override_dir(slot) {
+        Some(dir) => link_override(&dir, dest),
+        None => provide(comp, base, dest, tools_dir, force_extract),
+    }
+}
+
 /// Make a component available at `dest`. Returns how it was provided (for teardown).
 pub fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract: bool) -> std::io::Result<MountKind> {
     #[cfg(target_os = "windows")]
