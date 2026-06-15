@@ -292,7 +292,7 @@
         # MSVC C++ redistributable DLLs (vcruntime140*.dll, …), a standalone target
         # shared-pinned with the python runtime. Bundled beside the msvc-linked
         # llmfit.exe so it finds VCRUNTIME140.dll on a machine without the VC++ redist.
-        msvcDlls = (import ./nix/msvc-runtime.nix { inherit pkgs; }).dlls;
+        msvcDlls = (import ./third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).dlls;
         llmfitBin = { url, sha256, ext, target }:
           let src = pkgs.fetchurl { inherit url sha256; };
           in pkgs.runCommand "llmfit-${target}"

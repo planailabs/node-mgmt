@@ -44,7 +44,7 @@ let
   # (nix/msvc-runtime.nix, same pin as the python runtime + llmfit.exe) at the
   # component root beside llama-server.exe. -n: never clobber a DLL upstream
   # starts shipping itself.
-  msvcDlls = (import ./msvc-runtime.nix { inherit pkgs; }).dlls;
+  msvcDlls = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).dlls;
   mkLlamacppWinDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
     mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out
     cp -n ${msvcDlls}/*.dll $out/

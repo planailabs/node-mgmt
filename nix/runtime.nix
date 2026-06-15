@@ -20,7 +20,7 @@ let
   # with WinError 126. A portable kiosk can't assume the VC++ redist is installed
   # → bundle these redistributable DLLs into the python root. Pin is shared with
   # the llmfit windows build (which ships vcruntime140*.dll beside llmfit.exe).
-  msvcRuntimeWheel = (import ./msvc-runtime.nix { inherit pkgs; }).wheel;
+  msvcRuntimeWheel = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).wheel;
 in
 derivation {
   inherit system;

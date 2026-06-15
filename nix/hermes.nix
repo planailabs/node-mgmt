@@ -81,7 +81,7 @@ let
     '';
   };
 
-  msvcRuntimeWheel = (import ./msvc-runtime.nix { inherit pkgs; }).wheel;
+  msvcRuntimeWheel = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).wheel;
 in
 derivation {
   inherit system;
