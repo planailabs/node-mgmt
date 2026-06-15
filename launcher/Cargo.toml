@@ -9,6 +9,7 @@ name = "plan-ai"
 path = "src/main.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 # the supervisor/control plane (ported from app/main/*.js into rust). Vendored as a
 # git submodule (third_party/mac-mgmt, pinned rev) so the launcher builds with plain
 # `cargo build` outside the nix flake; the flake includes it via self.submodules.

@@ -34,6 +34,17 @@ use crate::{
 };
 use crate::{cache_root, detect_llamacpp, detect_ollama, pick_base, pool_drive_root, provide, start_llmfit};
 
+/// `provide()` a component, unless a dev override dir is set for this `slot`
+/// (`PLANAI_OVERRIDE_<slot>`, e.g. via `--with <slot>=<dir>`) — then link that local
+/// folder in place instead. Generic "replace this component with this folder" over
+/// every mounted slot; no override set ⇒ the normal mount path.
+fn mount(comp: &std::path::Path, base: &str, dest: &std::path::Path, slot: &str, tools: &std::path::Path, force: bool) -> std::io::Result<loader_core::MountKind> {
+    match loader_core::override_dir(slot) {
+        Some(dir) => loader_core::link_override(&dir, dest),
+        None => provide(comp, base, dest, tools, force),
+    }
+}
+
 /// Exit code the FHS child uses for "the session ended because the user asked
 /// to apply the staged update". The child can't apply it itself (drive work is
 /// the host's, outside the sandbox); the host maps this back to a normal exit
@@ -320,7 +331,7 @@ impl Ctx {
         let features = update::read_selection().features;
         let openwebui_on = features.iter().any(|f| f == "openwebui");
         match pick_base(&comp, "runtime-") {
-            Some(rt) if openwebui_on => match provide(&comp, &rt, &dist.join("runtime"), &tools, force_extract) {
+            Some(rt) if openwebui_on => match mount(&comp, &rt, &dist.join("runtime"), "runtime", &tools, force_extract) {
                 Ok(k) => self.mounts.push(Mount { dest: dist.join("runtime"), kind: k }),
                 Err(e) => {
                     log(&format!("runtime: {e}"));
@@ -335,7 +346,7 @@ impl Ctx {
         if openwebui_on
             && (comp.join("ow-assets.squashfs").exists() || comp.join("ow-assets.dmg").exists() || comp.join("ow-assets").is_dir())
         {
-            if let Ok(k) = provide(&comp, "ow-assets", &dist.join("ow-assets"), &tools, force_extract) {
+            if let Ok(k) = mount(&comp, "ow-assets", &dist.join("ow-assets"), "ow-assets", &tools, force_extract) {
                 self.mounts.push(Mount { dest: dist.join("ow-assets"), kind: k });
             }
         }
@@ -343,7 +354,7 @@ impl Ctx {
         if features.iter().any(|f| f == "hermes")
             && (comp.join("hermes.squashfs").exists() || comp.join("hermes.dmg").exists() || comp.join("hermes").is_dir())
         {
-            match provide(&comp, "hermes", &dist.join("hermes"), &tools, force_extract) {
+            match mount(&comp, "hermes", &dist.join("hermes"), "hermes", &tools, force_extract) {
                 Ok(k) => self.mounts.push(Mount { dest: dist.join("hermes"), kind: k }),
                 Err(e) => log(&format!("hermes: {e}")),
             }
@@ -353,14 +364,14 @@ impl Ctx {
         if features.iter().any(|f| f == "hermes")
             && (comp.join("hermes-webui.squashfs").exists() || comp.join("hermes-webui.dmg").exists() || comp.join("hermes-webui").is_dir())
         {
-            match provide(&comp, "hermes-webui", &dist.join("hermes-webui"), &tools, force_extract) {
+            match mount(&comp, "hermes-webui", &dist.join("hermes-webui"), "hermes-webui", &tools, force_extract) {
                 Ok(k) => self.mounts.push(Mount { dest: dist.join("hermes-webui"), kind: k }),
                 Err(e) => log(&format!("hermes-webui: {e}")),
             }
         }
         if let Some((ol, why)) = detect_ollama(&comp) {
             log(&format!("ollama flavour: {ol} — {why}"));
-            match provide(&comp, &ol, &dist.join("ollama"), &tools, force_extract) {
+            match mount(&comp, &ol, &dist.join("ollama"), "ollama", &tools, force_extract) {
                 Ok(k) => self.mounts.push(Mount { dest: dist.join("ollama"), kind: k }),
                 Err(e) => log(&format!("ollama: {e}")),
             }
@@ -372,7 +383,7 @@ impl Ctx {
         if features.iter().any(|f| f == "llamacpp") {
             if let Some((lc, why)) = detect_llamacpp(&comp) {
                 log(&format!("llamacpp flavour: {lc} — {why}"));
-                match provide(&comp, &lc, &dist.join("llamacpp"), &tools, force_extract) {
+                match mount(&comp, &lc, &dist.join("llamacpp"), "llamacpp", &tools, force_extract) {
                     Ok(k) => self.mounts.push(Mount { dest: dist.join("llamacpp"), kind: k }),
                     Err(e) => log(&format!("llamacpp: {e}")),
                 }
@@ -392,7 +403,7 @@ impl Ctx {
                 log(&format!("app: PLANAI_APP_DIR {} is not a directory — ignoring", dir.display()));
             }
         } else if let Some(app) = pick_base(&comp, "app-") {
-            match provide(&comp, &app, &dist.join("app"), &tools, force_extract) {
+            match mount(&comp, &app, &dist.join("app"), "app", &tools, force_extract) {
                 Ok(k) => {
                     self.mounts.push(Mount { dest: dist.join("app"), kind: k });
                     self.app_dir = Some(dist.join("app"));
@@ -404,7 +415,7 @@ impl Ctx {
         // absent in dev / older bundles, where the launcher falls back to its
         // own supervisor.
         if comp.join("usbd.squashfs").exists() || comp.join("usbd.dmg").exists() || comp.join("usbd").is_dir() {
-            match provide(&comp, "usbd", &dist.join("usbd"), &tools, force_extract) {
+            match mount(&comp, "usbd", &dist.join("usbd"), "usbd", &tools, force_extract) {
                 Ok(k) => self.mounts.push(Mount { dest: dist.join("usbd"), kind: k }),
                 Err(e) => log(&format!("usbd: {e}")),
             }

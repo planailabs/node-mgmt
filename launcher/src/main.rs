@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use clap::Parser;
+
 mod config;
 mod control;
 mod i18n;
@@ -29,7 +31,7 @@ mod usbd;
 pub(crate) use loader_core::{apply, net, update};
 pub(crate) use loader_core::{
     acquire_instance_lock, cache_root, components_dir, external_roots, is_nixos, kill_spinner,
-    log, notify, pick_base, pool_drive_root, provide, show_splash, teardown, Mount, Splash,
+    log, notify, pick_base, pool_drive_root, provide, show_splash, teardown, Mount,
     SpinnerHandle, SplashOpts,
 };
 #[cfg(target_os = "linux")]
@@ -489,69 +491,124 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
     }
 }
 
+/// The launcher CLI. The default (no subcommand) runs the app: the dev-override
+/// flags feed env overrides, and any trailing args are forwarded to Electron. The
+/// subcommands are internal re-invocations of this same binary (supervisor/serve) or
+/// ops/passthrough helpers; each never returns.
+#[derive(clap::Parser)]
+#[command(name = "plan-ai", about = "plan.ai launcher", args_conflicts_with_subcommands = true)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+    #[command(flatten)]
+    run: RunArgs,
+}
+
+#[derive(clap::Args)]
+struct RunArgs {
+    /// Dev: replace a pooled component <slot> with a local folder (repeatable),
+    /// e.g. `--with app=./app --with runtime=./dist/runtime/linux-x64`.
+    #[arg(long = "with", value_name = "SLOT=DIR")]
+    with: Vec<String>,
+    /// Dev: run a locally-built Electron app tree instead of the app component.
+    #[arg(long, value_name = "DIR")]
+    start_with_electron: Option<PathBuf>,
+    /// Dev: serve a locally-built SPA instead of the embedded assets.
+    #[arg(long, value_name = "DIR")]
+    start_with_spa: Option<PathBuf>,
+    /// Dev: run a locally-built usbd (component dir or the binary).
+    #[arg(long, value_name = "PATH")]
+    start_with_usbd: Option<PathBuf>,
+    /// Extra args forwarded to Electron (use `--` first for leading flags).
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    electron_args: Vec<std::ffi::OsString>,
+}
+
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// internal: run the mac-mgmt supervisor on <socket>.
+    #[command(hide = true)]
+    Supervisor { socket: Option<PathBuf> },
+    /// internal: serve the control API + SPA against an in-process supervisor.
+    #[command(hide = true)]
+    ServeStack,
+    /// internal: serve the control API + SPA against an existing supervisor.
+    #[command(hide = true)]
+    Serve,
+    /// Ops: check the update server, download the delta, and apply it (no Electron).
+    SelfUpdate,
+    /// Run the bundled ollama with the remaining args (e.g. `ollama pull llama3`).
+    Ollama {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    /// Run the bundled usbd with the remaining args.
+    Usbd {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    /// Run the bundled mac-mgmt with the remaining args.
+    MacMgmt {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+}
+
+/// Apply the app-mode dev overrides to the process env (before the env snapshot, so a
+/// post-update relaunch — which restores env0 — keeps them).
+fn apply_dev_overrides(run: &RunArgs) {
+    let canon = |d: &Path| d.canonicalize().unwrap_or_else(|_| d.to_path_buf());
+    for spec in &run.with {
+        let Some((name, dir)) = spec.split_once('=') else {
+            log(&format!("--with: expected <slot>=<dir>, got {spec}"));
+            std::process::exit(2);
+        };
+        let key = format!("PLANAI_OVERRIDE_{}", name.to_ascii_uppercase().replace('-', "_"));
+        let p = canon(Path::new(dir));
+        log(&format!("dev override: {key}={}", p.display()));
+        std::env::set_var(&key, &p);
+    }
+    if let Some(d) = &run.start_with_electron {
+        std::env::set_var("PLANAI_APP_DIR", canon(d));
+    }
+    if let Some(d) = &run.start_with_spa {
+        std::env::set_var("PLANAI_SPA_DIR", canon(d));
+    }
+    if let Some(d) = &run.start_with_usbd {
+        let mut p = canon(d);
+        // accepts the unpacked component DIR or the binary directly.
+        if p.is_dir() {
+            let names: &[&str] = if cfg!(windows) { &["usbd.exe", "mac-mgmt.exe"] } else { &["usbd", "mac-mgmt"] };
+            if let Some(bin) = names.iter().map(|n| p.join(n)).find(|c| c.exists()) {
+                p = bin;
+            }
+        }
+        std::env::set_var("PLANAI_USBD_BIN", p);
+    }
+}
+
 fn main() {
-    // Subcommands (re-invocations of this same binary):
-    {
-        let mut a = std::env::args_os().skip(1);
-        match a.next().as_deref().and_then(|s| s.to_str()) {
-            Some("supervisor") => {
-                let socket = a.next().map(PathBuf::from).unwrap_or_else(supervisor_socket_path);
-                run_supervisor(&socket);
-            }
-            Some("serve-stack") => run_serve_stack(),
-            Some("serve") => run_serve(),
-            // Ops/test: check the update server, pre-download the delta, and apply it
-            // (no Electron/runtime). Honours PLANAI_PORTABLE_ROOT + PLANAI_CACHE.
-            Some("self-update") => run_self_update(),
-            // Passthrough to the bundled tools while the app is running, e.g.
-            //   ./plan-ai ollama pull llama3      ./plan-ai mac-mgmt status
-            // Resolves the binary from the mounted component tree and forwards the
-            // rest of argv + stdio (ollama also gets OLLAMA_HOST/OLLAMA_MODELS for
-            // the running server). Never returns.
-            Some("ollama") => run_tool_passthrough("ollama", a.collect()),
-            Some("usbd") => run_tool_passthrough("usbd", a.collect()),
-            Some("mac-mgmt") => run_tool_passthrough("mac-mgmt", a.collect()),
-            _ => {}
+    let cli = Cli::parse();
+    // Internal subcommands / passthroughs — each runs and exits (never returns).
+    if let Some(cmd) = cli.cmd {
+        match cmd {
+            Cmd::Supervisor { socket } => run_supervisor(&socket.unwrap_or_else(supervisor_socket_path)),
+            Cmd::ServeStack => run_serve_stack(),
+            Cmd::Serve => run_serve(),
+            Cmd::SelfUpdate => run_self_update(),
+            Cmd::Ollama { args } => run_tool_passthrough("ollama", args),
+            Cmd::Usbd { args } => run_tool_passthrough("usbd", args),
+            Cmd::MacMgmt { args } => run_tool_passthrough("mac-mgmt", args),
         }
     }
 
-    // Dev overrides: `--start-with-electron DIR` / `--start-with-spa DIR` /
-    // `--start-with-usbd PATH` run a locally-built piece while everything else
-    // comes from the component pool (or the update server). They just feed the
-    // existing env overrides (PLANAI_APP_DIR / PLANAI_SPA_DIR /
-    // PLANAI_USBD_BIN), set BEFORE the env snapshot so relaunches keep them.
-    {
-        let mut it = std::env::args().skip(1);
-        while let Some(a) = it.next() {
-            let var = match a.as_str() {
-                "--start-with-electron" => "PLANAI_APP_DIR",
-                "--start-with-spa" => "PLANAI_SPA_DIR",
-                "--start-with-usbd" => "PLANAI_USBD_BIN",
-                _ => continue,
-            };
-            let Some(val) = it.next() else {
-                log(&format!("{a} needs a path argument"));
-                std::process::exit(2);
-            };
-            let mut p = PathBuf::from(&val);
-            p = p.canonicalize().unwrap_or(p);
-            // --start-with-usbd accepts the unpacked component DIR or the binary.
-            if var == "PLANAI_USBD_BIN" && p.is_dir() {
-                let names: &[&str] = if cfg!(windows) { &["usbd.exe", "mac-mgmt.exe"] } else { &["usbd", "mac-mgmt"] };
-                if let Some(bin) = names.iter().map(|n| p.join(n)).find(|c| c.exists()) {
-                    p = bin;
-                }
-            }
-            log(&format!("dev override: {var}={}", p.display()));
-            std::env::set_var(var, &p);
-        }
-    }
+    // App mode: apply dev overrides to the env BEFORE snapshotting it.
+    apply_dev_overrides(&cli.run);
 
-    // Snapshot argv + the environment BEFORE the run mutates anything: a
-    // relaunch after an update apply must start from this state, not from the
-    // run's (PLANAI_RESOURCES etc. would point a fresh launcher at torn-down
-    // mounts).
-    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // Snapshot the Electron args + the environment BEFORE the run mutates anything: a
+    // relaunch after an update apply must start from this state, not from the run's
+    // (PLANAI_RESOURCES etc. would point a fresh launcher at torn-down mounts).
+    let args = cli.run.electron_args;
     let env0: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
 
     let exe = std::env::current_exe().expect("current_exe");
@@ -586,4 +643,41 @@ fn main() {
     // Everything else — provisioning, mounting, the session, teardown, update
     // apply, relaunch — is the lifecycle state machine (see lifecycle.rs).
     lifecycle::run(lifecycle::Ctx::new(exe, here, in_fhs, args, env0, instance_lock));
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("plan-ai").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn cli_covers_app_mode_dev_flags_subcommands_and_passthrough() {
+        // bare invocation → app mode, no subcommand, no electron args
+        let c = parse(&[]);
+        assert!(c.cmd.is_none() && c.run.electron_args.is_empty() && c.run.with.is_empty());
+
+        // dev overrides (app mode)
+        let c = parse(&["--with", "app=./app", "--with", "runtime=./rt", "--start-with-spa", "./spa"]);
+        assert!(c.cmd.is_none());
+        assert_eq!(c.run.with, vec!["app=./app", "runtime=./rt"]);
+        assert_eq!(c.run.start_with_spa.as_deref(), Some(Path::new("./spa")));
+
+        // trailing electron args after `--`
+        let c = parse(&["--", "--inspect", "--foo=bar"]);
+        assert_eq!(c.run.electron_args, vec!["--inspect", "--foo=bar"]);
+
+        // internal subcommands
+        assert!(matches!(parse(&["supervisor", "/tmp/s.sock"]).cmd, Some(Cmd::Supervisor { socket: Some(_) })));
+        assert!(matches!(parse(&["serve-stack"]).cmd, Some(Cmd::ServeStack)));
+        assert!(matches!(parse(&["self-update"]).cmd, Some(Cmd::SelfUpdate)));
+
+        // tool passthrough forwards the remaining args (incl. hyphen values)
+        match parse(&["ollama", "pull", "llama3", "--verbose"]).cmd {
+            Some(Cmd::Ollama { args }) => assert_eq!(args, vec!["pull", "llama3", "--verbose"]),
+            _ => panic!("expected ollama passthrough"),
+        }
+    }
 }

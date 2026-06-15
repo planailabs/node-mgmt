@@ -488,6 +488,39 @@ pub fn detach_stale_mount(dest: &Path) {
     }
 }
 
+/// A dev override directory for a component slot: `PLANAI_OVERRIDE_<SLOT>` (uppercased,
+/// `-`→`_`) pointing at an existing dir. Lets `--with <slot>=<dir>` run a locally-built
+/// component in place of the pooled one — generic "replace this component with this
+/// folder", over every mounted slot (runtime / ollama / app / usbd / hermes / …).
+pub fn override_dir(slot: &str) -> Option<PathBuf> {
+    let key = format!("PLANAI_OVERRIDE_{}", slot.to_ascii_uppercase().replace('-', "_"));
+    std::env::var_os(key).map(PathBuf::from).filter(|p| p.is_dir())
+}
+
+/// Make an override dir available at `dest` (symlink; junction/copy on windows) — the
+/// same in-place shape provide() leaves for a windows dir, so teardown is a no-op
+/// (`MountKind::None`).
+pub fn link_override(dir: &Path, dest: &Path) -> std::io::Result<MountKind> {
+    #[cfg(unix)]
+    detach_stale_mount(dest);
+    let _ = fs::remove_dir_all(dest);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir, dest)?;
+    #[cfg(windows)]
+    {
+        let junction = Command::new("cmd").args(["/C", "mklink", "/J"]).arg(dest).arg(dir)
+            .status().map(|s| s.success()).unwrap_or(false);
+        if !junction {
+            std::os::windows::fs::symlink_dir(dir, dest).or_else(|_| copy_dir(dir, dest))?;
+        }
+    }
+    log(&format!("{}: dev override — {} (used in place)", dest.display(), dir.display()));
+    Ok(MountKind::None)
+}
+
 /// Make a component available at `dest`. Returns how it was provided (for teardown).
 pub fn provide(comp: &Path, base: &str, dest: &Path, tools_dir: &Path, force_extract: bool) -> std::io::Result<MountKind> {
     #[cfg(target_os = "windows")]
@@ -815,4 +848,35 @@ fn term_splash(opts: SplashOpts) -> Option<Splash> {
         return Some(Splash::Term(TermBar::new(opts.text.to_string(), opts.progress)));
     }
     None
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+
+    #[test]
+    fn override_dir_reads_env_and_link_override_links_in_place() {
+        let base = std::env::temp_dir().join(format!("loader-override-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let src = base.join("local-build");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("marker"), b"ok").unwrap();
+
+        // override_dir: PLANAI_OVERRIDE_<SLOT> (uppercased, '-'→'_'), only when a dir.
+        std::env::set_var("PLANAI_OVERRIDE_OW_ASSETS", &src);
+        assert_eq!(override_dir("ow-assets").as_deref(), Some(src.as_path()));
+        assert!(override_dir("missing").is_none());
+        std::env::set_var("PLANAI_OVERRIDE_NOPE", "/no/such/dir");
+        assert!(override_dir("nope").is_none(), "non-dir override is ignored");
+
+        // link_override: the dir is reachable at dest (in place), teardown is a no-op.
+        let dest = base.join("dist").join("ow-assets");
+        let kind = link_override(&src, &dest).unwrap();
+        assert!(matches!(kind, MountKind::None));
+        assert_eq!(fs::read_to_string(dest.join("marker")).unwrap(), "ok");
+
+        std::env::remove_var("PLANAI_OVERRIDE_OW_ASSETS");
+        std::env::remove_var("PLANAI_OVERRIDE_NOPE");
+        let _ = fs::remove_dir_all(&base);
+    }
 }
