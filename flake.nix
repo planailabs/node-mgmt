@@ -243,7 +243,7 @@
 
         # registry deps for the spinner crate's Cargo.lock (eframe + its tree).
         spinnerVendor = pkgs.rustPlatform.importCargoLock {
-          lockFile = ./spinner/Cargo.lock;
+          lockFile = ./third_party/loader/crates/spinner/Cargo.lock;
         };
         # The native splash spinner (eframe/glow), cross-built like the launcher via
         # cargo-zigbuild. Unlike the launcher it CANNOT be static-musl (a GUI needs a
@@ -251,17 +251,25 @@
         # libs at runtime, so the binary carries no nix-store paths and resolves the
         # TARGET machine's system libs (libGL/libX11/…). mac links AppKit/OpenGL etc.
         # from the Apple SDK via SDKROOT (same mechanism the launcher uses for Cocoa).
+        # Splash colour scheme from loader.toml [spinner] — baked into the spinner at
+        # build time (the spinner's build.rs reads these). Empty → its plan.ai defaults.
+        spinnerColors = let s = (builtins.fromTOML (builtins.readFile ./loader.toml)).spinner or { }; in {
+          PLANAI_SPINNER_CANVAS = s.canvas or "";
+          PLANAI_SPINNER_BRAND = s.brand or "";
+          PLANAI_SPINNER_TEXT = s.text or "";
+          PLANAI_SPINNER_TRACK = s.track or "";
+        };
         spinnerFor = { zigTarget, outDir }:
           pkgs.runCommand "plan-ai-spinner-${outDir}"
             ({
               nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]
                 ++ lib.optionals (lib.hasInfix "apple-darwin" zigTarget) [ pkgs.python3 pkgs.rcodesign ];
-            } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
+            } // spinnerColors // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
               SDKROOT = macosx-sdk;
             })
             ''
               export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
-              cp -r ${./spinner}/. src && chmod -R u+w src && cd src
+              cp -r ${./third_party/loader/crates/spinner}/. src && chmod -R u+w src && cd src
               mkdir -p .cargo
               printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${spinnerVendor}" > .cargo/config.toml
               cargo zigbuild --release --offline --target ${zigTarget}

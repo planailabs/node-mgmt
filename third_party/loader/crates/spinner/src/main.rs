@@ -37,13 +37,11 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-// Colours from plan-ai-design (dark theme, third_party/plan-ai-design/assets/input.css):
-// a calm slate surface (not pure black, so the light text stays legible), the brand
-// orange, and a dim track for the spinner trail / progress groove.
-const CANVAS: u32 = 0x1c_27_35; // --c-surface  #1c2735
-const BRAND: (u8, u8, u8) = (0xf9, 0x73, 0x16); // --c-brand    #f97316
-const TEXT: (u8, u8, u8) = (0xe8, 0xed, 0xf5); // --c-fg       #e8edf5
-const TRACK: (u8, u8, u8) = (0x2d, 0x3c, 0x50); // --c-surface-3 #2d3c50
+// Colour scheme (CANVAS / BRAND / TEXT / TRACK), baked at build time from
+// loader.toml [spinner] via build.rs (env PLANAI_SPINNER_*); defaults to the plan.ai
+// palette when unconfigured. A calm slate surface (not pure black, so light text stays
+// legible), the brand accent, and a dim track for the spinner trail / progress groove.
+include!(concat!(env!("OUT_DIR"), "/colors.rs"));
 const FRAME: Duration = Duration::from_millis(33); // ~30fps; plenty for a splash
 const WIN_W: u32 = 320;
 const WIN_H: u32 = 180;

@@ -56,6 +56,14 @@ selection_file = "platforms.json"
 "win-x64"     = "plan-ai.exe"
 "mac-arm64"   = "plan-ai.dmg"
 
+# ── splash spinner colour scheme (rrggbb; baked into the spinner at build time) ──
+# from plan-ai-design's dark theme. A downstream sets its own brand here.
+[spinner]
+canvas = "1c2735"   # surface (window background)
+brand  = "f97316"   # accent (spinner arc + progress fill)
+text   = "e8edf5"   # label text
+track  = "2d3c50"   # spinner trail / progress groove
+
 # ── platforms ───────────────────────────────────────────────────────────────
 [targets]
 known       = ["linux-x64", "linux-arm64", "win-x64", "mac-arm64"]
@@ -497,5 +505,5 @@ name = "clean"
 help = "remove all build outputs (ninja graph + dist + every crate's target/)"
 recipe = [
   "@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo \"ninja -t clean\"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi",
-  "rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/.stage app/.stage.lock launcher/target launcher/spa-src/target launcher/spa-src/.cargo spinner/target mock-server/target crates/*/target third_party/loader/crates/*/target",
+  "rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/.stage app/.stage.lock launcher/target launcher/spa-src/target launcher/spa-src/.cargo mock-server/target crates/*/target third_party/loader/crates/*/target",
 ]

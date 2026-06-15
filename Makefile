@@ -152,7 +152,7 @@ docker-push: ## push the devshell image to $(IMAGE_REPO) via skopeo (no docker d
 
 clean: ## remove all build outputs (ninja graph + dist + every crate's target/)
 	@if [ -f build.ninja ] && command -v ninja >/dev/null 2>&1; then echo "ninja -t clean"; ninja -f build.ninja -t clean >/dev/null 2>&1 || true; fi
-	rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/.stage app/.stage.lock launcher/target launcher/spa-src/target launcher/spa-src/.cargo spinner/target mock-server/target crates/*/target third_party/loader/crates/*/target
+	rm -rf dist build.ninja .ninja_log .ninja_lock app/node_modules app/.stage app/.stage.lock launcher/target launcher/spa-src/target launcher/spa-src/.cargo mock-server/target crates/*/target third_party/loader/crates/*/target
 
 help: ## list targets
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
