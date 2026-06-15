@@ -30,13 +30,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 /// Whether the daemon's "network parts" — heartbeat, relay + relay-ssh, server
-/// push, and remote config sync — are enabled for THIS run. A runtime flag
-/// (`USBD_NETWORKED=1|true`, exported by the launcher when the drive's `mgmt`
-/// feature is on), replacing the old compile-time `future` cargo feature: one
-/// shipped binary, purely local by default, no phone-home until the user opts
-/// in. `--offline` still wins over it (checked at the call sites).
+/// push, and remote config sync — are enabled for THIS run. These are core now
+/// (always on); only `--offline` (checked at the call sites) disables them. Was the
+/// `USBD_NETWORKED` runtime flag / the older compile-time `future` cargo feature.
 pub fn networked() -> bool {
-    std::env::var("USBD_NETWORKED").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+    true
 }
 
 /// `mac-mgmt usbd` flags.
