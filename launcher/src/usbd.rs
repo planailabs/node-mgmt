@@ -47,10 +47,20 @@ pub fn resolve_bin() -> Option<PathBuf> {
     None
 }
 
-/// The daemon's supervisor socket under `home` (matches
-/// `mac_mgmt_services::default_socket_path()` with `HOME=home`).
-pub fn socket_path(home: &Path) -> PathBuf {
-    home.join(".config/mac-mgmt/services.sock")
+/// Host-local runtime dir for the daemon's special files (the supervisor unix
+/// socket + the relay-SSH control FIFO). These can NOT live under the daemon
+/// home: that's `data/usbd` on the FAT32 stick, where `bind()`/`mkfifo` fail
+/// with EPERM. Pinned via `MAC_MGMT_RUNTIME_DIR` (see `spawn`) so the daemon
+/// (`mac_mgmt_services::default_socket_path` / `config::runtime_dir`) and the
+/// launcher's control-plane client resolve the identical path.
+pub fn runtime_dir() -> PathBuf {
+    crate::cache_root().join("usbd-run")
+}
+
+/// The daemon's supervisor socket (matches `mac_mgmt_services::default_socket_path()`
+/// with `MAC_MGMT_RUNTIME_DIR` pinned to [`runtime_dir`]).
+pub fn socket_path() -> PathBuf {
+    runtime_dir().join("services.sock")
 }
 
 fn pick_port() -> u16 {
@@ -190,19 +200,29 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
         std::env::set_var("PLANAI_USBD_URL", format!("http://[::1]:{port}"));
     }
 
+    // The daemon's special files (supervisor socket + relay-SSH FIFO) must NOT
+    // land on the stick (data/usbd is FAT32 — no sockets/FIFOs). Pin them to a
+    // host-local runtime dir; the daemon honours MAC_MGMT_RUNTIME_DIR for both.
+    let run_dir = runtime_dir();
+    if let Err(e) = std::fs::create_dir_all(&run_dir) {
+        log(&format!("usbd: create runtime dir failed: {e}"));
+    }
+
     let mut cmd = Command::new(bin);
     cmd.arg("usbd")
         .arg("--home")
         .arg(&home)
         .arg("--control-port")
-        .arg(port.to_string());
+        .arg(port.to_string())
+        .env("MAC_MGMT_RUNTIME_DIR", &run_dir);
     match cmd.spawn() {
         Ok(child) => {
             log(&format!(
-                "usbd: spawned daemon (home={}, control=http://[::1]:{port})",
-                home.display()
+                "usbd: spawned daemon (home={}, runtime={}, control=http://[::1]:{port})",
+                home.display(),
+                run_dir.display()
             ));
-            Some((home.clone(), socket_path(&home), child))
+            Some((home.clone(), socket_path(), child))
         }
         Err(e) => {
             log(&format!("usbd: spawn failed: {e}"));

@@ -34,9 +34,20 @@ trap cleanup EXIT
 log "remote workdir: $HOST:$REMOTE"
 
 # push the launcher dmg + this OS's component group (components/mac-arm64/) the launcher needs.
+[ -d "$POOL/mac-arm64" ] || die "no components/mac-arm64 group in $POOL — run scripts/bundle.sh mac-arm64"
+# Stage a drive-root MIRROR (hardlinked, same fs as dist → instant, no extra space)
+# so update.json/platforms.json are seeded from the exact contents we push.
+# Without them the launcher bootstraps a full prod download instead of the local pool.
+STAGE="$(mktemp -d "$DIST_DIR/.test-mac-drive.XXXXXX")"
+trap 'rm -rf "$STAGE"; cleanup' EXIT
+mkdir -p "$STAGE/components"
+cp -al "$DMG" "$STAGE/plan-ai.dmg" 2>/dev/null || cp "$DMG" "$STAGE/plan-ai.dmg"
+cp -al "$POOL/mac-arm64" "$STAGE/components/mac-arm64" 2>/dev/null || cp -a "$POOL/mac-arm64" "$STAGE/components/mac-arm64"
+seed_drive_manifest "$STAGE" mac-arm64
 ssh "$HOST" "mkdir -p '$REMOTE/components'"
 scp -q "$DMG" "$HOST:$REMOTE/plan-ai.dmg"
-[ -d "$POOL/mac-arm64" ] || die "no components/mac-arm64 group in $POOL — run scripts/bundle.sh mac-arm64"
+scp -q "$STAGE/update.json" "$HOST:$REMOTE/update.json"
+scp -q "$STAGE/platforms.json" "$HOST:$REMOTE/platforms.json"
 scp -q -r "$POOL/mac-arm64" "$HOST:$REMOTE/components/" || true
 
 log "mount dmg + run launcher; assert ollama + Open-WebUI serve (≤6min cold start)"
