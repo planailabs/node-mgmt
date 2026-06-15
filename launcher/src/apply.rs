@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use plan_ai_manifest::{self as manifest, Manifest};
+use loader_manifest::{self as manifest, Manifest};
 use serde_json::json;
 
 use crate::{paths, update};

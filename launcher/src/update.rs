@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use plan_ai_control_api::{UpdateState, UpdateStatus};
-use plan_ai_manifest::{self as manifest, Manifest, Selection};
+use loader_manifest::{self as manifest, Manifest, Selection};
 
 use crate::{cache_root, net, paths};
 
@@ -408,7 +408,7 @@ pub async fn check_and_predownload(up: Handle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plan_ai_manifest::Entry;
+    use loader_manifest::Entry;
 
     fn entry(path: &str, sha: &str, plats: &[&str]) -> Entry {
         Entry {
@@ -419,7 +419,7 @@ mod tests {
             exec: false,
             platforms: plats.iter().map(|s| s.to_string()).collect(),
             target: None,
-            feature: plan_ai_manifest::classify_feature(path),
+            feature: loader_manifest::ClassifyTable::plan_ai_default().classify_feature(path),
         }
     }
 
