@@ -11,6 +11,10 @@
 mod types;
 pub use types::*;
 
+// The generic updater DTOs live in the loader framework; re-export them so the SPA,
+// mock, and launcher keep importing `plan_ai_control_api::{UpdateState, UpdateStatus}`.
+pub use loader_manifest::{UpdateState, UpdateStatus};
+
 #[cfg(feature = "server")]
 mod server;
 #[cfg(feature = "server")]

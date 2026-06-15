@@ -1274,6 +1274,7 @@ name = "plan-ai-control-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "loader-manifest",
  "serde",
  "serde_json",
  "tokio",

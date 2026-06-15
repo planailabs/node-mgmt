@@ -61,6 +61,7 @@
             ./launcher/spa-src           # the crate
             ./third_party/plan-ai-design # path dep
             ./crates/control-api         # path dep
+            ./third_party/loader/crates/loader-manifest # control-api's update-DTO dep
             ./third_party/mac-mgmt       # config-ui + common path deps
           ];
         };

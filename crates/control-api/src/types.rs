@@ -16,17 +16,8 @@ pub enum ServiceState {
     Error,
 }
 
-/// Lifecycle of the auto-updater (`/api/update/status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UpdateState {
-    Idle,
-    Checking,
-    Downloading,
-    Ready,
-    Applying,
-    Failed,
-}
+// UpdateState + UpdateStatus (the generic updater↔UI contract) now live in
+// loader-manifest and are re-exported by this crate's lib.rs.
 
 /// A supervised service row (`/api/status`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,53 +73,6 @@ pub struct Info {
     pub gpu: Option<Gpu>,
 }
 
-/// The auto-updater's state (`/api/update/status`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UpdateStatus {
-    pub state: UpdateState,
-    /// Files done / total (the unit the progress bar uses).
-    #[serde(default)]
-    pub done: u64,
-    #[serde(default)]
-    pub total: u64,
-    /// Bytes done / total + current throughput (bytes/sec) — the UI's throughput
-    /// indicator. Set during Downloading (network) and Applying (copy-onto-drive);
-    /// 0 otherwise.
-    #[serde(default)]
-    pub done_bytes: u64,
-    #[serde(default)]
-    pub total_bytes: u64,
-    #[serde(default)]
-    pub rate_bps: u64,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub commit: String,
-    #[serde(default)]
-    pub message: Option<String>,
-}
-
-impl UpdateStatus {
-    pub fn idle() -> Self {
-        UpdateStatus {
-            state: UpdateState::Idle,
-            done: 0,
-            total: 0,
-            done_bytes: 0,
-            total_bytes: 0,
-            rate_bps: 0,
-            version: String::new(),
-            commit: String::new(),
-            message: None,
-        }
-    }
-}
-
-impl Default for UpdateStatus {
-    fn default() -> Self {
-        Self::idle()
-    }
-}
 
 /// Which platforms are kept on this USB + which exist, and which optional
 /// features are enabled + which exist (`/api/platforms`).
