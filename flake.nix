@@ -196,6 +196,11 @@
               # the built SPA assets, embedded by serve.rs's rust-embed via
               # build.rs (the launcher src carries no spa/ dir).
               PLANAI_SPA_DIST = "${spa}";
+              # The optional-feature catalog from loader.toml ([[feature]] name+default),
+              # baked into loader-manifest's KNOWN_FEATURES by its build.rs. Single source
+              # of truth — edit loader.toml, not the crate.
+              PLANAI_FEATURES = builtins.concatStringsSep " "
+                (map (f: "${f.name}=${if (f.default or false) then "1" else "0"}") (loaderToml.feature or [ ]));
             } // lib.optionalAttrs (lib.hasInfix "linux" zigTarget) {
               # Static bubblewrap, embedded into the linux launcher: on NixOS it sets up
               # the OUTER namespace that binds/overlays the FHS-closure squashfs over

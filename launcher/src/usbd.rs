@@ -196,12 +196,10 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
     export_paths();
     seed_config(&home, crate::config::ollama_port(), crate::config::webui_port());
 
-    // The daemon's networked parts (heartbeat/relay/sync) follow the drive's
-    // "mgmt" feature — a runtime toggle (was: the compile-time `future` flag).
-    if crate::update::read_selection().features.iter().any(|f| f == "mgmt") {
-        // SAFETY: single-threaded startup, before the tokio runtime.
-        unsafe { std::env::set_var("USBD_NETWORKED", "1") };
-    }
+    // The daemon's networked parts (heartbeat/relay/sync) are core now — always on
+    // (was the optional "mgmt" feature, originally the compile-time `future` flag).
+    // SAFETY: single-threaded startup, before the tokio runtime.
+    unsafe { std::env::set_var("USBD_NETWORKED", "1") };
 
     let port = pick_port();
     // SAFETY: single-threaded startup, before the tokio runtime.

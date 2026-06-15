@@ -25,7 +25,7 @@ pub enum Tab {
     WebUi,
     /// The Hermes agent dashboard — shown when the "hermes" feature is enabled.
     Hermes,
-    /// The Config tab — shown when the "mgmt" feature is enabled on the drive.
+    /// The Config tab — core (always available).
     Config,
 }
 
@@ -48,10 +48,6 @@ impl AppState {
     /// Whether llmfit (and thus the Models tab) is available.
     pub fn llmfit_ready(&self) -> bool {
         self.info.read().as_ref().map(|i| i.llmfit_url.is_some()).unwrap_or(false)
-    }
-    /// Whether the "mgmt" feature (config tab + networked daemon parts) is on.
-    pub fn mgmt_enabled(&self) -> bool {
-        self.features.read().iter().any(|f| f == "mgmt")
     }
     /// Whether the optional hermes agent is enabled on this drive.
     pub fn hermes_enabled(&self) -> bool {
@@ -114,8 +110,8 @@ pub fn App() -> Element {
         }
     });
 
-    // Poll the drive selection every few seconds — the Config tab appears/
-    // disappears live when the "mgmt" feature is toggled on the dashboard.
+    // Poll the drive selection every few seconds — the optional tabs (e.g. Hermes)
+    // appear/disappear live as features are toggled on the dashboard.
     use_future(move || {
         let mut features = state.features;
         async move {
@@ -165,7 +161,6 @@ pub fn App() -> Element {
 
     let tab = (state.tab)();
     let webui_ready = state.ready("webui");
-    let mgmt = state.mgmt_enabled();
     let hermes_on = state.hermes_enabled();
     let hermes_ready = state.ready("hermes");
     let hermes_url = state.info.read().as_ref().and_then(|i| i.hermes_url.clone());
@@ -206,9 +201,8 @@ pub fn App() -> Element {
                     if hermes_on {
                         TabButton { tab: Tab::Hermes, current: tab, label: t!("tab-hermes"), enabled: hermes_ready }
                     }
-                    if mgmt {
-                        TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
-                    }
+                    // Config is core now (was the "mgmt" feature) — always available.
+                    TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
@@ -230,7 +224,7 @@ pub fn App() -> Element {
             // when it's torn out and re-mounted fresh on the next ready.
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
-            if mgmt && tab == Tab::Config { ConfigView {} }
+            if tab == Tab::Config { ConfigView {} }
             div { class: "{webui_view_cls}",
                 if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }

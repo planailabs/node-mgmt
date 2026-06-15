@@ -86,9 +86,6 @@ default = false
 [[feature]]
 name = "llamacpp"
 default = false
-[[feature]]
-name = "mgmt"
-default = false
 
 # ── FHS package set (injected into buildFHSEnv by nix/loader) ─────────────────
 [fhs]
