@@ -11,7 +11,7 @@ use gloo_net::http::{Request, Response};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-pub use plan_ai_control_api::{Info, Platforms, ServiceState, ServiceStatus, UpdateState, UpdateStatus};
+pub use plan_ai_control_api::{ConnectionStatus, Info, Platforms, ServiceState, ServiceStatus, UpdateState, UpdateStatus};
 
 /// Pull the `{"error": ...}` body off a non-2xx response, else the HTTP status.
 async fn err_message(resp: Response) -> String {

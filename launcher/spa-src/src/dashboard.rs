@@ -95,6 +95,8 @@ pub fn Dashboard() -> Element {
                 }
             }
 
+            ConnectionCard {}
+
             // Open-WebUI readiness: orange while it starts, green + "open" (jumps to
             // the WebUI tab) once ready.
             Card { class: "card-pad flex items-center justify-center gap-3 text-center",
@@ -184,6 +186,71 @@ pub fn Dashboard() -> Element {
 
             if services.is_empty() {
                 HelpText { xs: true, {t!("waiting-supervisor")} }
+            }
+        }
+    }
+}
+
+/// Remote-management connection card: networked/remote-config, heartbeat, and
+/// relay status. On a purely local drive (mgmt off) it collapses to one muted
+/// line — there's nothing remote to report.
+#[allow(non_snake_case)]
+fn ConnectionCard() -> Element {
+    let state = use_context::<AppState>();
+    let conn = state.connection.read().clone();
+
+    // Until the first poll lands, or when not networked, keep it minimal.
+    let Some(c) = conn else {
+        return rsx! {};
+    };
+    if !c.networked {
+        return rsx! {
+            Card { class: "card-pad flex items-center gap-3",
+                Dot { variant: PillVariant::Muted }
+                span { class: "td-muted text-sm", {t!("conn-local-only")} }
+            }
+        };
+    }
+
+    let (cfg_variant, cfg_label) = if c.remote_configured {
+        (PillVariant::Ok, t!("conn-configured"))
+    } else {
+        (PillVariant::Warn, t!("conn-not-configured"))
+    };
+    let beat_ok = c.heartbeat_last_success_unix.is_some();
+    let (beat_variant, beat_label) = if beat_ok {
+        (PillVariant::Ok, t!("conn-beats", ok: c.heartbeat_success as i64, failed: c.heartbeat_failure as i64))
+    } else {
+        (PillVariant::Warn, t!("conn-no-beat"))
+    };
+    let (relay_variant, relay_label) = if c.relay_connected {
+        (PillVariant::Ok, t!("conn-connected"))
+    } else if c.relay_enabled {
+        (PillVariant::Warn, t!("conn-connecting"))
+    } else {
+        (PillVariant::Muted, t!("conn-disabled"))
+    };
+
+    rsx! {
+        Card { class: "card-pad space-y-3",
+            Kicker { {t!("conn-title")} }
+            div { class: "grid grid-cols-1 sm:grid-cols-3 gap-3",
+                ConnRow { label: t!("conn-remote-config"), variant: cfg_variant, value: cfg_label }
+                ConnRow { label: t!("conn-heartbeat"), variant: beat_variant, value: beat_label }
+                ConnRow { label: t!("conn-relay"), variant: relay_variant, value: relay_label }
+            }
+        }
+    }
+}
+
+#[component]
+fn ConnRow(label: String, variant: PillVariant, value: String) -> Element {
+    rsx! {
+        div { class: "flex items-center gap-2",
+            Dot { variant }
+            div {
+                div { class: "label", "{label}" }
+                div { class: "text-sm text-fg-strong", "{value}" }
             }
         }
     }

@@ -13,7 +13,7 @@ use plan_ai_design::theme_toggle::{
 };
 use plan_ai_design::{Button, ButtonSize, ButtonVariant};
 
-use crate::api::{self, Info, Platforms, ServiceState, ServiceStatus};
+use crate::api::{self, ConnectionStatus, Info, Platforms, ServiceState, ServiceStatus};
 use crate::config::ConfigView;
 use crate::dashboard::Dashboard;
 use crate::models::Models;
@@ -51,6 +51,8 @@ pub struct AppState {
     pub tab: Signal<Tab>,
     /// Enabled optional features from /api/platforms (drive selection).
     pub features: Signal<Vec<String>>,
+    /// Remote-management connection health (/api/connection); None until first poll.
+    pub connection: Signal<Option<ConnectionStatus>>,
 }
 
 impl AppState {
@@ -109,6 +111,7 @@ pub fn App() -> Element {
         logs: use_signal(String::new),
         tab: use_signal(|| Tab::Dashboard),
         features: use_signal(Vec::new),
+        connection: use_signal(|| None),
     };
     use_context_provider(|| state);
 
@@ -150,6 +153,19 @@ pub fn App() -> Element {
                     services.set(list);
                 }
                 gloo_timers::future::TimeoutFuture::new(2000).await;
+            }
+        }
+    });
+
+    // Poll the remote-management connection health every 5s.
+    use_future(move || {
+        let mut connection = state.connection;
+        async move {
+            loop {
+                if let Ok(c) = api::get::<ConnectionStatus>("/api/connection").await {
+                    connection.set(Some(c));
+                }
+                gloo_timers::future::TimeoutFuture::new(5000).await;
             }
         }
     });

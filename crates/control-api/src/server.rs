@@ -21,7 +21,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
-use crate::{ApiError, DownloadRequest, Info, Platforms, ServiceStatus, SetPlatforms, UpdateStatus};
+use crate::{ApiError, ConnectionStatus, DownloadRequest, Info, Platforms, ServiceStatus, SetPlatforms, UpdateStatus};
 
 /// The valid `{action}` values for `/api/services/{id}/{action}`. Validated once
 /// here so no backend re-implements the check.
@@ -40,6 +40,8 @@ pub struct ProxyReply {
 pub trait ControlApi: Send + Sync + 'static {
     fn info(&self) -> impl Future<Output = Info> + Send;
     fn status(&self) -> impl Future<Output = Vec<ServiceStatus>> + Send;
+    /// Remote-management connection health (mgmt mode, heartbeat, relay).
+    fn connection(&self) -> impl Future<Output = ConnectionStatus> + Send;
     /// A fresh subscription to the live log feed (fanned out over SSE).
     fn subscribe_logs(&self) -> broadcast::Receiver<String>;
     /// Electron signalled its window is up (close the splash, etc.).
@@ -80,6 +82,7 @@ pub fn router<T: ControlApi>(state: Arc<T>) -> Router {
     Router::new()
         .route("/api/info", get(h_info::<T>))
         .route("/api/status", get(h_status::<T>))
+        .route("/api/connection", get(h_connection::<T>))
         .route("/api/logs", get(h_logs::<T>))
         .route("/api/ready", post(h_ready::<T>))
         .route("/api/services/{name}/{action}", post(h_service::<T>))
@@ -103,6 +106,9 @@ async fn h_info<T: ControlApi>(State(s): State<Arc<T>>) -> Json<Info> {
 }
 async fn h_status<T: ControlApi>(State(s): State<Arc<T>>) -> Json<Vec<ServiceStatus>> {
     Json(s.status().await)
+}
+async fn h_connection<T: ControlApi>(State(s): State<Arc<T>>) -> Json<ConnectionStatus> {
+    Json(s.connection().await)
 }
 async fn h_logs<T: ControlApi>(State(s): State<Arc<T>>) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let stream = BroadcastStream::new(s.subscribe_logs()).filter_map(|r| r.ok().map(|l| Ok(Event::default().data(l))));

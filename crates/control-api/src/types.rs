@@ -78,6 +78,29 @@ pub struct Info {
 }
 
 
+/// Remote-management connection health (`/api/connection`): whether this drive
+/// is in networked ("mgmt") mode, has a remote server configured, the heartbeat
+/// is succeeding, and the relay is connected. All-false/None on a purely local
+/// drive (mgmt feature off) — the dashboard then shows "local only".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConnectionStatus {
+    #[serde(default)]
+    pub networked: bool,
+    #[serde(default)]
+    pub remote_configured: bool,
+    /// Unix seconds of the last successful heartbeat (None = never succeeded).
+    #[serde(default)]
+    pub heartbeat_last_success_unix: Option<u64>,
+    #[serde(default)]
+    pub heartbeat_success: u64,
+    #[serde(default)]
+    pub heartbeat_failure: u64,
+    #[serde(default)]
+    pub relay_enabled: bool,
+    #[serde(default)]
+    pub relay_connected: bool,
+}
+
 /// Which platforms are kept on this USB + which exist, and which optional
 /// features are enabled + which exist (`/api/platforms`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

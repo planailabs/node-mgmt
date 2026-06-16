@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use plan_ai_control_api::{
-    router, Accel, ControlApi, Gpu, Info, Platforms, ProxyReply, ServiceState, ServiceStatus,
-    UpdateState, UpdateStatus,
+    router, Accel, ConnectionStatus, ControlApi, Gpu, Info, Platforms, ProxyReply, ServiceState,
+    ServiceStatus, UpdateState, UpdateStatus,
 };
 use rand::Rng;
 use serde_json::{json, Value};
@@ -166,6 +166,26 @@ impl ControlApi for Mock {
             v.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: ServiceState::Ready });
         }
         async move { v }
+    }
+    fn connection(&self) -> impl Future<Output = ConnectionStatus> + Send {
+        // The "mgmt" feature is what turns on the networked/remote parts, so
+        // gate the (fake) connected state on it — toggle it on the dashboard to
+        // preview the connection card live.
+        let mgmt = self.s.lock().unwrap().features.iter().any(|f| f == "mgmt");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let snap = ConnectionStatus {
+            networked: mgmt,
+            remote_configured: mgmt,
+            heartbeat_last_success_unix: mgmt.then_some(now.saturating_sub(12)),
+            heartbeat_success: if mgmt { 142 } else { 0 },
+            heartbeat_failure: if mgmt { 3 } else { 0 },
+            relay_enabled: mgmt,
+            relay_connected: mgmt,
+        };
+        async move { snap }
     }
     fn subscribe_logs(&self) -> broadcast::Receiver<String> {
         self.logs.subscribe()

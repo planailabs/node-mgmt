@@ -13,7 +13,7 @@ use crate::usb_config::UsbConfig;
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio::time;
 
-use super::control::{self, ControlState, InfoSnapshot, LoopMsg};
+use super::control::{self, ConnectionSnapshot, ControlState, InfoSnapshot, LoopMsg};
 use super::services::{self, ResolvedPorts, Resources};
 use mac_mgmt_agent::assessment::{self, Assessor};
 use mac_mgmt_agent::russh;
@@ -185,6 +185,7 @@ pub async fn run_stack(opts: UsbdOpts) -> Result<StackHandle> {
     let (shutdown_tx, _shutdown_rx) = watch::channel(false);
     let (loop_tx, loop_rx) = mpsc::channel::<LoopMsg>(8);
     let info = Arc::new(RwLock::new(info_snapshot(&ports, &memvault_url)));
+    let connection = Arc::new(RwLock::new(ConnectionSnapshot::default()));
 
     // Loopback control + status server.
     let control_state = ControlState {
@@ -195,6 +196,7 @@ pub async fn run_stack(opts: UsbdOpts) -> Result<StackHandle> {
         config_read: super::config::config_read_candidates(&opts.home, opts.config_path.as_deref()),
         config_write: super::config::config_write_path(&opts.home),
         info: Arc::clone(&info),
+        connection: Arc::clone(&connection),
     };
     let listener = tokio::net::TcpListener::bind(("::1", opts.control_port))
         .await
@@ -282,6 +284,7 @@ pub async fn run_stack(opts: UsbdOpts) -> Result<StackHandle> {
         relay_mgr,
         p2p_mgr,
         info,
+        connection,
         offline: opts.offline,
     };
 
@@ -319,12 +322,35 @@ struct LoopState {
     relay_mgr: mac_mgmt_agent::remote_ssh::RemoteSshState,
     p2p_mgr: Option<mac_mgmt_agent::p2p::P2pManager>,
     info: Arc<RwLock<InfoSnapshot>>,
+    connection: Arc<RwLock<ConnectionSnapshot>>,
     offline: bool,
 }
 
 impl LoopState {
     fn relay_proxy_url(&self) -> Option<String> {
         self.p2p_mgr.as_ref().and_then(|m| m.relay_proxy_url())
+    }
+
+    /// Refresh the connection snapshot served at `/connection` from live state:
+    /// heartbeat counters/timestamp (prometheus gauges), relay registration, and
+    /// whether a server is configured at all.
+    async fn update_connection(&self) {
+        let last = self.metrics.heartbeat_last_success.get();
+        let relay_connected = self
+            .p2p_mgr
+            .as_ref()
+            .map(|m| m.relay_registered().load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false);
+        let snap = ConnectionSnapshot {
+            networked: !self.offline && super::networked(),
+            remote_configured: self.server_url.is_some(),
+            heartbeat_last_success_unix: (last > 0).then_some(last as u64),
+            heartbeat_success: self.metrics.heartbeat_total.with_label_values(&["success"]).get() as u64,
+            heartbeat_failure: self.metrics.heartbeat_total.with_label_values(&["failure"]).get() as u64,
+            relay_enabled: self.p2p_mgr.is_some(),
+            relay_connected,
+        };
+        *self.connection.write().await = snap;
     }
 
     async fn send_heartbeat(&self) {
@@ -504,6 +530,10 @@ async fn event_loop(
     };
     let mut shutdown_rx = shutdown_tx.subscribe();
 
+    // Seed the connection snapshot before the first tick so the dashboard sees
+    // the configured/networked state immediately (heartbeat counters fill in).
+    st.update_connection().await;
+
     loop {
         tokio::select! {
             _ = sigterm.recv() => { tracing::info!("SIGTERM; shutting down"); break; }
@@ -523,6 +553,7 @@ async fn event_loop(
             _ = heartbeat_tick.tick() => {
                 st.assessor.refresh_sample().await;
                 st.send_heartbeat().await;
+                st.update_connection().await;
             }
 
             _ = liveness_tick.tick() => st.run_probes(assessment::probes::ProbeKind::Liveness),

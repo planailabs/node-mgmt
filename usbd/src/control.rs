@@ -36,6 +36,26 @@ pub struct InfoSnapshot {
     pub llamacpp_url: Option<String>,
 }
 
+/// Remote-management connection health (`GET /connection`): whether the daemon
+/// is in networked mode, has a server configured, the heartbeat is succeeding,
+/// and the relay RPC is connected. The event loop refreshes it each tick.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct ConnectionSnapshot {
+    /// Networked ("mgmt") mode is on — without it the rest is all-local/no-op.
+    pub networked: bool,
+    /// A remote mgmt server URL is configured.
+    pub remote_configured: bool,
+    /// Unix seconds of the last successful heartbeat (None = never succeeded).
+    pub heartbeat_last_success_unix: Option<u64>,
+    /// Cumulative heartbeat outcomes since daemon start.
+    pub heartbeat_success: u64,
+    pub heartbeat_failure: u64,
+    /// The relay machinery (p2p swarm) is active.
+    pub relay_enabled: bool,
+    /// The relay RPC connection is fully registered (reachable from the server).
+    pub relay_connected: bool,
+}
+
 #[derive(Clone)]
 pub struct ControlState {
     pub socket_path: PathBuf,
@@ -48,6 +68,8 @@ pub struct ControlState {
     pub config_write: PathBuf,
     /// Live effective ports / URLs, updated on config apply.
     pub info: Arc<RwLock<InfoSnapshot>>,
+    /// Live remote-management connection health, refreshed by the event loop.
+    pub connection: Arc<RwLock<ConnectionSnapshot>>,
 }
 
 /// Messages to the stack loop (which owns the ServiceManager), answered via the
@@ -70,6 +92,7 @@ pub fn router(state: ControlState) -> Router {
     Router::new()
         .route("/status", get(status))
         .route("/info", get(info))
+        .route("/connection", get(connection))
         .route("/usb/start", post(start))
         .route("/usb/stop", post(stop))
         .route("/usb/restart", post(restart))
@@ -81,6 +104,11 @@ pub fn router(state: ControlState) -> Router {
 
 async fn info(State(state): State<ControlState>) -> impl IntoResponse {
     let snap = state.info.read().await.clone();
+    (StatusCode::OK, Json(snap))
+}
+
+async fn connection(State(state): State<ControlState>) -> impl IntoResponse {
+    let snap = state.connection.read().await.clone();
     (StatusCode::OK, Json(snap))
 }
 

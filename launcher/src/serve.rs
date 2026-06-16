@@ -16,8 +16,8 @@ use axum::{
 };
 use mac_mgmt_services::{protocol::Notification, Client};
 use plan_ai_control_api::{
-    router, Accel, ApiError, ControlApi, Gpu, Info, Platforms, ProxyReply, ServiceState,
-    ServiceStatus, UpdateState, UpdateStatus,
+    router, Accel, ApiError, ConnectionStatus, ControlApi, Gpu, Info, Platforms, ProxyReply,
+    ServiceState, ServiceStatus, UpdateState, UpdateStatus,
 };
 use tokio::sync::{broadcast, Mutex};
 
@@ -229,6 +229,18 @@ impl ControlApi for RealApi {
                     reason: std::env::var("PLANAI_OLLAMA_REASON").ok(),
                 },
                 gpu: gpu_json.as_deref().and_then(|j| serde_json::from_str::<Gpu>(j).ok()),
+            }
+        }
+    }
+
+    fn connection(&self) -> impl Future<Output = ConnectionStatus> + Send {
+        let usbd_url = self.usbd_url.clone();
+        async move {
+            // No daemon (purely local launcher / mgmt off) → default "local only".
+            let Some(base) = &usbd_url else { return ConnectionStatus::default() };
+            match proxy::get(base, "/connection").await {
+                Ok(r) => serde_json::from_slice::<ConnectionStatus>(&r.body).unwrap_or_default(),
+                Err(_) => ConnectionStatus::default(),
             }
         }
     }

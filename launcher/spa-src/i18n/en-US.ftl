@@ -35,6 +35,20 @@ webui-starting = Open WebUI starting…
 webui-ready = Open WebUI ready
 btn-open = open
 
+# remote-management connection card
+conn-title = Remote management
+conn-local-only = Local only — no remote management
+conn-remote-config = Remote config
+conn-configured = configured
+conn-not-configured = not configured
+conn-heartbeat = Heartbeat
+conn-no-beat = no heartbeat yet
+conn-beats = { $ok } ok · { $failed } failed
+conn-relay = Relay
+conn-connected = connected
+conn-connecting = connecting…
+conn-disabled = disabled
+
 # dashboard hero + services
 dash-title-lead = Local AI
 dash-title-tail = stack
