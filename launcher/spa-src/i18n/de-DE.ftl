@@ -10,7 +10,7 @@ tab-hermes-webui = Hermes Web UI
 tab-config = Konfiguration
 app-switcher-label = Apps
 btn-report-issue = Problem melden
-webui-not-ready = Open-WebUI ist noch nicht bereit.
+app-not-ready = { $name } ist noch nicht bereit.
 
 # updates
 updates-title = Updates

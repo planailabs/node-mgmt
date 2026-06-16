@@ -251,7 +251,7 @@ pub fn App() -> Element {
                         AppKind::Iframe { src } => src.clone(),
                         AppKind::Native => None,
                     };
-                    rsx! { IframeView { key: "{app.letter}", active: tab == app.tab, src } }
+                    rsx! { IframeView { key: "{app.letter}", active: tab == app.tab, label: app.label.clone(), src } }
                 }
             }
         }
@@ -324,16 +324,18 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
 /// An embedded app's iframe with the shared mount-once-ready lifecycle: the
 /// frame enters the DOM only when `src` is `Some` (the service is ready), stays
 /// mounted but `hidden` when its tab isn't active (preserving session + scroll),
-/// and is torn out / re-mounted fresh if readiness drops.
+/// and is torn out / re-mounted fresh if readiness drops. The not-ready notice
+/// names the app (`label`) so it reads correctly for every app — not just
+/// Open-WebUI.
 #[component]
-fn IframeView(active: bool, src: Option<String>) -> Element {
+fn IframeView(active: bool, label: String, src: Option<String>) -> Element {
     let cls = if active { "flex-1 min-h-0" } else { "hidden" };
     rsx! {
         div { class: "{cls}",
             if let Some(url) = src {
                 iframe { class: "w-full h-full border-0", src: "{url}" }
             } else {
-                div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                div { class: "card-pad td-muted text-sm", {t!("app-not-ready", name: label.clone())} }
             }
         }
     }
