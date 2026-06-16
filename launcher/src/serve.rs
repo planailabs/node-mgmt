@@ -279,7 +279,7 @@ impl ControlApi for RealApi {
                         .and_then(|v| v.get("hermes_webui_url").and_then(|x| x.as_str()).map(String::from)),
                     None => None,
                 }
-                .unwrap_or_else(|| "http://127.0.0.1:8787".into());
+                .unwrap_or_else(|| "http://127.0.0.1:9120".into());
                 let webui = service_state(by("hermes-webui"), &webui_url).await;
                 out.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: webui });
             }

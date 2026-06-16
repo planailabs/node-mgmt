@@ -6,6 +6,7 @@ chrome-tagline = node-mgmt · offline
 tab-dashboard = Dashboard
 tab-models = Models
 tab-webui = Open WebUI
+tab-llmfit = llmfit
 tab-hermes-webui = Hermes Web UI
 tab-config = Config
 app-switcher-label = Apps

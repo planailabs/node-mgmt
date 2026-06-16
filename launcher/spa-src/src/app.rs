@@ -23,6 +23,9 @@ pub enum Tab {
     Dashboard,
     Models,
     WebUi,
+    /// The llmfit model-browser dashboard (llmfit's own web UI, served on its
+    /// port) — available whenever llmfit is running.
+    Llmfit,
     /// The Hermes agent dashboard — shown when the "hermes" feature is enabled.
     Hermes,
     /// The Hermes web UI — same "hermes" feature, separate component + service.
@@ -35,7 +38,7 @@ impl Tab {
     /// Whether this tab is one of the launchable "apps" (lives in the app
     /// switcher) rather than launcher chrome (Dashboard / Config).
     pub fn is_app(self) -> bool {
-        matches!(self, Tab::Models | Tab::WebUi | Tab::Hermes | Tab::HermesWebUi)
+        matches!(self, Tab::Models | Tab::WebUi | Tab::Llmfit | Tab::Hermes | Tab::HermesWebUi)
     }
 }
 
@@ -194,6 +197,10 @@ pub fn App() -> Element {
     let hermes_webui_url = state.info.read().as_ref().and_then(|i| i.hermes_webui_url.clone());
     let hermes_webui_src = hermes_webui_url.filter(|_| hermes_webui_ready);
     let hermes_webui_view_cls = if tab == Tab::HermesWebUi { "flex-1 min-h-0" } else { "hidden" };
+    // llmfit's own dashboard (served on its port) — same mount-once-ready pattern.
+    let llmfit_ready = state.llmfit_ready();
+    let llmfit_src = state.info.read().as_ref().and_then(|i| i.llmfit_url.clone()).filter(|_| llmfit_ready);
+    let llmfit_view_cls = if tab == Tab::Llmfit { "flex-1 min-h-0" } else { "hidden" };
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -238,6 +245,13 @@ pub fn App() -> Element {
             if tab == Tab::Dashboard { Dashboard {} }
             if tab == Tab::Models { Models {} }
             if tab == Tab::Config { ConfigView {} }
+            div { class: "{llmfit_view_cls}",
+                if let Some(url) = llmfit_src {
+                    iframe { class: "w-full h-full border-0", src: "{url}" }
+                } else {
+                    div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                }
+            }
             div { class: "{webui_view_cls}",
                 if let Some(url) = webui_src {
                     iframe { class: "w-full h-full border-0", src: "{url}" }
@@ -310,6 +324,7 @@ fn AppSwitcher() -> Element {
     let mut apps = vec![
         AppEntry { tab: Tab::WebUi, label: t!("tab-webui"), letter: "O", avatar: "bg-brand", ready: state.ready("webui") },
         AppEntry { tab: Tab::Models, label: t!("tab-models"), letter: "M", avatar: "bg-info", ready: state.llmfit_ready() },
+        AppEntry { tab: Tab::Llmfit, label: t!("tab-llmfit"), letter: "L", avatar: "bg-warn", ready: state.llmfit_ready() },
     ];
     if hermes_on {
         apps.push(AppEntry { tab: Tab::Hermes, label: t!("tab-hermes"), letter: "H", avatar: "bg-accent", ready: state.ready("hermes") });

@@ -63,7 +63,10 @@ pub struct UsbHermesConfig {
 }
 
 fn default_usb_hermes_webui_port() -> u16 {
-    8787
+    // Adjacent to the hermes dashboard (9119). NOT 8787 — that's the launcher's
+    // fixed llmfit port (see launcher LLMFIT_PORT); sharing it made the
+    // hermes-webui iframe land on the llmfit model browser.
+    9120
 }
 
 impl Default for UsbHermesConfig {

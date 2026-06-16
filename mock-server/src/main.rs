@@ -135,7 +135,7 @@ impl ControlApi for Mock {
         async move {
             Info {
                 hermes_url: Some("http://127.0.0.1:9119".into()),
-                hermes_webui_url: Some("http://127.0.0.1:8787".into()),
+                hermes_webui_url: Some("http://127.0.0.1:9120".into()),
                 webui_url: "http://127.0.0.1:8080".into(),
                 llmfit_url: Some("http://127.0.0.1:8787".into()),
                 ollama_port: 11434,
