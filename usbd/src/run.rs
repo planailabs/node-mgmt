@@ -342,7 +342,10 @@ impl LoopState {
             .map(|m| m.relay_registered().load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(false);
         let snap = ConnectionStatus {
-            networked: !self.offline && super::networked(),
+            // "Networked" / cloud mode means a server is actually configured AND
+            // we're not running offline — NOT merely `networked()` (which is now
+            // hardwired true). A serverless drive is genuinely local-only.
+            networked: !self.offline && self.server_url.is_some(),
             remote_configured: self.server_url.is_some(),
             heartbeat_last_success_unix: (last > 0).then_some(last as u64),
             heartbeat_success: self.metrics.heartbeat_total.with_label_values(&["success"]).get() as u64,

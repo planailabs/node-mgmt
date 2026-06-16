@@ -237,11 +237,30 @@ impl ControlApi for RealApi {
     fn connection(&self) -> impl Future<Output = ConnectionStatus> + Send {
         let usbd_url = self.usbd_url.clone();
         async move {
-            // No daemon (purely local launcher / mgmt off) → default "local only".
+            // No daemon (purely local launcher) → genuinely local-only.
             let Some(base) = &usbd_url else { return ConnectionStatus::default() };
+            // Don't silently collapse failures to "local only": a 404 (a usbd
+            // component built before /connection existed) or a transport error
+            // (daemon not up) is a real cause the dashboard would otherwise hide.
             match proxy::get(base, "/connection").await {
-                Ok(r) => serde_json::from_slice::<ConnectionStatus>(&r.body).unwrap_or_default(),
-                Err(_) => ConnectionStatus::default(),
+                Ok(r) if r.status == 200 => match serde_json::from_slice::<ConnectionStatus>(&r.body) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        crate::log(&format!("connection: daemon /connection body did not parse: {e}"));
+                        ConnectionStatus::default()
+                    }
+                },
+                Ok(r) => {
+                    crate::log(&format!(
+                        "connection: daemon /connection returned HTTP {} — rebuild/redeploy the usbd component (it predates the endpoint)",
+                        r.status
+                    ));
+                    ConnectionStatus::default()
+                }
+                Err(e) => {
+                    crate::log(&format!("connection: daemon /connection unreachable ({base}): {e}"));
+                    ConnectionStatus::default()
+                }
             }
         }
     }
