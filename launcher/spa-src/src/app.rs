@@ -193,30 +193,10 @@ pub fn App() -> Element {
     });
 
     let tab = (state.tab)();
-    let webui_ready = state.ready("webui");
-    let hermes_on = state.hermes_enabled();
-    let hermes_ready = state.ready("hermes");
-    let hermes_url = state.info.read().as_ref().and_then(|i| i.hermes_url.clone());
-    let webui_url = state.info.read().as_ref().map(|i| i.webui_url.clone());
-    // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
-    // reactive — it tracks the 2s status poll). Mounting earlier would load before
-    // the server accepts connections (blank/errored frame). If readiness later drops
-    // (e.g. a restart), the frame de-materialises and re-mounts fresh when ready
-    // again. The WebUi tab is disabled until ready, so this is the only gate users
-    // actually hit; while ready, only the iframe's visibility tracks the active tab.
-    let webui_src = webui_url.filter(|_| webui_ready);
-    let webui_view_cls = if tab == Tab::WebUi { "flex-1 min-h-0" } else { "hidden" };
-    // Same mount-once-ready iframe pattern as the WebUI tab.
-    let hermes_src = hermes_url.filter(|_| hermes_ready);
-    let hermes_view_cls = if tab == Tab::Hermes { "flex-1 min-h-0" } else { "hidden" };
-    let hermes_webui_ready = state.hermes_webui_ready();
-    let hermes_webui_url = state.info.read().as_ref().and_then(|i| i.hermes_webui_url.clone());
-    let hermes_webui_src = hermes_webui_url.filter(|_| hermes_webui_ready);
-    let hermes_webui_view_cls = if tab == Tab::HermesWebUi { "flex-1 min-h-0" } else { "hidden" };
-    // llmfit's own dashboard (served on its port) — same mount-once-ready pattern.
-    let llmfit_ready = state.llmfit_ready();
-    let llmfit_src = state.info.read().as_ref().and_then(|i| i.llmfit_url.clone()).filter(|_| llmfit_ready);
-    let llmfit_view_cls = if tab == Tab::Llmfit { "flex-1 min-h-0" } else { "hidden" };
+    // The app registry is the single source of truth: which apps exist, their
+    // switcher presentation, readiness, and how each renders (native view vs
+    // embedded iframe). The switcher and the view area both derive from it.
+    let apps = app_registry(&state);
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -254,42 +234,106 @@ pub fn App() -> Element {
                 }
             }
 
-            // views — Dashboard/Models mount per tab; the Open-WebUI iframe mounts
-            // once webui is ready and stays mounted across tab switches (just hidden
-            // when inactive) so its session + scroll survive — until readiness drops,
-            // when it's torn out and re-mounted fresh on the next ready.
-            if tab == Tab::Dashboard { Dashboard {} }
-            if tab == Tab::Models { Models {} }
-            if tab == Tab::Config { ConfigView {} }
-            div { class: "{llmfit_view_cls}",
-                if let Some(url) = llmfit_src {
-                    iframe { class: "w-full h-full border-0", src: "{url}" }
-                } else {
-                    div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+            // The view area is driven by the current tab (the state machine's
+            // state). Native views mount only while their tab is active. Embedded
+            // (iframe) apps mount once ready and stay mounted — hidden when
+            // inactive — so their session + scroll survive tab switches; one
+            // uniform IframeView lifecycle, no per-app special-casing.
+            {match tab {
+                Tab::Dashboard => rsx! { Dashboard {} },
+                Tab::Models => rsx! { Models {} },
+                Tab::Config => rsx! { ConfigView {} },
+                _ => rsx! {},
+            }}
+            for app in apps.iter().filter(|a| matches!(a.kind, AppKind::Iframe { .. })) {
+                {
+                    let src = match &app.kind {
+                        AppKind::Iframe { src } => src.clone(),
+                        AppKind::Native => None,
+                    };
+                    rsx! { IframeView { key: "{app.letter}", active: tab == app.tab, src } }
                 }
             }
-            div { class: "{webui_view_cls}",
-                if let Some(url) = webui_src {
-                    iframe { class: "w-full h-full border-0", src: "{url}" }
-                } else {
-                    div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
-                }
-            }
-            if hermes_on {
-                div { class: "{hermes_view_cls}",
-                    if let Some(url) = hermes_src {
-                        iframe { class: "w-full h-full border-0", src: "{url}" }
-                    } else {
-                        div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
-                    }
-                }
-                div { class: "{hermes_webui_view_cls}",
-                    if let Some(url) = hermes_webui_src {
-                        iframe { class: "w-full h-full border-0", src: "{url}" }
-                    } else {
-                        div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
-                    }
-                }
+        }
+    }
+}
+
+/// How an app's view is rendered.
+#[derive(Clone, PartialEq)]
+enum AppKind {
+    /// A native Dioxus view, matched on the active tab (mounted only while active).
+    Native,
+    /// An external app embedded in an iframe; `src` is `Some` only once ready.
+    Iframe { src: Option<String> },
+}
+
+/// A launchable app: its tab (the state-machine state), switcher presentation,
+/// readiness, and how its view renders. The single source of truth shared by
+/// the [`AppSwitcher`] and the view area.
+struct AppDesc {
+    tab: Tab,
+    label: String,
+    letter: &'static str,
+    avatar: &'static str,
+    ready: bool,
+    kind: AppKind,
+}
+
+/// Build the app registry from current state. Hermes' two apps appear only when
+/// the feature is enabled. Iframe `src` is gated on readiness (`None` until the
+/// service is up) so the iframe mounts only once it can actually load.
+fn app_registry(state: &AppState) -> Vec<AppDesc> {
+    let info = state.info.read();
+    let url = |f: fn(&Info) -> Option<String>, ready: bool| info.as_ref().and_then(f).filter(|_| ready);
+
+    let webui_ready = state.ready("webui");
+    let llmfit_ready = state.llmfit_ready();
+    let mut apps = vec![
+        AppDesc {
+            tab: Tab::WebUi, label: t!("tab-webui"), letter: "O", avatar: "bg-brand",
+            ready: webui_ready,
+            kind: AppKind::Iframe { src: url(|i| Some(i.webui_url.clone()), webui_ready) },
+        },
+        AppDesc {
+            tab: Tab::Models, label: t!("tab-models"), letter: "M", avatar: "bg-info",
+            ready: llmfit_ready, kind: AppKind::Native,
+        },
+        AppDesc {
+            tab: Tab::Llmfit, label: t!("tab-llmfit"), letter: "L", avatar: "bg-warn",
+            ready: llmfit_ready,
+            kind: AppKind::Iframe { src: url(|i| i.llmfit_url.clone(), llmfit_ready) },
+        },
+    ];
+    if state.hermes_enabled() {
+        let hermes_ready = state.ready("hermes");
+        let hermes_webui_ready = state.hermes_webui_ready();
+        apps.push(AppDesc {
+            tab: Tab::Hermes, label: t!("tab-hermes"), letter: "H", avatar: "bg-accent",
+            ready: hermes_ready,
+            kind: AppKind::Iframe { src: url(|i| i.hermes_url.clone(), hermes_ready) },
+        });
+        apps.push(AppDesc {
+            tab: Tab::HermesWebUi, label: t!("tab-hermes-webui"), letter: "W", avatar: "bg-success",
+            ready: hermes_webui_ready,
+            kind: AppKind::Iframe { src: url(|i| i.hermes_webui_url.clone(), hermes_webui_ready) },
+        });
+    }
+    apps
+}
+
+/// An embedded app's iframe with the shared mount-once-ready lifecycle: the
+/// frame enters the DOM only when `src` is `Some` (the service is ready), stays
+/// mounted but `hidden` when its tab isn't active (preserving session + scroll),
+/// and is torn out / re-mounted fresh if readiness drops.
+#[component]
+fn IframeView(active: bool, src: Option<String>) -> Element {
+    let cls = if active { "flex-1 min-h-0" } else { "hidden" };
+    rsx! {
+        div { class: "{cls}",
+            if let Some(url) = src {
+                iframe { class: "w-full h-full border-0", src: "{url}" }
+            } else {
+                div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
             }
         }
     }
@@ -316,36 +360,17 @@ fn TabButton(tab: Tab, current: Tab, label: String, enabled: bool) -> Element {
     }
 }
 
-/// One launchable app in the switcher: the tab it opens, its label, a single
-/// avatar letter, the avatar background utility, and whether it's ready.
-struct AppEntry {
-    tab: Tab,
-    label: String,
-    letter: &'static str,
-    avatar: &'static str,
-    ready: bool,
-}
-
-/// Waffle/grid menu listing the launchable apps (Open-WebUI, Models, Hermes,
-/// Hermes Web UI). Each app shows a circular avatar + name, mirroring the
-/// product app switcher. Disabled rows stay visible but greyed until ready.
+/// Waffle/grid menu listing the launchable apps (Open-WebUI, Models, llmfit,
+/// Hermes, Hermes Web UI). Each app shows a circular avatar + name, mirroring
+/// the product app switcher. Disabled rows stay visible but greyed until ready.
+/// Derives from the same [`app_registry`] that drives the views.
 #[allow(non_snake_case)]
 fn AppSwitcher() -> Element {
     let state = use_context::<AppState>();
     let mut open = use_signal(|| false);
 
     let tab = (state.tab)();
-    let hermes_on = state.hermes_enabled();
-
-    let mut apps = vec![
-        AppEntry { tab: Tab::WebUi, label: t!("tab-webui"), letter: "O", avatar: "bg-brand", ready: state.ready("webui") },
-        AppEntry { tab: Tab::Models, label: t!("tab-models"), letter: "M", avatar: "bg-info", ready: state.llmfit_ready() },
-        AppEntry { tab: Tab::Llmfit, label: t!("tab-llmfit"), letter: "L", avatar: "bg-warn", ready: state.llmfit_ready() },
-    ];
-    if hermes_on {
-        apps.push(AppEntry { tab: Tab::Hermes, label: t!("tab-hermes"), letter: "H", avatar: "bg-accent", ready: state.ready("hermes") });
-        apps.push(AppEntry { tab: Tab::HermesWebUi, label: t!("tab-hermes-webui"), letter: "W", avatar: "bg-success", ready: state.hermes_webui_ready() });
-    }
+    let apps = app_registry(&state);
 
     // The trigger reads as "active" whenever one of its apps owns the view.
     let trigger_variant = if tab.is_app() { ButtonVariant::Secondary } else { ButtonVariant::Ghost };
@@ -385,7 +410,7 @@ fn AppSwitcher() -> Element {
                 div { class: "absolute right-0 mt-2 z-50 w-60 card bg-surface shadow-pop py-2",
                     for app in apps {
                         {
-                            let AppEntry { tab: app_tab, label, letter, avatar, ready } = app;
+                            let AppDesc { tab: app_tab, label, letter, avatar, ready, .. } = app;
                             let active = app_tab == tab;
                             let row_cls = if active { "bg-surface-2" } else { "hover:bg-surface-2" };
                             let avatar_cls = if ready { avatar } else { "bg-surface-3" };
