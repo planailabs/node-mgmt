@@ -22,6 +22,9 @@ mac-mgmt-common = { path = "../third_party/mac-mgmt/common", features = ["sentry
 mac-mgmt-services = { path = "../third_party/mac-mgmt/mac-mgmt-services" }
 # the reduced UsbConfig types (shared with the dev mock-server)
 plan-ai-usb-config = { path = "../crates/usb-config" }
+# control-plane DTOs (types only, no axum) — the daemon emits the shared
+# DaemonInfo / ConnectionStatus shapes the launcher deserializes.
+plan-ai-control-api = { path = "../crates/control-api", default-features = false }
 # the memvault management CLI (the `memctl` subcommand); already in the graph
 # via mac-mgmt-agent/memvault — this just makes its entrypoint nameable
 memctl = { path = "../third_party/mac-mgmt/memvault/crates/memctl", default-features = false }

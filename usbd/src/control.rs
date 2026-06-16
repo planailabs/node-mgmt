@@ -19,42 +19,11 @@ use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 use crate::usb_config::UsbConfig;
 
-/// Effective runtime facts the dashboard shows (`GET /info`). Ports are the
-/// **resolved** ports (after any collision fallback), so links always work.
-#[derive(Clone, Debug, Default, serde::Serialize)]
-pub struct InfoSnapshot {
-    pub ollama_port: Option<u16>,
-    pub webui_port: Option<u16>,
-    pub memvault_port: Option<u16>,
-    pub hermes_port: Option<u16>,
-    pub hermes_webui_port: Option<u16>,
-    pub llamacpp_port: Option<u16>,
-    pub webui_url: Option<String>,
-    pub memvault_url: Option<String>,
-    pub hermes_url: Option<String>,
-    pub hermes_webui_url: Option<String>,
-    pub llamacpp_url: Option<String>,
-}
-
-/// Remote-management connection health (`GET /connection`): whether the daemon
-/// is in networked mode, has a server configured, the heartbeat is succeeding,
-/// and the relay RPC is connected. The event loop refreshes it each tick.
-#[derive(Clone, Debug, Default, serde::Serialize)]
-pub struct ConnectionSnapshot {
-    /// Networked ("mgmt") mode is on — without it the rest is all-local/no-op.
-    pub networked: bool,
-    /// A remote mgmt server URL is configured.
-    pub remote_configured: bool,
-    /// Unix seconds of the last successful heartbeat (None = never succeeded).
-    pub heartbeat_last_success_unix: Option<u64>,
-    /// Cumulative heartbeat outcomes since daemon start.
-    pub heartbeat_success: u64,
-    pub heartbeat_failure: u64,
-    /// The relay machinery (p2p swarm) is active.
-    pub relay_enabled: bool,
-    /// The relay RPC connection is fully registered (reachable from the server).
-    pub relay_connected: bool,
-}
+// The `/info` and `/connection` response shapes are the shared launcher↔daemon
+// contract (plan-ai-control-api, types only). `DaemonInfo` carries the resolved
+// ports/URLs; `ConnectionStatus` the remote-management health. Re-exported so
+// the rest of the daemon refers to them unqualified.
+pub use plan_ai_control_api::{ConnectionStatus, DaemonInfo};
 
 #[derive(Clone)]
 pub struct ControlState {
@@ -67,9 +36,9 @@ pub struct ControlState {
     /// Where `PUT /config` persists the edited config (JSON).
     pub config_write: PathBuf,
     /// Live effective ports / URLs, updated on config apply.
-    pub info: Arc<RwLock<InfoSnapshot>>,
+    pub info: Arc<RwLock<DaemonInfo>>,
     /// Live remote-management connection health, refreshed by the event loop.
-    pub connection: Arc<RwLock<ConnectionSnapshot>>,
+    pub connection: Arc<RwLock<ConnectionStatus>>,
 }
 
 /// Messages to the stack loop (which owns the ServiceManager), answered via the

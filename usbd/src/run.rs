@@ -13,7 +13,7 @@ use crate::usb_config::UsbConfig;
 use tokio::sync::{RwLock, mpsc, watch};
 use tokio::time;
 
-use super::control::{self, ConnectionSnapshot, ControlState, InfoSnapshot, LoopMsg};
+use super::control::{self, ConnectionStatus, ControlState, DaemonInfo, LoopMsg};
 use super::services::{self, ResolvedPorts, Resources};
 use mac_mgmt_agent::assessment::{self, Assessor};
 use mac_mgmt_agent::russh;
@@ -98,8 +98,8 @@ fn changed_service_names(old: &UsbConfig, new: &UsbConfig) -> std::collections::
     set
 }
 
-fn info_snapshot(ports: &ResolvedPorts, memvault_url: &Option<String>) -> InfoSnapshot {
-    InfoSnapshot {
+fn info_snapshot(ports: &ResolvedPorts, memvault_url: &Option<String>) -> DaemonInfo {
+    DaemonInfo {
         ollama_port: ports.ollama,
         webui_port: ports.openwebui,
         memvault_port: ports.memvault,
@@ -185,7 +185,7 @@ pub async fn run_stack(opts: UsbdOpts) -> Result<StackHandle> {
     let (shutdown_tx, _shutdown_rx) = watch::channel(false);
     let (loop_tx, loop_rx) = mpsc::channel::<LoopMsg>(8);
     let info = Arc::new(RwLock::new(info_snapshot(&ports, &memvault_url)));
-    let connection = Arc::new(RwLock::new(ConnectionSnapshot::default()));
+    let connection = Arc::new(RwLock::new(ConnectionStatus::default()));
 
     // Loopback control + status server.
     let control_state = ControlState {
@@ -321,8 +321,8 @@ struct LoopState {
     server_token: Option<String>,
     relay_mgr: mac_mgmt_agent::remote_ssh::RemoteSshState,
     p2p_mgr: Option<mac_mgmt_agent::p2p::P2pManager>,
-    info: Arc<RwLock<InfoSnapshot>>,
-    connection: Arc<RwLock<ConnectionSnapshot>>,
+    info: Arc<RwLock<DaemonInfo>>,
+    connection: Arc<RwLock<ConnectionStatus>>,
     offline: bool,
 }
 
@@ -341,7 +341,7 @@ impl LoopState {
             .as_ref()
             .map(|m| m.relay_registered().load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(false);
-        let snap = ConnectionSnapshot {
+        let snap = ConnectionStatus {
             networked: !self.offline && super::networked(),
             remote_configured: self.server_url.is_some(),
             heartbeat_last_success_unix: (last > 0).then_some(last as u64),
@@ -616,10 +616,14 @@ async fn event_loop(
 
             Some(cmd) = async { st.relay_mgr.recv_cmd().await } => {
                 st.relay_mgr.handle_cmd(cmd);
+                // Relay commands can change registration/tunnel state — refresh
+                // the connection snapshot now rather than waiting for the tick.
+                st.update_connection().await;
             }
 
             Some(()) = relay_heartbeat_rx.recv() => {
                 st.send_heartbeat().await;
+                st.update_connection().await;
             }
 
             _evt = async {
@@ -631,6 +635,8 @@ async fn event_loop(
                 if matches!(_evt, Some(mac_mgmt_agent::p2p::P2pEvent::RelayProxyUrlAcquired)) {
                     st.send_heartbeat().await;
                 }
+                // Any p2p event may shift relay reachability — refresh the snapshot.
+                st.update_connection().await;
             }
         }
     }

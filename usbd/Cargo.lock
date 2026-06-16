@@ -5101,6 +5101,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "loader-manifest"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6943,6 +6952,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "plan-ai-control-api"
+version = "0.1.0"
+dependencies = [
+ "loader-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "plan-ai-design"
 version = "0.1.0"
 dependencies = [
@@ -6974,6 +6992,7 @@ dependencies = [
  "mac-mgmt-common",
  "mac-mgmt-services",
  "memctl",
+ "plan-ai-control-api",
  "plan-ai-usb-config",
  "rand 0.9.4",
  "reqwest 0.13.2",

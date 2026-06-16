@@ -78,6 +78,38 @@ pub struct Info {
 }
 
 
+/// The USB daemon's `/info` response: the **effective** (resolved) service
+/// ports + URLs the daemon actually bound, after any collision fallback. This
+/// is the launcher↔daemon contract (loopback); the launcher folds the relevant
+/// fields into the SPA-facing [`Info`] (which also carries launcher-local data
+/// like GPU/accel and the models/data dirs). Shared so the launcher deserializes
+/// it typed instead of picking fields out of `serde_json::Value`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DaemonInfo {
+    #[serde(default)]
+    pub ollama_port: Option<u16>,
+    #[serde(default)]
+    pub webui_port: Option<u16>,
+    #[serde(default)]
+    pub memvault_port: Option<u16>,
+    #[serde(default)]
+    pub hermes_port: Option<u16>,
+    #[serde(default)]
+    pub hermes_webui_port: Option<u16>,
+    #[serde(default)]
+    pub llamacpp_port: Option<u16>,
+    #[serde(default)]
+    pub webui_url: Option<String>,
+    #[serde(default)]
+    pub memvault_url: Option<String>,
+    #[serde(default)]
+    pub hermes_url: Option<String>,
+    #[serde(default)]
+    pub hermes_webui_url: Option<String>,
+    #[serde(default)]
+    pub llamacpp_url: Option<String>,
+}
+
 /// Remote-management connection health (`/api/connection`): whether this drive
 /// is in networked ("mgmt") mode, has a remote server configured, the heartbeat
 /// is succeeding, and the relay is connected. All-false/None on a purely local

@@ -16,8 +16,8 @@ use axum::{
 };
 use mac_mgmt_services::{protocol::Notification, Client};
 use plan_ai_control_api::{
-    router, Accel, ApiError, ConnectionStatus, ControlApi, Gpu, Info, Platforms, ProxyReply,
-    ServiceState, ServiceStatus, UpdateState, UpdateStatus,
+    router, Accel, ApiError, ConnectionStatus, ControlApi, DaemonInfo, Gpu, Info, Platforms,
+    ProxyReply, ServiceState, ServiceStatus, UpdateState, UpdateStatus,
 };
 use tokio::sync::{broadcast, Mutex};
 
@@ -180,6 +180,15 @@ fn supervisor_name(svc: &str) -> &str {
     }
 }
 
+/// Fetch the daemon's `/info` (resolved ports/URLs) as the shared typed DTO.
+/// `None` when there's no daemon or it's unreachable — callers fall back to the
+/// configured defaults.
+async fn daemon_info(usbd_url: &Option<String>) -> Option<DaemonInfo> {
+    let base = usbd_url.as_ref()?;
+    let r = proxy::get(base, "/info").await.ok()?;
+    serde_json::from_slice::<DaemonInfo>(&r.body).ok()
+}
+
 impl ControlApi for RealApi {
     fn info(&self) -> impl Future<Output = Info> + Send {
         let gpu_json = self.gpu_json.clone();
@@ -194,26 +203,18 @@ impl ControlApi for RealApi {
             // In daemon mode the daemon resolves the EFFECTIVE ports (after any
             // collision fallback), so prefer what it reports — otherwise the
             // WebUI iframe could point at a port the daemon didn't actually bind.
-            if let Some(base) = &usbd_url {
-                if let Ok(r) = proxy::get(base, "/info").await {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&r.body) {
-                        if let Some(p) = v.get("ollama_port").and_then(|x| x.as_u64()) {
-                            ollama_port = p as u16;
-                        }
-                        if let Some(p) = v.get("webui_port").and_then(|x| x.as_u64()) {
-                            webui_port = p as u16;
-                        }
-                        if let Some(u) = v.get("webui_url").and_then(|x| x.as_str()) {
-                            webui_url = u.to_string();
-                        }
-                        if let Some(u) = v.get("hermes_url").and_then(|x| x.as_str()) {
-                            hermes_url = Some(u.to_string());
-                        }
-                        if let Some(u) = v.get("hermes_webui_url").and_then(|x| x.as_str()) {
-                            hermes_webui_url = Some(u.to_string());
-                        }
-                    }
+            if let Some(di) = daemon_info(&usbd_url).await {
+                if let Some(p) = di.ollama_port {
+                    ollama_port = p;
                 }
+                if let Some(p) = di.webui_port {
+                    webui_port = p;
+                }
+                if let Some(u) = di.webui_url {
+                    webui_url = u;
+                }
+                hermes_url = di.hermes_url;
+                hermes_webui_url = di.hermes_webui_url;
             }
             Info {
                 webui_url,
@@ -251,6 +252,9 @@ impl ControlApi for RealApi {
         async move {
             let list = { client.lock().await.list().await.unwrap_or_default() };
             let by = |name: &str| list.iter().find(|x| x.name == name);
+            // The daemon's resolved ports/URLs, fetched once and reused for the
+            // per-feature health probes below (instead of re-querying /info each).
+            let di = daemon_info(&usbd_url).await;
             let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
             let mut out = vec![ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama }];
             // Feature-driven rows: only services this drive runs. open-webui is a
@@ -261,37 +265,22 @@ impl ControlApi for RealApi {
                 out.push(ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui });
             }
             if sel.features.iter().any(|f| f == "llamacpp") {
-                let url = match &usbd_url {
-                    Some(b) => proxy::get(b, "/info").await.ok()
-                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
-                        .and_then(|v| v.get("llamacpp_url").and_then(|x| x.as_str()).map(String::from)),
-                    None => None,
-                }
-                .unwrap_or_else(|| "http://127.0.0.1:8090".into());
+                let url = di.as_ref().and_then(|d| d.llamacpp_url.clone())
+                    .unwrap_or_else(|| "http://127.0.0.1:8090".into());
                 let lc = service_state(by("llamacpp"), &format!("{url}/health")).await;
                 out.push(ServiceStatus { id: "llamacpp".into(), name: "llama.cpp".into(), state: lc });
             }
             if sel.features.iter().any(|f| f == "hermes") {
                 // Health: the dashboard's /api/status on the effective port the
                 // daemon reports (fall back to the default 9119).
-                let url = match &usbd_url {
-                    Some(b) => proxy::get(b, "/info").await.ok()
-                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
-                        .and_then(|v| v.get("hermes_url").and_then(|x| x.as_str()).map(String::from)),
-                    None => None,
-                }
-                .unwrap_or_else(|| "http://127.0.0.1:9119".into());
+                let url = di.as_ref().and_then(|d| d.hermes_url.clone())
+                    .unwrap_or_else(|| "http://127.0.0.1:9119".into());
                 let hermes = service_state(by("hermes"), &format!("{url}/api/status")).await;
                 out.push(ServiceStatus { id: "hermes".into(), name: "Hermes".into(), state: hermes });
 
                 // The hermes web UI (same feature, own component + service).
-                let webui_url = match &usbd_url {
-                    Some(b) => proxy::get(b, "/info").await.ok()
-                        .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
-                        .and_then(|v| v.get("hermes_webui_url").and_then(|x| x.as_str()).map(String::from)),
-                    None => None,
-                }
-                .unwrap_or_else(|| "http://127.0.0.1:9120".into());
+                let webui_url = di.as_ref().and_then(|d| d.hermes_webui_url.clone())
+                    .unwrap_or_else(|| "http://127.0.0.1:9120".into());
                 let webui = service_state(by("hermes-webui"), &webui_url).await;
                 out.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: webui });
             }
