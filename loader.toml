@@ -28,10 +28,10 @@ substring = [
 ]
 tools = ["linux-x64", "linux-arm64"]
 
-# [manifest.feature_classify] is DERIVED from each [[component]].feature at build time
-# (authoritative — no basename guessing; see Config::feature_classify_table). Add
-# explicit entries here only to override / cover files no component produces; they are
-# merged on top of the derived map.
+# Feature ownership is authoritative per component: the bundler writes each
+# component group's manifest.json with a `features` map (filename -> feature),
+# which the update manifest reads directly — no basename guessing, no classify
+# table. `[[component]].feature` is the source the bundler tags from.
 
 [manifest.image_prep]
 seed_features_default       = true
