@@ -370,13 +370,13 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
             std::process::exit(127);
         }
     };
-    let mut cmd = Command::new(&bin);
-    cmd.args(&args);
+    // Tool-specific environment, forwarded to the child (and through the FHS sandbox).
+    let mut envs: Vec<(std::ffi::OsString, std::ffi::OsString)> = Vec::new();
     if tool == "ollama" {
         // Point the CLI at the already-running server + the USB models dir, so
         // `ollama pull/list/rm` operate on the same store the app uses.
-        cmd.env("OLLAMA_HOST", format!("{}:{}", config::OLLAMA_HOST, running_ollama_port()));
-        cmd.env("OLLAMA_MODELS", paths::models_dir());
+        envs.push(("OLLAMA_HOST".into(), format!("{}:{}", config::OLLAMA_HOST, running_ollama_port()).into()));
+        envs.push(("OLLAMA_MODELS".into(), paths::models_dir().into()));
         // NixOS dev: foreign-binary libs come via PLANAI_CHILD_LD_LIBRARY_PATH.
         if let Ok(extra) = std::env::var("PLANAI_CHILD_LD_LIBRARY_PATH") {
             if !extra.is_empty() {
@@ -384,17 +384,16 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
                     Ok(e) if !e.is_empty() => format!("{extra}:{e}"),
                     _ => extra,
                 };
-                cmd.env("LD_LIBRARY_PATH", v);
+                envs.push(("LD_LIBRARY_PATH".into(), v.into()));
             }
         }
     }
-    match cmd.status() {
-        Ok(st) => std::process::exit(st.code().unwrap_or(1)),
-        Err(e) => {
-            log(&format!("failed to run {}: {e}", bin.display()));
-            std::process::exit(1);
-        }
-    }
+    // Locate the component pool so loader-core can enter the NixOS FHS sandbox — these are
+    // generic ELF binaries that need it; off NixOS it execs the tool directly. Never returns.
+    let comp = std::env::current_exe().ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+        .and_then(|here| loader_core::components_dir(&here));
+    loader_core::exec_bundled_tool(comp.as_deref(), &bin, &args, &envs);
 }
 
 /// The launcher CLI. The default (no subcommand) runs the app: the dev-override
