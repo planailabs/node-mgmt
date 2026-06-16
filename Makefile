@@ -21,7 +21,7 @@ endif
 # Artifact builds go through ninja via the xtask orchestrator (built offline by nix).
 XTASK := nix run .\#xtask --
 
-.PHONY: all ninja makefile runtimes components bundles update-tarball tarball-upload download wheel app spa runtime bundle image models dev dev-spa dev-electron dev-usbd vendor-lock update update-deps test test-nixos test-usb test-vm test-all ui seed ollama openwebui download-curl test-clean test-mac test-win docker-image docker-push clean help
+.PHONY: all ninja makefile runtimes components bundles update-tarball tarball-upload download wheel app spa runtime bundle image models dev dev-spa dev-electron dev-usbd dev-usbd-spa vendor-lock update update-deps test test-nixos test-usb test-vm test-all ui seed ollama openwebui download-curl test-clean test-mac test-win docker-image docker-push clean help
 
 all: ## build EVERY target (mac/win/linux/nixos) + image (via ninja)
 	$(XTASK) build all
@@ -84,6 +84,11 @@ dev-electron: ## launch the bundle with the local app/ tree (needs: cd app && np
 dev-usbd: ## launch the bundle with a locally built usbd (cargo build --release)
 	cd usbd && cargo build --release
 	dist/bundle/plan-ai.linux-x64.exe --start-with-usbd usbd/target/release/usbd
+
+dev-usbd-spa: ## launch the prod bundle with BOTH a locally built usbd and SPA
+	./scripts/build-spa.sh
+	cd usbd && cargo build --release
+	dist/bundle/plan-ai.linux-x64.exe --start-with-spa launcher/spa --start-with-usbd usbd/target/release/usbd
 
 vendor-lock: ## regenerate vendor.lock.json (run when usb.lock bumps)
 	./scripts/gen-vendor-lock.sh

@@ -405,6 +405,10 @@ name = "dev-usbd"
 help = "launch the bundle with a locally built usbd (cargo build --release)"
 recipe = ["cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --start-with-usbd usbd/target/release/usbd"]
 [[make.target]]
+name = "dev-usbd-spa"
+help = "launch the prod bundle with BOTH a locally built usbd and SPA"
+recipe = ["./scripts/build-spa.sh", "cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --start-with-spa launcher/spa --start-with-usbd usbd/target/release/usbd"]
+[[make.target]]
 name = "vendor-lock"
 help = "regenerate vendor.lock.json (run when usb.lock bumps)"
 recipe = ["./scripts/gen-vendor-lock.sh"]
