@@ -588,9 +588,12 @@
         # Network parts (heartbeat/relay/sync) are a RUNTIME toggle
         # (USBD_NETWORKED, set by the launcher from the drive's "mgmt" feature).
         usbdSrc = pkgs.runCommand "plan-ai-usbd-src" { } ''
-          mkdir -p "$out/third_party" "$out/crates"
+          mkdir -p "$out/third_party/loader/crates" "$out/crates"
           cp -r ${./usbd} "$out/usbd"
           cp -r ${./crates/usb-config} "$out/crates/usb-config"
+          # usbd's control-plane HTTP contract, and its loader-manifest update-DTO dep
+          cp -r ${./crates/control-api} "$out/crates/control-api"
+          cp -r ${./third_party/loader/crates/loader-manifest} "$out/third_party/loader/crates/loader-manifest"
           cp -r ${./third_party/mac-mgmt} "$out/third_party/mac-mgmt"
         '';
         # the dioxus-fork git-dep hashes for usbd/Cargo.lock (memvault-web pins
