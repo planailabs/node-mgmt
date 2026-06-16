@@ -105,8 +105,8 @@ case "$TARGET" in
 esac
 # component base names this launcher needs (loader picks the ollama flavour).
 # hermes-webui is one SHARED component for all platforms (pure python/static,
-# runs on the hermes component's python); its basename starts with "hermes" so
-# the manifest feature-tags it ("hermes", default-off) like the agent component.
+# runs on the hermes component's python); write_os_manifest tags it feature=hermes
+# (default-off) like the agent component.
 COMP_BASES="runtime-$TARGET ow-assets hermes-webui"; for k in $OKEYS; do COMP_BASES="$COMP_BASES ollama-$k"; done
 # llama.cpp flavours for this OS (optional "llamacpp" feature; per-flavour names
 # like ollama — the launcher picks by GPU detection; win FMTS=zip so the per-
@@ -163,10 +163,10 @@ copy_usbd_into() {  # <components-dir>
 
 # Copy this target's hermes component (pool name hermes-<target>) into the group
 # dir as the fixed `hermes` name the launcher resolves (hermes.squashfs /
-# hermes.dmg / hermes/ — win ships hermes-<t>.zip, copied as hermes.zip). The
-# manifest feature-tags every hermes* basename ("hermes", default-off), so it
-# lands on the UPDATE SERVER but is pruned from the burned image
-# (xtask image-prep) and only downloaded when the user enables the feature.
+# hermes.dmg / hermes/ — win ships hermes-<t>.zip, copied as hermes.zip).
+# write_os_manifest tags it feature=hermes (default-off), so it lands on the
+# UPDATE SERVER but is pruned from the burned image (xtask image-prep) and only
+# downloaded when the user enables the feature.
 copy_hermes_into() {  # <components-dir>
   local cdst="$1" ext
   for ext in $FMTS; do
@@ -175,12 +175,28 @@ copy_hermes_into() {  # <components-dir>
 }
 
 # Write the declarative manifest.json for this OS's component group (components/<os>/).
+# The `features` map is the AUTHORITATIVE feature tag per file in this group: the
+# bundler placed these files and knows which optional feature each came from, so
+# the update manifest reads it straight (loader_manifest::generate) instead of
+# guessing feature ownership from basenames. Files absent from the map are core
+# (always kept/downloaded). Platform is implicit — the group dir IS the target.
 write_os_manifest() {  # <group-dir>
-  local cdst="$1" oll="[]" k
+  local cdst="$1" oll="[]" k feats="{}" ext
   for k in $OKEYS; do oll="$(printf '%s' "$oll" | jq -c --arg k "$k" '. + [$k]')"; done
+  # base.ext -> feature, recorded only for files actually present in the group.
+  add_feat() {  # <basename> <feature>
+    [ -e "$cdst/$1" ] && feats="$(printf '%s' "$feats" | jq -c --arg f "$1" --arg v "$2" '. + {($f):$v}')" || true
+  }
+  for ext in $FMTS; do
+    add_feat "runtime-$TARGET.$ext" openwebui   # the open-webui python runtime
+    add_feat "ow-assets.$ext"       openwebui   # the open-webui frontend assets
+    add_feat "hermes.$ext"          hermes      # the hermes agent dashboard
+    add_feat "hermes-webui.$ext"    hermes      # the hermes web UI (same feature)
+    for k in $LKEYS; do add_feat "llamacpp-$k.$ext" llamacpp; done
+  done
   jq -n --arg os "$GROUP" --arg tag "$(ollama_version)" --arg rt "runtime-$TARGET" \
-        --arg app "app-$TARGET" --argjson ollama "$oll" \
-    '{os:$os, ollama_tag:$tag, runtime:$rt, app:$app, ow_assets:"ow-assets", ollama:$ollama,
+        --arg app "app-$TARGET" --argjson ollama "$oll" --argjson features "$feats" \
+    '{os:$os, ollama_tag:$tag, runtime:$rt, app:$app, ow_assets:"ow-assets", ollama:$ollama, features:$features,
       note:"per-OS component group; loader mounts runtime/app/ow-assets + the ollama flavour matching the CPU arch (rocm if /dev/kfd)"}' \
     > "$cdst/manifest.json"
 }
