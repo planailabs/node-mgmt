@@ -48,7 +48,7 @@ pub const CACHE_DIR_NAME: &str = "plan-ai-node-mgmt";
 
 impl Project for PlanAi {
     fn brand(&self) -> &str {
-        "plan.ai"
+        "plan.ai node-mgmt"
     }
 
     fn cache_dir_name(&self) -> &str {
