@@ -63,6 +63,10 @@ pub struct Info {
     /// and the daemon reports its (effective) port. Drives the SPA's Hermes tab.
     #[serde(default)]
     pub hermes_url: Option<String>,
+    /// The hermes web UI URL — present when the "hermes" feature is enabled and
+    /// the daemon reports its (effective) port. Drives the SPA's Hermes Web UI tab.
+    #[serde(default)]
+    pub hermes_webui_url: Option<String>,
     pub ollama_port: u16,
     pub webui_port: u16,
     pub models_dir: String,

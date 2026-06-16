@@ -190,6 +190,7 @@ impl ControlApi for RealApi {
             let mut ollama_port = config::ollama_port();
             let mut webui_port = config::webui_port();
             let mut hermes_url = None;
+            let mut hermes_webui_url = None;
             // In daemon mode the daemon resolves the EFFECTIVE ports (after any
             // collision fallback), so prefer what it reports — otherwise the
             // WebUI iframe could point at a port the daemon didn't actually bind.
@@ -208,6 +209,9 @@ impl ControlApi for RealApi {
                         if let Some(u) = v.get("hermes_url").and_then(|x| x.as_str()) {
                             hermes_url = Some(u.to_string());
                         }
+                        if let Some(u) = v.get("hermes_webui_url").and_then(|x| x.as_str()) {
+                            hermes_webui_url = Some(u.to_string());
+                        }
                     }
                 }
             }
@@ -215,6 +219,7 @@ impl ControlApi for RealApi {
                 webui_url,
                 llmfit_url,
                 hermes_url,
+                hermes_webui_url,
                 ollama_port,
                 webui_port,
                 models_dir: paths::models_dir().to_string_lossy().into_owned(),

@@ -25,8 +25,18 @@ pub enum Tab {
     WebUi,
     /// The Hermes agent dashboard — shown when the "hermes" feature is enabled.
     Hermes,
+    /// The Hermes web UI — same "hermes" feature, separate component + service.
+    HermesWebUi,
     /// The Config tab — core (always available).
     Config,
+}
+
+impl Tab {
+    /// Whether this tab is one of the launchable "apps" (lives in the app
+    /// switcher) rather than launcher chrome (Dashboard / Config).
+    pub fn is_app(self) -> bool {
+        matches!(self, Tab::Models | Tab::WebUi | Tab::Hermes | Tab::HermesWebUi)
+    }
 }
 
 /// State shared across views (provided via context; signals are Copy).
@@ -52,6 +62,10 @@ impl AppState {
     /// Whether the optional hermes agent is enabled on this drive.
     pub fn hermes_enabled(&self) -> bool {
         self.features.read().iter().any(|f| f == "hermes")
+    }
+    /// Whether the hermes web UI service is ready right now.
+    pub fn hermes_webui_ready(&self) -> bool {
+        self.ready("hermes-webui")
     }
 }
 
@@ -164,7 +178,6 @@ pub fn App() -> Element {
     let hermes_on = state.hermes_enabled();
     let hermes_ready = state.ready("hermes");
     let hermes_url = state.info.read().as_ref().and_then(|i| i.hermes_url.clone());
-    let models_ready = state.llmfit_ready();
     let webui_url = state.info.read().as_ref().map(|i| i.webui_url.clone());
     // The iframe only enters the DOM once Open-WebUI reports ready (webui_ready is
     // reactive — it tracks the 2s status poll). Mounting earlier would load before
@@ -177,6 +190,10 @@ pub fn App() -> Element {
     // Same mount-once-ready iframe pattern as the WebUI tab.
     let hermes_src = hermes_url.filter(|_| hermes_ready);
     let hermes_view_cls = if tab == Tab::Hermes { "flex-1 min-h-0" } else { "hidden" };
+    let hermes_webui_ready = state.hermes_webui_ready();
+    let hermes_webui_url = state.info.read().as_ref().and_then(|i| i.hermes_webui_url.clone());
+    let hermes_webui_src = hermes_webui_url.filter(|_| hermes_webui_ready);
+    let hermes_webui_view_cls = if tab == Tab::HermesWebUi { "flex-1 min-h-0" } else { "hidden" };
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -196,13 +213,9 @@ pub fn App() -> Element {
                 }
                 div { class: "topbar-controls flex items-center gap-2",
                     TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
-                    TabButton { tab: Tab::Models, current: tab, label: t!("tab-models"), enabled: models_ready }
-                    TabButton { tab: Tab::WebUi, current: tab, label: t!("tab-webui"), enabled: webui_ready }
-                    if hermes_on {
-                        TabButton { tab: Tab::Hermes, current: tab, label: t!("tab-hermes"), enabled: hermes_ready }
-                    }
                     // Config is core now (was the "mgmt" feature) — always available.
                     TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
+                    AppSwitcher {}
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
@@ -240,6 +253,13 @@ pub fn App() -> Element {
                         div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
                     }
                 }
+                div { class: "{hermes_webui_view_cls}",
+                    if let Some(url) = hermes_webui_src {
+                        iframe { class: "w-full h-full border-0", src: "{url}" }
+                    } else {
+                        div { class: "card-pad td-muted text-sm", {t!("webui-not-ready")} }
+                    }
+                }
             }
         }
     }
@@ -262,6 +282,109 @@ fn TabButton(tab: Tab, current: Tab, label: String, enabled: bool) -> Element {
                 }
             },
             "{label}"
+        }
+    }
+}
+
+/// One launchable app in the switcher: the tab it opens, its label, a single
+/// avatar letter, the avatar background utility, and whether it's ready.
+struct AppEntry {
+    tab: Tab,
+    label: String,
+    letter: &'static str,
+    avatar: &'static str,
+    ready: bool,
+}
+
+/// Waffle/grid menu listing the launchable apps (Open-WebUI, Models, Hermes,
+/// Hermes Web UI). Each app shows a circular avatar + name, mirroring the
+/// product app switcher. Disabled rows stay visible but greyed until ready.
+#[allow(non_snake_case)]
+fn AppSwitcher() -> Element {
+    let state = use_context::<AppState>();
+    let mut open = use_signal(|| false);
+
+    let tab = (state.tab)();
+    let hermes_on = state.hermes_enabled();
+
+    let mut apps = vec![
+        AppEntry { tab: Tab::WebUi, label: t!("tab-webui"), letter: "O", avatar: "bg-brand", ready: state.ready("webui") },
+        AppEntry { tab: Tab::Models, label: t!("tab-models"), letter: "M", avatar: "bg-info", ready: state.llmfit_ready() },
+    ];
+    if hermes_on {
+        apps.push(AppEntry { tab: Tab::Hermes, label: t!("tab-hermes"), letter: "H", avatar: "bg-accent", ready: state.ready("hermes") });
+        apps.push(AppEntry { tab: Tab::HermesWebUi, label: t!("tab-hermes-webui"), letter: "W", avatar: "bg-success", ready: state.hermes_webui_ready() });
+    }
+
+    // The trigger reads as "active" whenever one of its apps owns the view.
+    let trigger_variant = if tab.is_app() { ButtonVariant::Secondary } else { ButtonVariant::Ghost };
+
+    rsx! {
+        div { class: "relative",
+            Button {
+                size: ButtonSize::Sm,
+                variant: trigger_variant,
+                onclick: move |_| { let v = !open(); open.set(v); },
+                span { class: "sr-only", {t!("app-switcher-label")} }
+                // waffle (3×3 grid) glyph
+                svg {
+                    class: "h-4 w-4", fill: "currentColor", view_box: "0 0 24 24",
+                    circle { cx: "5", cy: "5", r: "1.8" }
+                    circle { cx: "12", cy: "5", r: "1.8" }
+                    circle { cx: "19", cy: "5", r: "1.8" }
+                    circle { cx: "5", cy: "12", r: "1.8" }
+                    circle { cx: "12", cy: "12", r: "1.8" }
+                    circle { cx: "19", cy: "12", r: "1.8" }
+                    circle { cx: "5", cy: "19", r: "1.8" }
+                    circle { cx: "12", cy: "19", r: "1.8" }
+                    circle { cx: "19", cy: "19", r: "1.8" }
+                }
+                svg {
+                    class: "h-3 w-3 ml-0.5 text-fg-faint", fill: "none", stroke: "currentColor",
+                    stroke_width: "2", view_box: "0 0 24 24",
+                    path {
+                        stroke_linecap: "round", stroke_linejoin: "round",
+                        d: if open() { "M5 15l7-7 7 7" } else { "M19 9l-7 7-7-7" },
+                    }
+                }
+            }
+            if open() {
+                // Click-away backdrop: closes the menu on any outside click.
+                div { class: "fixed inset-0 z-40", onclick: move |_| open.set(false) }
+                div { class: "absolute right-0 mt-2 z-50 w-60 card bg-surface shadow-pop py-2",
+                    for app in apps {
+                        {
+                            let AppEntry { tab: app_tab, label, letter, avatar, ready } = app;
+                            let active = app_tab == tab;
+                            let row_cls = if active { "bg-surface-2" } else { "hover:bg-surface-2" };
+                            let avatar_cls = if ready { avatar } else { "bg-surface-3" };
+                            let name_cls = if ready { "text-fg-strong" } else { "td-muted" };
+                            rsx! {
+                                button {
+                                    key: "{label}",
+                                    class: "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors {row_cls} disabled:opacity-50 disabled:cursor-default",
+                                    disabled: !ready,
+                                    onclick: move |_| {
+                                        if ready {
+                                            let mut t = state.tab;
+                                            t.set(app_tab);
+                                            open.set(false);
+                                        }
+                                    },
+                                    span {
+                                        class: "shrink-0 h-8 w-8 rounded-full grid place-items-center text-fg-invert font-semibold {avatar_cls}",
+                                        "{letter}"
+                                    }
+                                    span { class: "text-sm {name_cls}", "{label}" }
+                                    if !ready {
+                                        span { class: "ml-auto help-xs td-muted", {t!("state-starting")} }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

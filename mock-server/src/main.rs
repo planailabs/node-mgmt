@@ -135,6 +135,7 @@ impl ControlApi for Mock {
         async move {
             Info {
                 hermes_url: Some("http://127.0.0.1:9119".into()),
+                hermes_webui_url: Some("http://127.0.0.1:8787".into()),
                 webui_url: "http://127.0.0.1:8080".into(),
                 llmfit_url: Some("http://127.0.0.1:8787".into()),
                 ollama_port: 11434,
@@ -154,10 +155,16 @@ impl ControlApi for Mock {
     }
     fn status(&self) -> impl Future<Output = Vec<ServiceStatus>> + Send {
         let m = self.s.lock().unwrap();
-        let v = vec![
+        let mut v = vec![
             ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: m.ollama },
             ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: m.webui },
         ];
+        // hermes ships two services (dashboard + web UI) under one feature; mark
+        // them ready when the feature is on so the app switcher is previewable.
+        if m.features.iter().any(|f| f == "hermes") {
+            v.push(ServiceStatus { id: "hermes".into(), name: "Hermes".into(), state: ServiceState::Ready });
+            v.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: ServiceState::Ready });
+        }
         async move { v }
     }
     fn subscribe_logs(&self) -> broadcast::Receiver<String> {
