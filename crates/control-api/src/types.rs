@@ -67,6 +67,10 @@ pub struct Info {
     /// the daemon reports its (effective) port. Drives the SPA's Hermes Web UI tab.
     #[serde(default)]
     pub hermes_webui_url: Option<String>,
+    /// The memvault web UI URL — present when memvault is enabled and the daemon
+    /// reports its (effective) port. Drives the SPA's Memvault app-switcher entry.
+    #[serde(default)]
+    pub memvault_url: Option<String>,
     pub ollama_port: u16,
     pub webui_port: u16,
     pub models_dir: String,

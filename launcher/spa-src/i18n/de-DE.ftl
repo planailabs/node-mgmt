@@ -7,6 +7,7 @@ tab-models = Modelle
 tab-webui = Open WebUI
 tab-llmfit = llmfit
 tab-hermes-webui = Hermes Web UI
+tab-memvault = Memvault
 tab-config = Konfiguration
 app-switcher-label = Apps
 btn-report-issue = Problem melden

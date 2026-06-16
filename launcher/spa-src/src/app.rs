@@ -30,6 +30,9 @@ pub enum Tab {
     Hermes,
     /// The Hermes web UI — same "hermes" feature, separate component + service.
     HermesWebUi,
+    /// The Memvault web UI — shown when memvault is enabled and the daemon
+    /// reports its (effective) port.
+    Memvault,
     /// The Config tab — core (always available).
     Config,
 }
@@ -38,7 +41,10 @@ impl Tab {
     /// Whether this tab is one of the launchable "apps" (lives in the app
     /// switcher) rather than launcher chrome (Dashboard / Config).
     pub fn is_app(self) -> bool {
-        matches!(self, Tab::Models | Tab::WebUi | Tab::Llmfit | Tab::Hermes | Tab::HermesWebUi)
+        matches!(
+            self,
+            Tab::Models | Tab::WebUi | Tab::Llmfit | Tab::Hermes | Tab::HermesWebUi | Tab::Memvault
+        )
     }
 }
 
@@ -71,6 +77,11 @@ impl AppState {
     /// Whether the hermes web UI service is ready right now.
     pub fn hermes_webui_ready(&self) -> bool {
         self.ready("hermes-webui")
+    }
+    /// Whether memvault is enabled — the daemon reports a memvault URL only when
+    /// it's serving the in-process memvault web app. Drives the Memvault app.
+    pub fn memvault_ready(&self) -> bool {
+        self.info.read().as_ref().map(|i| i.memvault_url.is_some()).unwrap_or(false)
     }
 }
 
@@ -316,6 +327,16 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
             tab: Tab::HermesWebUi, label: t!("tab-hermes-webui"), letter: "W", avatar: "bg-success",
             ready: hermes_webui_ready,
             kind: AppKind::Iframe { src: url(|i| i.hermes_webui_url.clone(), hermes_webui_ready) },
+        });
+    }
+    // Memvault is config-driven (not a platform feature): the daemon reports a
+    // memvault_url only when it's enabled + serving, so that presence both adds the
+    // app and gates the iframe src — same pattern as llmfit.
+    if state.memvault_ready() {
+        apps.push(AppDesc {
+            tab: Tab::Memvault, label: t!("tab-memvault"), letter: "V", avatar: "bg-secondary",
+            ready: true,
+            kind: AppKind::Iframe { src: url(|i| i.memvault_url.clone(), true) },
         });
     }
     apps
