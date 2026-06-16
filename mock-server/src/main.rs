@@ -137,7 +137,7 @@ impl ControlApi for Mock {
                 hermes_url: Some("http://127.0.0.1:9119".into()),
                 hermes_webui_url: Some("http://127.0.0.1:9120".into()),
                 webui_url: "http://127.0.0.1:8080".into(),
-                llmfit_url: Some("http://127.0.0.1:8787".into()),
+                llmfit_url: Some("http://127.0.0.1:11436".into()),
                 ollama_port: 11434,
                 webui_port: 8080,
                 models_dir: "/Volumes/PLANAI/models".into(),

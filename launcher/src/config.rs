@@ -7,8 +7,13 @@ use std::collections::HashMap;
 
 pub const OLLAMA_HOST: &str = "127.0.0.1";
 pub const WEBUI_HOST: &str = "127.0.0.1";
+pub const LLMFIT_HOST: &str = "127.0.0.1";
 pub const OLLAMA_PORT_DEFAULT: u16 = 11434;
 pub const WEBUI_PORT_DEFAULT: u16 = 8080;
+/// llmfit's model-browser API port (proxied by the launcher). Its own port in the
+/// ollama-adjacent range — deliberately NOT 8787, which collides with common host
+/// services (e.g. RStudio). `init_ports` falls back to an ephemeral port if taken.
+pub const LLMFIT_PORT_DEFAULT: u16 = 11436;
 
 /// The ollama / open-webui ports. Default to the well-known 11434 / 8080, but the
 /// launcher may override them via PLANAI_OLLAMA_PORT / PLANAI_WEBUI_PORT when the
@@ -20,6 +25,9 @@ pub fn ollama_port() -> u16 {
 }
 pub fn webui_port() -> u16 {
     std::env::var("PLANAI_WEBUI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(WEBUI_PORT_DEFAULT)
+}
+pub fn llmfit_port() -> u16 {
+    std::env::var("PLANAI_LLMFIT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(LLMFIT_PORT_DEFAULT)
 }
 
 /// Pick free ports for ollama + open-webui (once, in the host) so the bundled
@@ -46,6 +54,7 @@ pub fn init_ports() {
     }
     pick("PLANAI_OLLAMA_PORT", OLLAMA_PORT_DEFAULT);
     pick("PLANAI_WEBUI_PORT", WEBUI_PORT_DEFAULT);
+    pick("PLANAI_LLMFIT_PORT", LLMFIT_PORT_DEFAULT);
 }
 
 pub fn ollama_health_url() -> String {

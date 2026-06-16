@@ -220,12 +220,13 @@ fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
     Some(dst)
 }
 
-const LLMFIT_PORT: &str = "8787";
-
 /// Run `llmfit system --json` (GPU/VRAM/backend) → pass the raw JSON to Electron via
 /// PLANAI_GPU_JSON (the JS side parses it), and start `llmfit serve` (model browser
 /// API the dashboard proxies). Returns the serve child so we can stop it on exit.
 fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
+    // llmfit's own configured port (init_ports picked it, defaulting off 8787); the
+    // FHS child/supervisor inherit PLANAI_LLMFIT_PORT via env.
+    let port = config::llmfit_port();
     if let Ok(out) = Command::new(lf).args(["system", "--json"]).output() {
         if out.status.success() {
             let json = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -238,15 +239,15 @@ fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
     // The download fallback (serve.rs run_download) shells back into llmfit.
     std::env::set_var("PLANAI_LLMFIT_BIN", lf);
     match Command::new(lf)
-        .args(["serve", "--host", "127.0.0.1", "--port", LLMFIT_PORT])
+        .args(["serve", "--host", config::LLMFIT_HOST, "--port", &port.to_string()])
         // the CONFIGURED ollama port, not a hardcoded 11434 — the stick's
         // server may run elsewhere
         .env("OLLAMA_HOST", format!("{}:{}", config::OLLAMA_HOST, config::ollama_port()))
         .spawn()
     {
         Ok(child) => {
-            std::env::set_var("PLANAI_LLMFIT_URL", format!("http://127.0.0.1:{LLMFIT_PORT}"));
-            log(&format!("llmfit serve on 127.0.0.1:{LLMFIT_PORT}"));
+            std::env::set_var("PLANAI_LLMFIT_URL", format!("http://{}:{port}", config::LLMFIT_HOST));
+            log(&format!("llmfit serve on {}:{port}", config::LLMFIT_HOST));
             Some(child)
         }
         Err(e) => {
@@ -524,7 +525,7 @@ fn main() {
     // launch is notified + exits inside loader-core. The FHS re-exec (NixOS) is entirely
     // the loader's concern, so it's not threaded through here: acquire_run_lock and the
     // lifecycle Ctx both detect it internally. Brand fills the localized "already running".
-    let instance_lock = loader_core::acquire_run_lock("plan.ai");
+    let instance_lock = loader_core::acquire_run_lock("plan.ai node-mgmt");
 
     // Choose ollama/open-webui ports up front (host picks; the supervisor + FHS
     // child inherit via env). Falls back off 11434/8080 when a host service holds
