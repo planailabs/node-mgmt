@@ -1155,7 +1155,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "loader-manifest",
- "notify-rust",
+ "loader-splash",
  "reqwest",
  "rustls",
  "serde",
@@ -1163,7 +1163,6 @@ dependencies = [
  "sha2",
  "tokio",
  "unic-langid",
- "which",
  "zip",
 ]
 
@@ -1174,6 +1173,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "loader-splash"
+version = "0.1.0"
+dependencies = [
+ "notify-rust",
+ "which",
 ]
 
 [[package]]
