@@ -201,6 +201,10 @@
               # of truth — edit loader.toml, not the crate.
               PLANAI_FEATURES = builtins.concatStringsSep " "
                 (map (f: "${f.name}=${if (f.default or false) then "1" else "0"}") (loaderToml.feature or [ ]));
+              # The fallback update URL baked into loader-manifest's DEFAULT_UPDATE_URL (used
+              # only when a drive has no local manifest) — sourced from loader.toml, not hardcoded
+              # in the loader engine.
+              PLANAI_UPDATE_URL = loaderToml.manifest.update_url or "";
             } // lib.optionalAttrs (lib.hasInfix "linux" zigTarget) {
               # Static bubblewrap, embedded into the linux launcher: on NixOS it sets up
               # the OUTER namespace that binds/overlays the FHS-closure squashfs over
