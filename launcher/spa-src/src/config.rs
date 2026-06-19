@@ -6,8 +6,9 @@
 //! `mac-mgmt-overview::ConfigView`.
 
 use dioxus::prelude::*;
+use dioxus_i18n::t;
 use mac_mgmt_config_ui::ConfigEditor;
-use plan_ai_design::Card;
+use plan_ai_design::{Card, PageHero};
 
 use crate::api;
 
@@ -23,8 +24,15 @@ pub fn ConfigView() -> Element {
     let sch = schema.read().clone().flatten();
 
     rsx! {
-        div { class: "flex-1 min-h-0 overflow-auto p-6",
-            Card {
+        div { class: "flex-1 min-h-0 overflow-auto p-6 space-y-6",
+            PageHero {
+                title: rsx! {
+                    {t!("config-title-lead")}
+                    " "
+                    span { class: "text-fg-muted", {t!("config-title-tail")} }
+                },
+            }
+            Card { class: "card-pad",
                 if let Some(note) = saved_note.read().clone() {
                     p { class: "td-muted text-sm mb-2", "{note}" }
                 }

@@ -1,7 +1,10 @@
 ## plan.ai dashboard — Deutsch.
 
 # top chrome
-chrome-tagline = node-mgmt · offline
+chrome-tagline = node-mgmt
+chrome-status-offline = offline
+chrome-status-disconnected = getrennt
+chrome-status-connected = verbunden
 tab-dashboard = Übersicht
 tab-models = Modelle
 tab-webui = Open WebUI
@@ -9,7 +12,14 @@ tab-llmfit = llmfit
 tab-hermes-webui = Hermes Web UI
 tab-memvault = Memvault
 tab-config = Konfiguration
+config-title-lead = Laufwerks-
+config-title-tail = konfiguration
 app-switcher-label = Apps
+nav-launcher = Launcher
+nav-toggle-sidebar = Seitenleiste umschalten
+nav-open-main-menu = Menü öffnen
+nav-close-menu = Menü schließen
+nav-collapse = Einklappen
 btn-report-issue = Problem melden
 app-not-ready = { $name } ist noch nicht bereit.
 

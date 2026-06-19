@@ -2,7 +2,10 @@
 ## (theme toggle, language picker, data table) at runtime; keep keys app-specific.
 
 # top chrome
-chrome-tagline = node-mgmt · offline
+chrome-tagline = node-mgmt
+chrome-status-offline = offline
+chrome-status-disconnected = disconnected
+chrome-status-connected = connected
 tab-dashboard = Dashboard
 tab-models = Models
 tab-webui = Open WebUI
@@ -10,7 +13,14 @@ tab-llmfit = llmfit
 tab-hermes-webui = Hermes Web UI
 tab-memvault = Memvault
 tab-config = Config
+config-title-lead = Drive
+config-title-tail = configuration
 app-switcher-label = Apps
+nav-launcher = Launcher
+nav-toggle-sidebar = Toggle sidebar
+nav-open-main-menu = Open menu
+nav-close-menu = Close menu
+nav-collapse = Collapse
 btn-report-issue = Report issue
 app-not-ready = { $name } is not ready yet.
 

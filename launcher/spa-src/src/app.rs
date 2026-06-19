@@ -37,16 +37,6 @@ pub enum Tab {
     Config,
 }
 
-impl Tab {
-    /// Whether this tab is one of the launchable "apps" (lives in the app
-    /// switcher) rather than launcher chrome (Dashboard / Config).
-    pub fn is_app(self) -> bool {
-        matches!(
-            self,
-            Tab::Models | Tab::WebUi | Tab::Llmfit | Tab::Hermes | Tab::HermesWebUi | Tab::Memvault
-        )
-    }
-}
 
 /// State shared across views (provided via context; signals are Copy).
 #[derive(Clone, Copy)]
@@ -203,11 +193,60 @@ pub fn App() -> Element {
         }
     });
 
+    // Desktop sidebar collapse (icon rail) — toggled by the dedicated button in
+    // the sidebar footer, restored from / persisted to localStorage.
+    let mut sidebar_collapsed = use_signal(|| false);
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(v) = document::eval(
+                "try { return localStorage.getItem('nav.sidebar.collapsed') || '0'; } catch(e) { return '0'; }",
+            ).await {
+                if v.as_str() == Some("1") {
+                    sidebar_collapsed.set(true);
+                }
+            }
+        });
+    });
+    use_effect(move || {
+        let v = if *sidebar_collapsed.read() { "1" } else { "0" };
+        document::eval(&format!(
+            "try {{ localStorage.setItem('nav.sidebar.collapsed', '{v}'); }} catch(e) {{}}"
+        ));
+    });
+    // Mobile drawer open/closed — shared by the topbar hamburger and the drawer.
+    let drawer_open = use_signal(|| false);
+
     let tab = (state.tab)();
+    // Topbar status word: offline (no remote server configured) → disconnected
+    // (configured but the relay isn't up) → connected (relay live).
+    let (conn_status, conn_status_cls) = {
+        let conn = state.connection.read();
+        match conn.as_ref() {
+            // connected → brand orange, disconnected → strong fg (white in dark),
+            // offline → muted grey.
+            Some(c) if c.networked && c.remote_configured && c.relay_connected => (t!("chrome-status-connected"), "text-brand"),
+            Some(c) if c.networked && c.remote_configured => (t!("chrome-status-disconnected"), "text-fg-strong"),
+            _ => (t!("chrome-status-offline"), "text-fg-muted"),
+        }
+    };
     // The app registry is the single source of truth: which apps exist, their
     // switcher presentation, readiness, and how each renders (native view vs
-    // embedded iframe). The switcher and the view area both derive from it.
+    // embedded iframe). The sidebar nav and the view area both derive from it.
     let apps = app_registry(&state);
+
+    // Sidebar shell classes. We inline these (rather than the shared `.nav-side`,
+    // which hides below `xl`/1280px) because the launcher window is 1200px wide —
+    // so the persistent sidebar shows from `lg`/1024px up, with the mobile drawer
+    // taking over only on the narrowest windows. Collapse slides it to width 0.
+    const SIDE_BASE: &str = "hidden lg:flex lg:flex-col bg-surface-2 border-r border-line shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out";
+    let collapsed = *sidebar_collapsed.read();
+    // Collapse is an icon rail (avatars only), not a slide-off — 64px wide.
+    let side_cls = if collapsed { format!("{SIDE_BASE} w-[64px]") } else { format!("{SIDE_BASE} w-[220px]") };
+    let toggle_cls = if collapsed {
+        "shrink-0 border-t border-line flex items-center justify-center px-3 py-3 text-fg-muted hover:text-fg-strong hover:bg-surface-3 transition-colors"
+    } else {
+        "shrink-0 border-t border-line flex items-center gap-2 px-3 py-3 text-fg-muted hover:text-fg-strong hover:bg-surface-3 transition-colors"
+    };
 
     rsx! {
         script { dangerous_inner_html: THEME_INIT_SCRIPT }
@@ -215,24 +254,29 @@ pub fn App() -> Element {
 
         div { id: "wasm-loading", style: WASM_LOADING_STYLE, dangerous_inner_html: WASM_LOADING_INNER }
 
+        // Shell mirrors the mac-mgmt-server design: a slim topbar (brand logo over
+        // the sidebar column, controls right) over a row of [collapsible 220px
+        // sidebar | main content]. Below xl the sidebar is hidden and the topbar
+        // hamburger opens a mobile drawer with the same nav.
         div { class: "bg-canvas text-fg h-screen flex flex-col overflow-hidden",
-            // top chrome
-            header { class: "topbar px-6",
-                div { class: "flex items-center gap-3",
-                    span { class: "font-mono text-fg-strong font-semibold tracking-tight",
-                        "plan"
-                        span { class: "text-brand", ".ai" }
-                    }
-                    span { class: "kicker", {t!("chrome-tagline")} }
+            header { class: "topbar",
+                div { class: "topbar-logo-pad gap-2.5",
+                    Logo {}
                 }
-                div { class: "topbar-controls flex items-center gap-2",
-                    TabButton { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), enabled: true }
-                    // Config is core now (was the "mgmt" feature) — always available.
-                    TabButton { tab: Tab::Config, current: tab, label: t!("tab-config"), enabled: true }
-                    AppSwitcher {}
+                div { class: "topbar-controls",
+                    // Styled like the mgmt wordmark suffix ("plan.ai mgmt"): muted,
+                    // medium-weight, normal case — reads as a continuation of the
+                    // brand rather than a separate uppercase label.
+                    span { class: "mr-auto hidden sm:block text-sm font-medium text-fg-muted whitespace-nowrap",
+                        {t!("chrome-tagline")} " · "
+                        span { class: conn_status_cls, {conn_status} }
+                    }
+                    LanguagePicker {}
+                    ThemeToggle {}
                     Button {
                         size: ButtonSize::Sm,
                         variant: ButtonVariant::Ghost,
+                        class: "hidden sm:inline-flex",
                         // Electron routes window.open(external) to the system browser
                         // (setWindowOpenHandler → shell.openExternal in main/index.js).
                         onclick: move |_| {
@@ -240,31 +284,66 @@ pub fn App() -> Element {
                         },
                         {t!("btn-report-issue")}
                     }
-                    LanguagePicker {}
-                    ThemeToggle {}
+                    MobileMenuButton { open: drawer_open }
                 }
             }
 
-            // The view area is driven by the current tab (the state machine's
-            // state). Native views mount only while their tab is active. Embedded
-            // (iframe) apps mount once ready and stay mounted — hidden when
-            // inactive — so their session + scroll survive tab switches; one
-            // uniform IframeView lifecycle, no per-app special-casing.
-            {match tab {
-                Tab::Dashboard => rsx! { Dashboard {} },
-                Tab::Models => rsx! { Models {} },
-                Tab::Config => rsx! { ConfigView {} },
-                _ => rsx! {},
-            }}
-            for app in apps.iter().filter(|a| matches!(a.kind, AppKind::Iframe { .. })) {
-                {
-                    let src = match &app.kind {
-                        AppKind::Iframe { src } => src.clone(),
-                        AppKind::Native => None,
-                    };
-                    rsx! { IframeView { key: "{app.letter}", active: tab == app.tab, label: app.label.clone(), src } }
+            div { class: "flex flex-1 overflow-hidden",
+                // Desktop sidebar — shown from `lg` up (see SIDE_BASE) + width
+                // transition; `.nav-side-collapsed` slides it to width 0.
+                aside { class: "{side_cls}",
+                    div { class: "flex flex-col h-full min-h-0",
+                        NavContent { collapsed }
+                        // Dedicated collapse toggle — kept separate from the logo
+                        // (the logo is brand only, not a control).
+                        button {
+                            class: toggle_cls,
+                            "aria-label": t!("nav-toggle-sidebar"),
+                            onclick: move |_| {
+                                let mut c = sidebar_collapsed;
+                                let v = !*c.read();
+                                c.set(v);
+                            },
+                            svg {
+                                class: "h-4 w-4 shrink-0", fill: "none", stroke: "currentColor",
+                                stroke_width: "2", view_box: "0 0 24 24",
+                                path {
+                                    stroke_linecap: "round", stroke_linejoin: "round",
+                                    d: if collapsed { "M9 5l7 7-7 7" } else { "M15 19l-7-7 7-7" },
+                                }
+                            }
+                            if !collapsed {
+                                span { class: "text-xs font-medium", {t!("nav-collapse")} }
+                            }
+                        }
+                    }
+                }
+
+                // The view area is driven by the current tab (the state machine's
+                // state). Native views mount only while their tab is active. Embedded
+                // (iframe) apps mount once ready and stay mounted — hidden when
+                // inactive — so their session + scroll survive tab switches; one
+                // uniform IframeView lifecycle, no per-app special-casing.
+                div { class: "flex-1 flex flex-col min-w-0 overflow-hidden",
+                    {match tab {
+                        Tab::Dashboard => rsx! { Dashboard {} },
+                        Tab::Models => rsx! { Models {} },
+                        Tab::Config => rsx! { ConfigView {} },
+                        _ => rsx! {},
+                    }}
+                    for app in apps.iter().filter(|a| matches!(a.kind, AppKind::Iframe { .. })) {
+                        {
+                            let src = match &app.kind {
+                                AppKind::Iframe { src } => src.clone(),
+                                AppKind::Native => None,
+                            };
+                            rsx! { IframeView { key: "{app.letter}", active: tab == app.tab, label: app.label.clone(), src } }
+                        }
+                    }
                 }
             }
+
+            MobileDrawer { open: drawer_open }
         }
     }
 }
@@ -278,9 +357,9 @@ enum AppKind {
     Iframe { src: Option<String> },
 }
 
-/// A launchable app: its tab (the state-machine state), switcher presentation,
+/// A launchable app: its tab (the state-machine state), avatar presentation,
 /// readiness, and how its view renders. The single source of truth shared by
-/// the [`AppSwitcher`] and the view area.
+/// the sidebar nav ([`NavContent`]) and the view area.
 struct AppDesc {
     tab: Tab,
     label: String,
@@ -301,16 +380,16 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
     let llmfit_ready = state.llmfit_ready();
     let mut apps = vec![
         AppDesc {
-            tab: Tab::WebUi, label: t!("tab-webui"), letter: "O", avatar: "bg-brand",
+            tab: Tab::WebUi, avatar: "bg-warn", label: t!("tab-webui"), letter: "O",
             ready: webui_ready,
             kind: AppKind::Iframe { src: url(|i| Some(i.webui_url.clone()), webui_ready) },
         },
         AppDesc {
-            tab: Tab::Models, label: t!("tab-models"), letter: "M", avatar: "bg-info",
+            tab: Tab::Models, avatar: "bg-info", label: t!("tab-models"), letter: "M",
             ready: llmfit_ready, kind: AppKind::Native,
         },
         AppDesc {
-            tab: Tab::Llmfit, label: t!("tab-llmfit"), letter: "L", avatar: "bg-warn",
+            tab: Tab::Llmfit, avatar: "bg-info", label: t!("tab-llmfit"), letter: "L",
             ready: llmfit_ready,
             kind: AppKind::Iframe { src: url(|i| i.llmfit_url.clone(), llmfit_ready) },
         },
@@ -319,12 +398,12 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
         let hermes_ready = state.ready("hermes");
         let hermes_webui_ready = state.hermes_webui_ready();
         apps.push(AppDesc {
-            tab: Tab::Hermes, label: t!("tab-hermes"), letter: "H", avatar: "bg-accent",
+            tab: Tab::Hermes, avatar: "bg-warn", label: t!("tab-hermes"), letter: "H",
             ready: hermes_ready,
             kind: AppKind::Iframe { src: url(|i| i.hermes_url.clone(), hermes_ready) },
         });
         apps.push(AppDesc {
-            tab: Tab::HermesWebUi, label: t!("tab-hermes-webui"), letter: "W", avatar: "bg-success",
+            tab: Tab::HermesWebUi, avatar: "bg-warn", label: t!("tab-hermes-webui"), letter: "W",
             ready: hermes_webui_ready,
             kind: AppKind::Iframe { src: url(|i| i.hermes_webui_url.clone(), hermes_webui_ready) },
         });
@@ -334,7 +413,7 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
     // app and gates the iframe src — same pattern as llmfit.
     if state.memvault_ready() {
         apps.push(AppDesc {
-            tab: Tab::Memvault, label: t!("tab-memvault"), letter: "V", avatar: "bg-secondary",
+            tab: Tab::Memvault, avatar: "bg-info", label: t!("tab-memvault"), letter: "V",
             ready: true,
             kind: AppKind::Iframe { src: url(|i| i.memvault_url.clone(), true) },
         });
@@ -362,107 +441,207 @@ fn IframeView(active: bool, label: String, src: Option<String>) -> Element {
     }
 }
 
+/// The grouped nav list shared by the desktop sidebar and the mobile drawer.
+/// `on_navigate` fires after a tab switch so the drawer can close itself.
 #[component]
-fn TabButton(tab: Tab, current: Tab, label: String, enabled: bool) -> Element {
+fn NavContent(
+    #[props(default)] on_navigate: Option<EventHandler<()>>,
+    #[props(default)] collapsed: bool,
+) -> Element {
+    let state = use_context::<AppState>();
+    let tab = (state.tab)();
+    let apps = app_registry(&state);
+    let nav_cls = if collapsed {
+        "flex-1 min-h-0 overflow-y-auto px-2 py-4 space-y-3"
+    } else {
+        "flex-1 min-h-0 overflow-y-auto px-3 py-5 space-y-5"
+    };
+    rsx! {
+        nav { class: nav_cls,
+            div {
+                if !collapsed {
+                    h3 { class: "nav-group-head px-3 mb-2", {t!("nav-launcher")} }
+                }
+                div { class: "space-y-0.5",
+                    NavItem { tab: Tab::Dashboard, current: tab, label: t!("tab-dashboard"), letter: "D", avatar: "bg-brand", enabled: true, collapsed, on_navigate }
+                    // Config is core now (was the "mgmt" feature) — always available.
+                    NavItem { tab: Tab::Config, current: tab, label: t!("tab-config"), letter: "C", avatar: "bg-brand", enabled: true, collapsed, on_navigate }
+                }
+            }
+            div {
+                // When collapsed the group label has no room — a hairline keeps the
+                // launcher/apps split legible without text.
+                if collapsed {
+                    div { class: "h-px bg-line mx-1 my-1" }
+                } else {
+                    h3 { class: "nav-group-head px-3 mb-2", {t!("app-switcher-label")} }
+                }
+                div { class: "space-y-0.5",
+                    for app in apps.iter() {
+                        NavItem {
+                            key: "{app.letter}",
+                            tab: app.tab,
+                            current: tab,
+                            label: app.label.clone(),
+                            letter: app.letter,
+                            avatar: app.avatar,
+                            enabled: app.ready,
+                            collapsed,
+                            on_navigate,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A single sidebar nav entry — a tab button on the shared `.nav-link` /
+/// `.nav-link-active` rail, fronted by the waffle's coloured avatar circle
+/// (`letter` over `avatar` bg) for app identity. While a service is still
+/// starting the row greys out, stays unclickable, and shows a quiet hint.
+#[component]
+fn NavItem(
+    tab: Tab,
+    current: Tab,
+    label: String,
+    letter: &'static str,
+    avatar: &'static str,
+    enabled: bool,
+    #[props(default)] collapsed: bool,
+    #[props(default)] on_navigate: Option<EventHandler<()>>,
+) -> Element {
     let state = use_context::<AppState>();
     let active = tab == current;
-    let variant = if active { ButtonVariant::Secondary } else { ButtonVariant::Ghost };
+    let cls = if active { "nav-link nav-link-active" } else { "nav-link" };
+    let avatar_cls = if enabled { avatar } else { "bg-surface-3" };
+    // Collapsed: avatar only, centred. The label still rides along as a native
+    // tooltip so the icon rail stays discoverable.
+    let btn_cls = if collapsed {
+        format!("{cls} w-full justify-center px-2 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent")
+    } else {
+        format!("{cls} w-full gap-2.5 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent")
+    };
     rsx! {
-        Button {
-            size: ButtonSize::Sm,
-            variant,
+        button {
+            class: btn_cls,
+            title: if collapsed { label.clone() } else { String::new() },
             disabled: !enabled,
             onclick: move |_| {
                 if enabled {
                     let mut t = state.tab;
                     t.set(tab);
+                    if let Some(h) = on_navigate { h.call(()); }
                 }
             },
-            "{label}"
+            span {
+                class: "shrink-0 h-6 w-6 rounded-full grid place-items-center text-fg-invert text-[11px] font-semibold {avatar_cls}",
+                "{letter}"
+            }
+            if !collapsed {
+                span { class: "truncate", "{label}" }
+                if !enabled {
+                    span { class: "ml-auto help-xs td-muted", {t!("state-starting")} }
+                }
+            }
         }
     }
 }
 
-/// Waffle/grid menu listing the launchable apps (Open-WebUI, Models, llmfit,
-/// Hermes, Hermes Web UI). Each app shows a circular avatar + name, mirroring
-/// the product app switcher. Disabled rows stay visible but greyed until ready.
-/// Derives from the same [`app_registry`] that drives the views.
+/// Orange brand mark (rounded-square outline + filled brand square) + wordmark.
 #[allow(non_snake_case)]
-fn AppSwitcher() -> Element {
-    let state = use_context::<AppState>();
-    let mut open = use_signal(|| false);
-
-    let tab = (state.tab)();
-    let apps = app_registry(&state);
-
-    // The trigger reads as "active" whenever one of its apps owns the view.
-    let trigger_variant = if tab.is_app() { ButtonVariant::Secondary } else { ButtonVariant::Ghost };
-
+fn LogoMark() -> Element {
     rsx! {
-        div { class: "relative",
-            Button {
-                size: ButtonSize::Sm,
-                variant: trigger_variant,
-                onclick: move |_| { let v = !open(); open.set(v); },
-                span { class: "sr-only", {t!("app-switcher-label")} }
-                // waffle (3×3 grid) glyph
-                svg {
-                    class: "h-4 w-4", fill: "currentColor", view_box: "0 0 24 24",
-                    circle { cx: "5", cy: "5", r: "1.8" }
-                    circle { cx: "12", cy: "5", r: "1.8" }
-                    circle { cx: "19", cy: "5", r: "1.8" }
-                    circle { cx: "5", cy: "12", r: "1.8" }
-                    circle { cx: "12", cy: "12", r: "1.8" }
-                    circle { cx: "19", cy: "12", r: "1.8" }
-                    circle { cx: "5", cy: "19", r: "1.8" }
-                    circle { cx: "12", cy: "19", r: "1.8" }
-                    circle { cx: "19", cy: "19", r: "1.8" }
-                }
-                svg {
-                    class: "h-3 w-3 ml-0.5 text-fg-faint", fill: "none", stroke: "currentColor",
-                    stroke_width: "2", view_box: "0 0 24 24",
-                    path {
-                        stroke_linecap: "round", stroke_linejoin: "round",
-                        d: if open() { "M5 15l7-7 7 7" } else { "M19 9l-7 7-7-7" },
-                    }
+        svg {
+            class: "shrink-0", width: "20", height: "20",
+            view_box: "0 0 20 20", fill: "none",
+            rect {
+                x: "1.5", y: "1.5", width: "17", height: "17", rx: "5",
+                stroke: "rgb(var(--c-brand))", stroke_width: "1.6",
+            }
+            rect {
+                x: "6", y: "6", width: "8", height: "8", rx: "1.5",
+                fill: "rgb(var(--c-brand))",
+            }
+        }
+        // Wordmark matches the mgmt design: sans-serif, semibold, single
+        // foreground colour (no mono, no orange split) — the brand colour lives
+        // in the logo mark, not the text.
+        span { class: "text-fg-strong font-semibold text-sm tracking-tight whitespace-nowrap",
+            "plan.ai"
+        }
+    }
+}
+
+/// Static brand mark in the topbar's logo pad — purely identity, not a control
+/// (the sidebar collapse toggle lives in the sidebar itself).
+#[allow(non_snake_case)]
+fn Logo() -> Element {
+    rsx! {
+        div { class: "flex items-center gap-2.5 select-none",
+            LogoMark {}
+        }
+    }
+}
+
+/// Hamburger that opens the mobile drawer; shown only below `xl`.
+#[component]
+fn MobileMenuButton(open: Signal<bool>) -> Element {
+    let is = *open.read();
+    rsx! {
+        button {
+            class: "lg:hidden nav-icon-btn",
+            "aria-label": t!("nav-open-main-menu"),
+            "aria-expanded": "{is}",
+            onclick: move |_| { let mut o = open; o.set(!is); },
+            svg {
+                class: "h-5 w-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
+                if is {
+                    path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M6 18L18 6M6 6l12 12" }
+                } else {
+                    path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M4 6h16M4 12h16M4 18h16" }
                 }
             }
-            if open() {
-                // Click-away backdrop: closes the menu on any outside click.
-                div { class: "fixed inset-0 z-40", onclick: move |_| open.set(false) }
-                div { class: "absolute right-0 mt-2 z-50 w-60 card bg-surface shadow-pop py-2",
-                    for app in apps {
-                        {
-                            let AppDesc { tab: app_tab, label, letter, avatar, ready, .. } = app;
-                            let active = app_tab == tab;
-                            let row_cls = if active { "bg-surface-2" } else { "hover:bg-surface-2" };
-                            let avatar_cls = if ready { avatar } else { "bg-surface-3" };
-                            let name_cls = if ready { "text-fg-strong" } else { "td-muted" };
-                            rsx! {
-                                button {
-                                    key: "{label}",
-                                    class: "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors {row_cls} disabled:opacity-50 disabled:cursor-default",
-                                    disabled: !ready,
-                                    onclick: move |_| {
-                                        if ready {
-                                            let mut t = state.tab;
-                                            t.set(app_tab);
-                                            open.set(false);
-                                        }
-                                    },
-                                    span {
-                                        class: "shrink-0 h-8 w-8 rounded-full grid place-items-center text-fg-invert font-semibold {avatar_cls}",
-                                        "{letter}"
-                                    }
-                                    span { class: "text-sm {name_cls}", "{label}" }
-                                    if !ready {
-                                        span { class: "ml-auto help-xs td-muted", {t!("state-starting")} }
-                                    }
-                                }
-                            }
+        }
+    }
+}
+
+/// Slide-in drawer for narrow viewports — same `NavContent` as the desktop
+/// sidebar, behind a tap-to-close backdrop. Hidden on `xl`.
+#[component]
+fn MobileDrawer(open: Signal<bool>) -> Element {
+    let is = *open.read();
+    let backdrop = if is {
+        "fixed inset-0 bg-bg/80 backdrop-blur-sm transition-opacity duration-300 z-40 opacity-100 pointer-events-auto"
+    } else {
+        "fixed inset-0 bg-bg/80 backdrop-blur-sm transition-opacity duration-300 z-40 opacity-0 pointer-events-none"
+    };
+    let panel = if is {
+        "fixed inset-y-0 right-0 max-w-xs w-full bg-surface shadow-xl flex flex-col z-50 transform transition-transform duration-300 ease-in-out border-l border-line translate-x-0 pointer-events-auto"
+    } else {
+        "fixed inset-y-0 right-0 max-w-xs w-full bg-surface shadow-xl flex flex-col z-50 transform transition-transform duration-300 ease-in-out border-l border-line translate-x-full pointer-events-none"
+    };
+    rsx! {
+        div { class: "lg:hidden relative z-50",
+            div {
+                class: backdrop,
+                "aria-hidden": "true",
+                onclick: move |_| { let mut o = open; o.set(false); },
+            }
+            div { class: panel, id: "mobile-drawer",
+                div { class: "px-5 py-4 bg-surface-2 border-b border-line flex items-center justify-between shrink-0",
+                    span { class: "kicker", {t!("app-switcher-label")} }
+                    button {
+                        class: "nav-icon-btn",
+                        "aria-label": t!("nav-close-menu"),
+                        onclick: move |_| { let mut o = open; o.set(false); },
+                        svg {
+                            class: "h-5 w-5", fill: "none", stroke: "currentColor", view_box: "0 0 24 24",
+                            path { stroke_linecap: "round", stroke_linejoin: "round", stroke_width: "2", d: "M6 18L18 6M6 6l12 12" }
                         }
                     }
                 }
+                NavContent { on_navigate: move |_| { let mut o = open; o.set(false); } }
             }
         }
     }
