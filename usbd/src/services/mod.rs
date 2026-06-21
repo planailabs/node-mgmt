@@ -11,6 +11,7 @@
 //! inventory can never disagree.
 
 pub mod hermes_dashboard;
+pub mod hermes_gateway;
 pub mod hermes_webui;
 pub mod llamacpp;
 pub mod memvault;
@@ -168,6 +169,7 @@ pub struct ResolvedPorts {
     pub openwebui: Option<u16>,
     pub memvault: Option<u16>,
     pub hermes: Option<u16>,
+    pub hermes_gateway: Option<u16>,
     pub hermes_webui: Option<u16>,
     pub llamacpp: Option<u16>,
 }
@@ -203,6 +205,11 @@ pub fn build_usb_services(
             ports.ollama,
         );
         ports.hermes = Some(svc.port());
+        services.push(Arc::new(svc));
+    }
+    if cfg.hermes.enabled && cfg.hermes.gateway_enabled {
+        let svc = hermes_gateway::UsbHermesGatewayService::new(&cfg.hermes, res);
+        ports.hermes_gateway = Some(svc.port());
         services.push(Arc::new(svc));
     }
     if cfg.hermes.enabled && cfg.hermes.webui_enabled {

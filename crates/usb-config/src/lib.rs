@@ -60,6 +60,24 @@ pub struct UsbHermesConfig {
     )]
     #[serde(default = "default_usb_hermes_webui_port")]
     pub webui_port: u16,
+    #[schemars(description = "Whether the Hermes messaging gateway (the API server / messaging \
+                              platforms — `hermes gateway run`) is started alongside the \
+                              dashboard. Off by default: the stick is offline, so the gateway \
+                              only matters if you want its local HTTP API.", extend("x-advanced" = true))]
+    #[serde(default)]
+    pub gateway_enabled: bool,
+    #[schemars(
+        description = "Preferred Hermes gateway API port (API_SERVER_PORT). A PREFERENCE, not a \
+                       guarantee: if taken the daemon auto-selects a free port.",
+        extend("x-advanced" = true)
+    )]
+    #[serde(default = "default_usb_hermes_gateway_port")]
+    pub gateway_port: u16,
+}
+
+fn default_usb_hermes_gateway_port() -> u16 {
+    // Hermes' own default API server port (upstream HermesGatewayConfig).
+    8642
 }
 
 fn default_usb_hermes_webui_port() -> u16 {
@@ -80,6 +98,8 @@ impl Default for UsbHermesConfig {
             default_model: None,
             webui_enabled: false,
             webui_port: default_usb_hermes_webui_port(),
+            gateway_enabled: false,
+            gateway_port: default_usb_hermes_gateway_port(),
         }
     }
 }
@@ -91,6 +111,9 @@ impl UsbHermesConfig {
         }
         if self.webui_port == 0 {
             return Err("hermes.webui_port must be > 0".into());
+        }
+        if self.gateway_port == 0 {
+            return Err("hermes.gateway_port must be > 0".into());
         }
         Ok(())
     }
