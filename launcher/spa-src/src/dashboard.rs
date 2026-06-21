@@ -72,7 +72,7 @@ pub fn Dashboard() -> Element {
                                 div { class: "help-xs",
                                     {match s.id.as_str() {
                                         "ollama" => t!("svc-ollama-sub"),
-                                        "hermes" => t!("svc-hermes-sub"),
+                                        "hermes-dashboard" | "hermes-gateway" => t!("svc-hermes-sub"),
                                         "llamacpp" => t!("svc-llamacpp-sub"),
                                         _ => t!("svc-webui-sub"),
                                     }}

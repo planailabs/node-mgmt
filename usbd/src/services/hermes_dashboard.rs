@@ -15,12 +15,13 @@ use std::pin::Pin;
 
 use anyhow::Result;
 use crate::usb_config::UsbHermesConfig;
-use mac_mgmt_common::OllamaConfig;
+use mac_mgmt_common::{HermesDashboardConfig, InventoryEntry, OllamaConfig};
 
 use super::{resolve_port, Resources};
 use mac_mgmt_agent::managed_service::{ManagedService, ServiceMode, SpawnSpec, TunnelDef};
+use mac_mgmt_agent::services::hermes_dashboard::HermesDashboard;
 
-pub struct UsbHermesService {
+pub struct UsbHermesDashboardService {
     host: String,
     /// Effective (resolved) port.
     port: u16,
@@ -34,9 +35,13 @@ pub struct UsbHermesService {
     ollama_base_url: String,
     default_model: Option<String>,
     child_ld: Option<String>,
+    /// Upstream service (config-pinned to the resolved host/port) — we delegate
+    /// its name + read-only tunnels/inventory; the spawn/setup/health below are
+    /// overridden for the mounted-python run.
+    inner: HermesDashboard,
 }
 
-impl UsbHermesService {
+impl UsbHermesDashboardService {
     pub fn new(
         cfg: &UsbHermesConfig,
         ollama_cfg: &OllamaConfig,
@@ -51,6 +56,11 @@ impl UsbHermesService {
             PathBuf::from(&cfg.data_dir)
         };
         let ollama_port = ollama_effective_port.unwrap_or(ollama_cfg.port);
+        let inner = HermesDashboard::new(HermesDashboardConfig {
+            enabled: true,
+            host: host.clone(),
+            port, // bound port, so delegated tunnels/inventory report it
+        });
         Self {
             host,
             port,
@@ -61,6 +71,7 @@ impl UsbHermesService {
             ollama_base_url: format!("http://{}:{}", ollama_cfg.host, ollama_port),
             default_model: cfg.default_model.clone(),
             child_ld: res.child_ld_library_path.clone(),
+            inner,
         }
     }
 
@@ -110,9 +121,9 @@ fn first_local_model(models_dir: &Path) -> Option<String> {
     None
 }
 
-impl ManagedService for UsbHermesService {
+impl ManagedService for UsbHermesDashboardService {
     fn name(&self) -> &str {
-        "hermes"
+        self.inner.name() // "hermes-dashboard"
     }
 
     fn service_mode(&self) -> ServiceMode {
@@ -199,11 +210,11 @@ impl ManagedService for UsbHermesService {
     }
 
     fn expose_tunnels(&self) -> Vec<TunnelDef> {
-        vec![TunnelDef {
-            name: "hermes".into(),
-            host: self.host.clone(),
-            tcp_port: self.port,
-        }]
+        self.inner.expose_tunnels()
+    }
+
+    fn service_inventory(&self) -> Pin<Box<dyn Future<Output = Vec<InventoryEntry>> + Send + '_>> {
+        self.inner.service_inventory()
     }
 }
 
@@ -225,7 +236,7 @@ mod tests {
     fn seeds_config_yaml_once() {
         let base = std::env::temp_dir().join(format!("hermes-home-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        let svc = UsbHermesService {
+        let svc = UsbHermesDashboardService {
             host: "127.0.0.1".into(),
             port: 9119,
             python: PathBuf::from("/x/python3"),
@@ -235,6 +246,11 @@ mod tests {
             ollama_base_url: "http://127.0.0.1:11434".into(),
             default_model: Some("smollm2:1.7b".into()),
             child_ld: None,
+            inner: HermesDashboard::new(HermesDashboardConfig {
+                enabled: true,
+                host: "127.0.0.1".into(),
+                port: 9119,
+            }),
         };
         svc.ensure_setup().unwrap();
         let cfg = std::fs::read_to_string(base.join("config.yaml")).unwrap();
@@ -250,7 +266,7 @@ mod tests {
 
     #[test]
     fn spawn_spec_runs_dashboard_with_home_and_dist() {
-        let svc = UsbHermesService {
+        let svc = UsbHermesDashboardService {
             host: "127.0.0.1".into(),
             port: 9119,
             python: PathBuf::from("/mnt/res/hermes/python/bin/python3"),
@@ -260,6 +276,11 @@ mod tests {
             ollama_base_url: "http://127.0.0.1:11434".into(),
             default_model: None,
             child_ld: None,
+            inner: HermesDashboard::new(HermesDashboardConfig {
+                enabled: true,
+                host: "127.0.0.1".into(),
+                port: 9119,
+            }),
         };
         let spec = svc.spawn_spec();
         assert!(spec.program.ends_with("python3"));

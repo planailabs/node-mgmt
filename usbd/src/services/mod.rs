@@ -10,7 +10,7 @@
 //! [`resolve_port`]) and owned by the service, so spawn / health / tunnel /
 //! inventory can never disagree.
 
-pub mod hermes;
+pub mod hermes_dashboard;
 pub mod hermes_webui;
 pub mod llamacpp;
 pub mod memvault;
@@ -196,7 +196,12 @@ pub fn build_usb_services(
         services.push(Arc::new(svc));
     }
     if cfg.hermes.enabled {
-        let svc = hermes::UsbHermesService::new(&cfg.hermes, &cfg.ollama, res, ports.ollama);
+        let svc = hermes_dashboard::UsbHermesDashboardService::new(
+            &cfg.hermes,
+            &cfg.ollama,
+            res,
+            ports.ollama,
+        );
         ports.hermes = Some(svc.port());
         services.push(Arc::new(svc));
     }

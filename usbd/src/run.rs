@@ -90,7 +90,8 @@ fn changed_service_names(old: &UsbConfig, new: &UsbConfig) -> std::collections::
         set.insert("open-webui".to_string());
     }
     if ov.get("hermes") != nv.get("hermes") {
-        set.insert("hermes".to_string());
+        set.insert("hermes-dashboard".to_string());
+        set.insert("hermes-webui".to_string());
     }
     if ov.get("llamacpp") != nv.get("llamacpp") {
         set.insert("llamacpp".to_string());

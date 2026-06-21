@@ -395,7 +395,7 @@ fn app_registry(state: &AppState) -> Vec<AppDesc> {
         },
     ];
     if state.hermes_enabled() {
-        let hermes_ready = state.ready("hermes");
+        let hermes_ready = state.ready("hermes-dashboard");
         let hermes_webui_ready = state.hermes_webui_ready();
         apps.push(AppDesc {
             tab: Tab::Hermes, avatar: "bg-warn", label: t!("tab-hermes"), letter: "H",
