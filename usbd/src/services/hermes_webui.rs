@@ -12,9 +12,11 @@ use std::pin::Pin;
 
 use anyhow::Result;
 use crate::usb_config::UsbHermesConfig;
+use mac_mgmt_common::{HermesWebuiConfig, InventoryEntry};
 
 use super::{resolve_port, Resources};
 use mac_mgmt_agent::managed_service::{ManagedService, ServiceMode, SpawnSpec, TunnelDef};
+use mac_mgmt_agent::services::hermes_webui::HermesWebui;
 
 pub struct UsbHermesWebuiService {
     host: String,
@@ -27,6 +29,10 @@ pub struct UsbHermesWebuiService {
     /// HERMES_HOME — shared with the dashboard service (config.yaml, sessions).
     home_dir: PathBuf,
     child_ld: Option<String>,
+    /// Upstream service, config-pinned to the resolved host/port. We delegate
+    /// its read-only `/version` inventory probe (the rest of its surface is
+    /// nix/config-dir based and doesn't apply to the mounted run).
+    inner: HermesWebui,
 }
 
 impl UsbHermesWebuiService {
@@ -38,6 +44,12 @@ impl UsbHermesWebuiService {
         } else {
             PathBuf::from(&cfg.data_dir)
         };
+        let inner = HermesWebui::new(HermesWebuiConfig {
+            enabled: true,
+            host: host.clone(),
+            port, // bound port, so the delegated /version probe hits the right place
+            ..Default::default()
+        });
         Self {
             host,
             port,
@@ -45,6 +57,7 @@ impl UsbHermesWebuiService {
             webui_dir: res.hermes_webui_dir.clone(),
             home_dir,
             child_ld: res.child_ld_library_path.clone(),
+            inner,
         }
     }
 
@@ -163,11 +176,13 @@ impl ManagedService for UsbHermesWebuiService {
     }
 
     fn expose_tunnels(&self) -> Vec<TunnelDef> {
-        vec![TunnelDef {
-            name: "hermes-webui".into(),
-            host: self.host.clone(),
-            tcp_port: self.port,
-        }]
+        self.inner.expose_tunnels()
+    }
+
+    fn service_inventory(&self) -> Pin<Box<dyn Future<Output = Vec<InventoryEntry>> + Send + '_>> {
+        // Upstream probes the running WebUI's `/version` endpoint — works the
+        // same whether the binary was nix-installed or mounted.
+        self.inner.service_inventory()
     }
 }
 
