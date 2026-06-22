@@ -50,6 +50,10 @@ components_dir = "components/{os}"
 models_dir     = "models"
 manifest_file  = "update.json"
 selection_file = "platforms.json"
+# Extra bundle-relative paths the update tarball packs beside the launchers (in
+# addition to [layout.launcher_artifact]). Files/dirs missing from the bundle are
+# skipped. Consumed by make-update-tarball.sh.
+extra_files    = ["components", "tools", "README.txt"]
 [layout.launcher_artifact]
 "linux-x64"   = "node-mgmt.linux-x64.exe"
 "linux-arm64" = "node-mgmt.linux-arm64.exe"
