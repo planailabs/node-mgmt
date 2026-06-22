@@ -78,6 +78,28 @@ impl UsbLlamaCppService {
     }
 }
 
+/// Can the dynamic loader find a system `<name>`? Prefer `ldconfig -p` (the loader's
+/// own cache, incl. ld.so.conf.d entries); fall back to scanning the standard glibc
+/// lib dirs when ldconfig is unavailable. Used to decide whether llama-server needs
+/// the bundled libssl fallback.
+#[cfg(target_os = "linux")]
+fn system_has_lib(name: &str) -> bool {
+    if let Ok(out) = std::process::Command::new("ldconfig").arg("-p").output() {
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains(name) {
+            return true;
+        }
+    }
+    // ponytail: standard dirs only. A false-negative (lib present but only via a
+    // custom ld.so.conf.d on a system WITHOUT ldconfig) makes us add the fallback,
+    // which then takes precedence — rare, and ldconfig above covers the normal case.
+    const DIRS: &[&str] = &[
+        "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+        "/usr/lib64", "/lib64", "/usr/lib", "/lib", "/usr/local/lib",
+    ];
+    DIRS.iter().any(|d| std::path::Path::new(d).join(name).exists())
+}
+
 impl ManagedService for UsbLlamaCppService {
     fn name(&self) -> &str {
         "llamacpp"
@@ -106,10 +128,25 @@ impl ManagedService for UsbLlamaCppService {
         // the mounted component — point the loader there (windows searches the
         // exe dir natively; mac also honours the fallback path).
         let bin_dir = self.bin.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        let ld = match &self.child_ld {
+        #[allow(unused_mut)]
+        let mut ld = match &self.child_ld {
             Some(extra) => format!("{bin_dir}:{extra}"),
             None => bin_dir.clone(),
         };
+        // libssl fallback: the prebuilt libs link libssl.so.3 + libcrypto.so.3 but
+        // the tarball doesn't ship them. The component carries a bundled copy in
+        // build/bin/ssl-fallback/; add it to LD_LIBRARY_PATH ONLY when the target has
+        // no system libssl.so.3 — so a working system libssl (often built against an
+        // older glibc than our nixpkgs one) is never overridden.
+        #[cfg(target_os = "linux")]
+        if !system_has_lib("libssl.so.3") {
+            if let Some(fb) = self.bin.parent().map(|p| p.join("ssl-fallback")) {
+                if fb.is_dir() {
+                    ld = format!("{ld}:{}", fb.display());
+                    tracing::info!("llamacpp: no system libssl.so.3 — bundled fallback {}", fb.display());
+                }
+            }
+        }
         env.insert("LD_LIBRARY_PATH".into(), ld);
         if cfg!(target_os = "macos") {
             env.insert("DYLD_FALLBACK_LIBRARY_PATH".into(), bin_dir);

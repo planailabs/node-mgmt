@@ -38,6 +38,23 @@ let
   mkOllamaDir = key: loader.mkExtractDir "ollama-${key}" "${ollamaComponents}/ollama-${key}.tar.gz";
   llamacppComponents = flake.packages.${builtins.currentSystem}.llamacppComponents;
   mkLlamacppDir = key: loader.mkExtractDir "llamacpp-${key}" "${llamacppComponents}/llamacpp-${key}.tar.gz";
+  # linux flavours: the prebuilt binaries' libllama-server-impl.so / libllama-common.so
+  # link libssl.so.3 + libcrypto.so.3 (HTTPS support) but the tarballs don't ship them.
+  # Drop a copy in build/bin/ssl-fallback/ — NOT on the default lib path. The usbd
+  # llamacpp service adds that dir to LD_LIBRARY_PATH ONLY when the target has no
+  # system libssl.so.3, so a working (often older-glibc) system libssl is never
+  # overridden by ours (nixpkgs openssl is glibc-2.38). Per-arch: an aarch64 component
+  # needs aarch64 openssl, substituted from the binary cache — we only copy the .so
+  # files (no execution), so building it on x86_64 is fine.
+  opensslLibDir = sys: "${flake.inputs.nixpkgs.legacyPackages.${sys}.openssl.out}/lib";
+  mkLlamacppLinuxDir = key: sys: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
+    mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out
+    bindir="$(dirname "$(find $out -name llama-server -type f | head -1)")"
+    [ -n "$bindir" ] || { echo "llamacpp-${key}: no llama-server in tarball"; exit 1; }
+    mkdir -p "$bindir/ssl-fallback"
+    cp -L ${opensslLibDir sys}/libssl.so.3 ${opensslLibDir sys}/libcrypto.so.3 "$bindir/ssl-fallback/"
+    chmod -R u+w "$bindir/ssl-fallback"
+  '';
   # windows flavours: upstream's win zips don't ship the MSVC C++ runtime, and
   # llama-server.exe links VCRUNTIME140/MSVCP140 — on a machine without the VC++
   # redist it dies before main(). Drop the shared-pinned redist DLLs
@@ -120,10 +137,10 @@ in
   # llama.cpp: the optional llama-server component (feature "llamacpp",
   # default-off), one component per flavour like ollama — the launcher picks the
   # flavour by GPU detection (vulkan vs cpu; mac is Metal-always).
-  "llamacpp-linux-amd64-squashfs" = mkSqfs "llamacpp-linux-amd64" (mkLlamacppDir "linux-amd64");
-  "llamacpp-linux-amd64-vulkan-squashfs" = mkSqfs "llamacpp-linux-amd64-vulkan" (mkLlamacppDir "linux-amd64-vulkan");
-  "llamacpp-linux-arm64-squashfs" = mkSqfs "llamacpp-linux-arm64" (mkLlamacppDir "linux-arm64");
-  "llamacpp-linux-arm64-vulkan-squashfs" = mkSqfs "llamacpp-linux-arm64-vulkan" (mkLlamacppDir "linux-arm64-vulkan");
+  "llamacpp-linux-amd64-squashfs" = mkSqfs "llamacpp-linux-amd64" (mkLlamacppLinuxDir "linux-amd64" "x86_64-linux");
+  "llamacpp-linux-amd64-vulkan-squashfs" = mkSqfs "llamacpp-linux-amd64-vulkan" (mkLlamacppLinuxDir "linux-amd64-vulkan" "x86_64-linux");
+  "llamacpp-linux-arm64-squashfs" = mkSqfs "llamacpp-linux-arm64" (mkLlamacppLinuxDir "linux-arm64" "aarch64-linux");
+  "llamacpp-linux-arm64-vulkan-squashfs" = mkSqfs "llamacpp-linux-arm64-vulkan" (mkLlamacppLinuxDir "linux-arm64-vulkan" "aarch64-linux");
   "llamacpp-darwin-dmg" = mkDmg { name = "llamacpp-darwin"; src = mkLlamacppDir "darwin"; };
   "llamacpp-windows-amd64-dir" = mkLlamacppWinDir "windows-amd64";
   "llamacpp-windows-amd64-vulkan-dir" = mkLlamacppWinDir "windows-amd64-vulkan";
