@@ -411,6 +411,15 @@ impl ControlApi for RealApi {
             proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await
         }
     }
+    fn llamacpp_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send {
+        // The router's effective base URL comes from the daemon's /info (same
+        // source the status probe uses); None → llamacpp off → "unavailable".
+        let usbd_url = self.usbd_url.clone();
+        async move {
+            let base = daemon_info(&usbd_url).await.and_then(|d| d.llamacpp_url.clone());
+            proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await
+        }
+    }
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
         let base = self.llmfit_url.clone();
         let local: Option<ProxyReply> = if path.starts_with("/api/v1/download") {

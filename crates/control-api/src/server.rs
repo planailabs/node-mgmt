@@ -61,6 +61,9 @@ pub trait ControlApi: Send + Sync + 'static {
     /// Proxy a GET/POST to the llmfit model-browser (real: reqwest; mock: fake).
     fn llmfit_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send;
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send;
+    /// Proxy a GET to the llama.cpp router (its OpenAI `/v1/*`), e.g. `/v1/models`
+    /// to list the GGUFs it serves. Unavailable when llamacpp is disabled.
+    fn llamacpp_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send;
 
     /// The stored daemon config as raw JSON (only the values the user set). Opaque
     /// JSON — the schema-driven editor in the SPA drives it, so it stays a
@@ -96,6 +99,7 @@ pub fn router<T: ControlApi>(state: Arc<T>) -> Router {
         .route("/api/llmfit/installed", get(h_llm_installed::<T>))
         .route("/api/llmfit/download", post(h_llm_download::<T>))
         .route("/api/llmfit/download/{id}/status", get(h_llm_dl_status::<T>))
+        .route("/api/llamacpp/models", get(h_llamacpp_models::<T>))
         .with_state(state)
 }
 
@@ -184,6 +188,10 @@ async fn h_llm_models<T: ControlApi>(State(s): State<Arc<T>>, Query(q): Query<Ha
 }
 async fn h_llm_installed<T: ControlApi>(State(s): State<Arc<T>>) -> Response {
     proxy_response(s.llmfit_get("/api/v1/installed".into()).await)
+}
+/// The GGUFs the llama.cpp router serves (OpenAI `/v1/models`). 503 when llamacpp off.
+async fn h_llamacpp_models<T: ControlApi>(State(s): State<Arc<T>>) -> Response {
+    proxy_response(s.llamacpp_get("/v1/models".into()).await)
 }
 async fn h_llm_download<T: ControlApi>(State(s): State<Arc<T>>, Json(body): Json<DownloadRequest>) -> Response {
     let payload = json!({ "model": body.model, "runtime": "ollama" }).to_string();

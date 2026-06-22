@@ -85,9 +85,16 @@ pub fn Models() -> Element {
         let _ = installed_refresh();
         api::get_json("/api/llmfit/installed").await
     });
+    // The GGUFs the llama.cpp router serves (OpenAI /v1/models). Errors (503) when
+    // llamacpp is disabled → the card below is hidden.
+    let llamacpp_res = use_resource(move || async move {
+        let _ = installed_refresh();
+        api::get_json("/api/llamacpp/models").await
+    });
 
     let res = models_res.read();
     let installed = installed_res.read();
+    let llamacpp = llamacpp_res.read();
 
     rsx! {
         main { class: "h-page flex-1 overflow-auto p-6 space-y-6",
@@ -174,7 +181,7 @@ pub fn Models() -> Element {
                 }
             }
 
-            // installed
+            // installed (ollama)
             Card { class: "",
                 div { class: "card-pad pb-2 kicker", {t!("installed-ollama")} }
                 div { class: "card-pad pt-0 font-mono text-sm td-muted",
@@ -188,26 +195,37 @@ pub fn Models() -> Element {
                     }
                 }
             }
+
+            // installed (llama.cpp router) — only shown when llamacpp is up
+            // (a successful /v1/models response); the OpenAI ids are the gguf names.
+            if let Some(Ok(d)) = llamacpp.as_ref() {
+                Card { class: "",
+                    div { class: "card-pad pb-2 kicker", {t!("installed-llamacpp")} }
+                    div { class: "card-pad pt-0 font-mono text-sm td-muted",
+                        {
+                            let names = installed_names(d);
+                            if names.is_empty() { t!("none-yet") } else { names.join("   ·   ") }
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 fn installed_names(d: &Value) -> Vec<String> {
-    let arr = if let Some(a) = d.as_array() {
-        a.clone()
-    } else if let Some(a) = d.get("installed").and_then(|v| v.as_array()) {
-        a.clone()
-    } else if let Some(a) = d.get("models").and_then(|v| v.as_array()) {
-        a.clone()
-    } else {
-        Vec::new()
-    };
+    // ollama: {installed|models: [...]}; llama.cpp router: OpenAI {data: [{id}]}.
+    let arr = [d.as_array().cloned(), d.get("installed").and_then(|v| v.as_array()).cloned(), d.get("models").and_then(|v| v.as_array()).cloned(), d.get("data").and_then(|v| v.as_array()).cloned()]
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap_or_default();
     arr.iter()
         .filter_map(|x| {
             if let Some(s) = x.as_str() {
                 Some(s.to_string())
             } else {
-                x.get("name").or_else(|| x.get("model")).and_then(|v| v.as_str()).map(String::from)
+                x.get("name").or_else(|| x.get("model")).or_else(|| x.get("id")).and_then(|v| v.as_str()).map(String::from)
             }
         })
         .collect()

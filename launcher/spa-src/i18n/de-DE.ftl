@@ -110,4 +110,5 @@ compatible-models = kompatible Modelle
 no-compatible-models = keine kompatiblen Modelle für diesen Filter
 btn-download = Herunterladen
 installed-ollama = installiert (ollama)
+installed-llamacpp = installiert (llama.cpp)
 none-yet = noch keine

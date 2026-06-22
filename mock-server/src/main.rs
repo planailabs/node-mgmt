@@ -299,6 +299,15 @@ impl ControlApi for Mock {
         };
         async move { ProxyReply { status: 200, body: body.to_string().into_bytes() } }
     }
+    fn llamacpp_get(&self, _path: String) -> impl Future<Output = ProxyReply> + Send {
+        // OpenAI /v1/models shape (router lists by filename stem).
+        let data: Vec<Value> = ["qwen2.5-7b-instruct-q4_k_m", "llama-3.2-3b-instruct-q4_k_m"]
+            .iter()
+            .map(|id| json!({ "id": id, "object": "model", "owned_by": "llamacpp" }))
+            .collect();
+        let body = json!({ "object": "list", "data": data });
+        async move { ProxyReply { status: 200, body: body.to_string().into_bytes() } }
+    }
     fn llmfit_post(&self, _path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
         let model = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from)).unwrap_or_default();
         let id = format!("job-{}", rand::thread_rng().gen::<u32>());
