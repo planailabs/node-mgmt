@@ -24,12 +24,13 @@ die()  { printf '\033[1;31m[err]\033[0m %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required tool: $1 (enter 'nix develop')"; }
 
 # --- test drive provisioning ------------------------------------------------
-# Seed a staged drive-root with update.json + platforms.json so the launcher
-# treats it as an already-provisioned drive and runs from the LOCAL pushed
-# components — instead of bootstrapping a full download from the PROD update
-# server (the launcher sets bootstrap_update when either file is absent). Mirrors
-# what make-usb-image.sh writes onto a real drive, so the remote test validates
-# the locally-built artifacts rather than whatever prod currently ships.
+# PROJECT-LOCAL helper (not in the loader submodule): used by the remote test
+# harnesses (test-mac.sh / test-win.sh). Seed a staged drive-root with
+# update.json + platforms.json so the launcher treats it as an already-provisioned
+# drive and runs from the LOCAL pushed components — instead of bootstrapping a full
+# download from the PROD update server (the launcher sets bootstrap_update when
+# either file is absent). Mirrors what make-usb-image.sh writes onto a real drive,
+# so the remote test validates the locally-built artifacts rather than prod.
 #
 #   seed_drive_manifest <staged-drive-root> <platform>
 #
@@ -67,6 +68,21 @@ publish_dir() {  # <tmp-dir> <final-dir>
   mv "$tmp" "$final"
   rm -rf "$final.prev" 2>/dev/null || true
 }
+
+# --- loader.toml accessors --------------------------------------------------
+# The image/bundle scripts derive their drive layout from loader.toml [layout] +
+# [manifest] (no hardcoded product names). Parse the TOML once via python3 (tomllib;
+# the devshell ships python >=3.11) and query with jq.
+loader_toml_json() {
+  [ -n "${_LOADER_TOML_JSON:-}" ] && { printf '%s' "$_LOADER_TOML_JSON"; return; }
+  need python3
+  [ -f "$REPO_ROOT/loader.toml" ] || die "loader.toml not found at $REPO_ROOT"
+  _LOADER_TOML_JSON="$(python3 -c 'import tomllib,json,sys; json.dump(tomllib.load(open(sys.argv[1],"rb")),sys.stdout)' "$REPO_ROOT/loader.toml")" \
+    || die "failed to parse loader.toml"
+  printf '%s' "$_LOADER_TOML_JSON"
+}
+# loader_cfg <jq-filter> -> value from loader.toml (e.g. '.layout.image_name')
+loader_cfg() { need jq; loader_toml_json | jq -er "$1" || die "loader.toml: missing $1"; }
 
 # --- usb.lock accessors -----------------------------------------------------
 # lock <jq-filter> -> value from usb.lock
