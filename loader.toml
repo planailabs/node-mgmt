@@ -303,9 +303,9 @@ default = true
 [[artifact]]
 name = "update-tarball"
 out  = "dist/plan-ai-node-mgmt.tar.gz"
-cmd  = "./scripts/make-update-tarball.sh"
+cmd  = "@loader/make-update-tarball.sh"
 deps_bundles = true
-src  = ["./scripts/make-update-tarball.sh"]
+src  = ["@loader/make-update-tarball.sh", "@loader/lib.sh"]
 src_tree = ["third_party/loader/crates", "crates"]
 desc = "update tarball"
 
