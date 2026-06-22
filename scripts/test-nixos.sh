@@ -10,7 +10,7 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 OUT="$DIST_DIR/bundle"
-LAUNCHER="$OUT/plan-ai.linux-x64.exe"
+LAUNCHER="$OUT/node-mgmt.linux-x64.exe"
 [ -x "$LAUNCHER" ] || die "linux bundle missing — run: make bundle TARGET=linux-x64"
 [ -f "$OUT/components/linux-x64/manifest.json" ] || die "components/linux-x64 group missing beside the launcher — run: make components bundle TARGET=linux-x64"
 SHOT="${1:-/tmp/nixos-dash.png}"; rm -f "$SHOT"

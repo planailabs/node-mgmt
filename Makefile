@@ -76,19 +76,19 @@ dev: ## minimal NixOS build + run (development mode)
 
 dev-spa: ## launch the bundle with a locally built SPA (scripts/build-spa.sh)
 	./scripts/build-spa.sh
-	dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa
+	dist/bundle/node-mgmt.linux-x64.exe --with-spa launcher/spa
 
 dev-electron: ## launch the bundle with the local app/ tree (needs: cd app && npm i)
-	dist/bundle/plan-ai.linux-x64.exe --with-electron app
+	dist/bundle/node-mgmt.linux-x64.exe --with-electron app
 
 dev-usbd: ## launch the bundle with a locally built usbd (cargo build --release)
 	cd usbd && cargo build --release
-	dist/bundle/plan-ai.linux-x64.exe --with-usbd usbd/target/release/usbd
+	dist/bundle/node-mgmt.linux-x64.exe --with-usbd usbd/target/release/usbd
 
 dev-usbd-spa: ## launch the prod bundle with BOTH a locally built usbd and SPA
 	./scripts/build-spa.sh
 	cd usbd && cargo build --release
-	dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa --with-usbd usbd/target/release/usbd
+	dist/bundle/node-mgmt.linux-x64.exe --with-spa launcher/spa --with-usbd usbd/target/release/usbd
 
 vendor-lock: ## regenerate vendor.lock.json (run when usb.lock bumps)
 	./scripts/gen-vendor-lock.sh

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the Windows launcher on a REAL remote Windows machine (ssh $WIN_TARGET) —
-# pushes plan-ai.exe + the win/shared components (pre-extracted dirs), runs the
+# pushes node-mgmt.exe + the win/shared components (pre-extracted dirs), runs the
 # launcher pointed at the pushed pool, and asserts the stack SERVES (ollama +
 # Open-WebUI health). Mirrors test-ubuntu-vm / test-mac for Windows.
 #
@@ -21,9 +21,9 @@ set -euo pipefail
 
 HOST="${WIN_TARGET:?set WIN_TARGET to the ssh host of a windows box (e.g. WIN_TARGET=win)}"
 need ssh; need scp
-EXE="$DIST_DIR/bundle/plan-ai.exe"
+EXE="$DIST_DIR/bundle/node-mgmt.exe"
 POOL="$DIST_DIR/bundle/components"
-[ -f "$EXE" ]  || die "no plan-ai.exe — run make bundle TARGET=win-x64 first"
+[ -f "$EXE" ]  || die "no node-mgmt.exe — run make bundle TARGET=win-x64 first"
 [ -d "$POOL" ] || die "no components pool — run make bundle TARGET=win-x64 first"
 
 # Keepalive so the long cold-start session isn't reset mid-poll.
@@ -50,7 +50,7 @@ log "remote workdir: $HOST:$REMOTE"
 # launcher bootstraps a full prod download instead of using the local pool.
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"; cleanup' EXIT
 mkdir -p "$STAGE/components"
-cp "$EXE" "$STAGE/plan-ai.exe"
+cp "$EXE" "$STAGE/node-mgmt.exe"
 cp -a "$POOL/win-x64" "$STAGE/components/win-x64"
 # Generate the manifest BEFORE unpacking — the .zip files must still be on disk so
 # the manifest scanner emits ZIP entries (path=foo.zip, target=foo/), exactly like
@@ -72,7 +72,7 @@ for z in "$STAGE/components/win-x64"/**/*.zip; do
 done
 shopt -u globstar nullglob
 ssh "${SSH_OPTS[@]}" "$HOST" "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force '$REMOTE/components' | Out-Null\""
-scp "${SSH_OPTS[@]}" -q "$STAGE/plan-ai.exe" "$HOST:$REMOTE/plan-ai.exe"
+scp "${SSH_OPTS[@]}" -q "$STAGE/node-mgmt.exe" "$HOST:$REMOTE/node-mgmt.exe"
 # Per-file targets: Windows scp fails the multi-source→dir form ("Failure").
 scp "${SSH_OPTS[@]}" -q "$STAGE/update.json" "$HOST:$REMOTE/update.json"
 scp "${SSH_OPTS[@]}" -q "$STAGE/platforms.json" "$HOST:$REMOTE/platforms.json"
@@ -87,7 +87,7 @@ $env:PLANAI_COMPONENTS    = "$RD/components"
 $env:PLANAI_PORTABLE_ROOT = "$RD"
 Get-Process plan-ai,plan.ai,ollama,python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Remove-Item "$RD/result.txt" -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath "$RD/plan-ai.exe" -PassThru -WindowStyle Minimized `
+$p = Start-Process -FilePath "$RD/node-mgmt.exe" -PassThru -WindowStyle Minimized `
         -RedirectStandardError "$RD/err.log" -RedirectStandardOutput "$RD/out.log"
 $ok = 0
 foreach ($i in 1..72) {

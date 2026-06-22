@@ -33,7 +33,7 @@ linux:
 win:
   # `dir` only (win-unpacked) — bundle.sh emits it as the app-win-x64 COMPONENT
   # (a pre-extracted dir the launcher junctions in place) and ships the bare rust
-  # launcher (plan-ai.exe) standalone beside the shared components/ pool. No wine
+  # launcher (node-mgmt.exe) standalone beside the shared components/ pool. No wine
   # needed; nsis/portable can be produced on a Windows CI runner.
   target:
     - dir

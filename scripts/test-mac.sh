@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the macOS launcher on a REAL remote Mac (ssh $MAC_TARGET) — pushes the
-# plan-ai.dmg + the mac/shared components, mounts the dmg, runs plan.ai.app's
+# node-mgmt.dmg + the mac/shared components, mounts the dmg, runs plan.ai.app's
 # launcher pointed at the pushed pool, and asserts the stack SERVES (ollama +
 # Open-WebUI health). Mirrors test-ubuntu-vm but for macOS.
 #
@@ -14,9 +14,9 @@ set -euo pipefail
 
 HOST="${MAC_TARGET:?set MAC_TARGET to the ssh host of a mac (e.g. MAC_TARGET=mac)}"
 need ssh; need scp
-DMG="$DIST_DIR/bundle/plan-ai.dmg"
+DMG="$DIST_DIR/bundle/node-mgmt.dmg"
 POOL="$DIST_DIR/bundle/components"
-[ -f "$DMG" ]  || die "no plan-ai.dmg — run make bundle TARGET=mac-arm64 first"
+[ -f "$DMG" ]  || die "no node-mgmt.dmg — run make bundle TARGET=mac-arm64 first"
 [ -d "$POOL" ] || die "no components pool — run make bundle TARGET=mac-arm64 first"
 
 log "remote mac test on '$HOST'"
@@ -41,11 +41,11 @@ log "remote workdir: $HOST:$REMOTE"
 STAGE="$(mktemp -d "$DIST_DIR/.test-mac-drive.XXXXXX")"
 trap 'rm -rf "$STAGE"; cleanup' EXIT
 mkdir -p "$STAGE/components"
-cp -al "$DMG" "$STAGE/plan-ai.dmg" 2>/dev/null || cp "$DMG" "$STAGE/plan-ai.dmg"
+cp -al "$DMG" "$STAGE/node-mgmt.dmg" 2>/dev/null || cp "$DMG" "$STAGE/node-mgmt.dmg"
 cp -al "$POOL/mac-arm64" "$STAGE/components/mac-arm64" 2>/dev/null || cp -a "$POOL/mac-arm64" "$STAGE/components/mac-arm64"
 seed_drive_manifest "$STAGE" mac-arm64
 ssh "$HOST" "mkdir -p '$REMOTE/components'"
-scp -q "$DMG" "$HOST:$REMOTE/plan-ai.dmg"
+scp -q "$DMG" "$HOST:$REMOTE/node-mgmt.dmg"
 scp -q "$STAGE/update.json" "$HOST:$REMOTE/update.json"
 scp -q "$STAGE/platforms.json" "$HOST:$REMOTE/platforms.json"
 scp -q -r "$POOL/mac-arm64" "$HOST:$REMOTE/components/" || true
@@ -56,7 +56,7 @@ ssh "$HOST" bash -s "$REMOTE" <<'RSH' | tee /tmp/mac-run.log | sed 's/^/    /' |
 set -u
 REMOTE="$1"
 mkdir -p "$REMOTE/mnt"
-hdiutil attach -nobrowse -noverify -mountpoint "$REMOTE/mnt" "$REMOTE/plan-ai.dmg" >/dev/null 2>&1 || { echo "MOUNT_FAILED"; exit 0; }
+hdiutil attach -nobrowse -noverify -mountpoint "$REMOTE/mnt" "$REMOTE/node-mgmt.dmg" >/dev/null 2>&1 || { echo "MOUNT_FAILED"; exit 0; }
 APP="$(ls -d "$REMOTE/mnt"/*.app/Contents/MacOS/* 2>/dev/null | head -1)"
 [ -n "$APP" ] || { echo "NO_APP"; exit 0; }
 export PLANAI_COMPONENTS="$REMOTE/components" PLANAI_PORTABLE_ROOT="$REMOTE"

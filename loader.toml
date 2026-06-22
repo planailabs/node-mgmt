@@ -13,10 +13,10 @@ update_url = "https://node-mgmt.update.plan.ai"
 
 [manifest.classify]
 exact = [
-  ["plan-ai.linux-x64.exe",   "linux-x64"],
-  ["plan-ai.linux-arm64.exe", "linux-arm64"],
-  ["plan-ai.exe",             "win-x64"],
-  ["plan-ai.dmg",             "mac-arm64"],
+  ["node-mgmt.linux-x64.exe",   "linux-x64"],
+  ["node-mgmt.linux-arm64.exe", "linux-arm64"],
+  ["node-mgmt.exe",             "win-x64"],
+  ["node-mgmt.dmg",             "mac-arm64"],
 ]
 substring = [
   ["linux",   ["linux-x64", "linux-arm64"]],
@@ -404,19 +404,19 @@ recipe = ["./scripts/dev.sh"]
 [[make.target]]
 name = "dev-spa"
 help = "launch the bundle with a locally built SPA (scripts/build-spa.sh)"
-recipe = ["./scripts/build-spa.sh", "dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa"]
+recipe = ["./scripts/build-spa.sh", "dist/bundle/node-mgmt.linux-x64.exe --with-spa launcher/spa"]
 [[make.target]]
 name = "dev-electron"
 help = "launch the bundle with the local app/ tree (needs: cd app && npm i)"
-recipe = ["dist/bundle/plan-ai.linux-x64.exe --with-electron app"]
+recipe = ["dist/bundle/node-mgmt.linux-x64.exe --with-electron app"]
 [[make.target]]
 name = "dev-usbd"
 help = "launch the bundle with a locally built usbd (cargo build --release)"
-recipe = ["cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --with-usbd usbd/target/release/usbd"]
+recipe = ["cd usbd && cargo build --release", "dist/bundle/node-mgmt.linux-x64.exe --with-usbd usbd/target/release/usbd"]
 [[make.target]]
 name = "dev-usbd-spa"
 help = "launch the prod bundle with BOTH a locally built usbd and SPA"
-recipe = ["./scripts/build-spa.sh", "cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa --with-usbd usbd/target/release/usbd"]
+recipe = ["./scripts/build-spa.sh", "cd usbd && cargo build --release", "dist/bundle/node-mgmt.linux-x64.exe --with-spa launcher/spa --with-usbd usbd/target/release/usbd"]
 [[make.target]]
 name = "vendor-lock"
 help = "regenerate vendor.lock.json (run when usb.lock bumps)"
