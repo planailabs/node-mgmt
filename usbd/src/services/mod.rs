@@ -192,8 +192,16 @@ pub fn build_usb_services(
         ports.ollama = Some(svc.port());
         services.push(Arc::new(svc));
     }
+    // llamacpp before open-webui so its port is known: open-webui registers the
+    // router as an OpenAI provider. 127.0.0.1 (always local) regardless of bind host.
+    if cfg.llamacpp.enabled {
+        let svc = llamacpp::UsbLlamaCppService::new(&cfg.llamacpp, res);
+        ports.llamacpp = Some(svc.port());
+        services.push(Arc::new(svc));
+    }
     if cfg.openwebui.enabled {
-        let svc = open_webui::UsbOpenWebuiService::new(&cfg.openwebui, &cfg.ollama, res, ports.ollama);
+        let llamacpp_openai_url = ports.llamacpp.map(|p| format!("http://127.0.0.1:{p}/v1"));
+        let svc = open_webui::UsbOpenWebuiService::new(&cfg.openwebui, &cfg.ollama, res, ports.ollama, llamacpp_openai_url);
         ports.openwebui = Some(svc.port());
         services.push(Arc::new(svc));
     }
@@ -224,12 +232,6 @@ pub fn build_usb_services(
             );
         }
     }
-    if cfg.llamacpp.enabled {
-        let svc = llamacpp::UsbLlamaCppService::new(&cfg.llamacpp, res);
-        ports.llamacpp = Some(svc.port());
-        services.push(Arc::new(svc));
-    }
-
     (services, ports)
 }
 

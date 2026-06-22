@@ -1,14 +1,19 @@
 //! llama-server, run from the mounted llama.cpp component (no nix). The
 //! launcher picks the GPU flavour (vulkan vs cpu; Metal on mac) and exports
-//! `PLANAI_LLAMACPP_BIN`. The model defaults to the FIRST local ollama model's
-//! weights blob — ollama stores plain GGUF files under models/blobs, addressed
-//! by the manifest layer with mediaType `application/vnd.ollama.image.model` —
-//! so a stick that pulled models for ollama serves the same weights through
-//! llama-server with zero extra downloads.
+//! `PLANAI_LLAMACPP_BIN`.
+//!
+//! Two modes (`UsbLlamaCppConfig`):
+//!   - `model` set → pin that single GGUF (`-m <path>`).
+//!   - `model` unset → ROUTER mode over `models_dir` (default `<models>/gguf`):
+//!     `llama-server` lists every `*.gguf` there at `/v1/models` (id = filename
+//!     stem) and loads/swaps them on demand, so an OpenAI request's `model`
+//!     field picks which one to use. `--models-max` bounds how many stay
+//!     resident. This dir is kept SEPARATE from the ollama store (whose weights
+//!     are content-addressed blobs that a `--models-dir` scan can't name).
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 
 use anyhow::Result;
@@ -22,8 +27,12 @@ pub struct UsbLlamaCppService {
     /// Effective (resolved) port.
     port: u16,
     bin: PathBuf,
+    /// Router-mode models dir (default `<models>/gguf`).
     models_dir: PathBuf,
+    /// Pin a single model instead of router mode.
     model: Option<String>,
+    /// Router: max models resident at once (0 = unlimited).
+    models_max: u16,
     extra_args: Vec<String>,
     child_ld: Option<String>,
 }
@@ -32,12 +41,18 @@ impl UsbLlamaCppService {
     pub fn new(cfg: &UsbLlamaCppConfig, res: &Resources) -> Self {
         let host = cfg.host.clone();
         let port = resolve_port(&host, cfg.port);
+        let models_dir = cfg
+            .models_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| res.models_dir.join("gguf"));
         Self {
             host,
             port,
             bin: res.llamacpp_bin.clone(),
-            models_dir: res.models_dir.clone(),
+            models_dir,
             model: cfg.model.clone(),
+            models_max: cfg.models_max,
             extra_args: cfg.extra_args.clone(),
             child_ld: res.child_ld_library_path.clone(),
         }
@@ -51,64 +66,16 @@ impl UsbLlamaCppService {
         format!("http://{}:{}", self.host, self.port)
     }
 
-    /// The GGUF to serve: the configured path, else the first local ollama
-    /// model's weights blob, else the first downloaded GGUF in
-    /// `<models>/gguf/` (the launcher's llmfit fallback puts HuggingFace
-    /// models that aren't in the ollama registry there).
-    fn resolve_model(&self) -> Option<PathBuf> {
-        if let Some(m) = &self.model {
-            let p = PathBuf::from(m);
-            if p.exists() {
-                return Some(p);
-            }
-            tracing::warn!("llamacpp.model {m} not found — falling back to the ollama store");
+    /// A pinned single GGUF (config `model`), if it exists. `None` → router mode.
+    fn pinned_model(&self) -> Option<PathBuf> {
+        let m = self.model.as_ref()?;
+        let p = PathBuf::from(m);
+        if p.exists() {
+            return Some(p);
         }
-        first_ollama_gguf(&self.models_dir).or_else(|| first_dir_gguf(&self.models_dir.join("gguf")))
-    }
-}
-
-/// The first `*.gguf` (sorted) in a flat dir of downloaded weights.
-fn first_dir_gguf(dir: &Path) -> Option<PathBuf> {
-    let mut ggufs: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("gguf")))
-        .collect();
-    ggufs.sort();
-    ggufs.into_iter().next()
-}
-
-/// Find the first pulled ollama model's weights blob (a plain GGUF): walk
-/// models/manifests/<registry>/<ns>/<name>/<tag> (sorted), parse the manifest
-/// JSON, and resolve the `application/vnd.ollama.image.model` layer digest to
-/// models/blobs/sha256-<hex>.
-fn first_ollama_gguf(models_dir: &Path) -> Option<PathBuf> {
-    fn walk(dir: &Path, depth: u8) -> Option<PathBuf> {
-        let mut ents: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
-        ents.sort_by_key(|e| e.file_name());
-        for e in ents {
-            let p = e.path();
-            if p.is_dir() && depth > 0 {
-                if let Some(found) = walk(&p, depth - 1) {
-                    return Some(found);
-                }
-            } else if p.is_file() {
-                return Some(p);
-            }
-        }
+        tracing::warn!("llamacpp.model {m} not found — falling back to router mode over {}", self.models_dir.display());
         None
     }
-    // manifests/<registry>/<namespace>/<name>/<tag> = 4 levels below manifests/
-    let manifest = walk(&models_dir.join("manifests"), 4)?;
-    let txt = std::fs::read_to_string(&manifest).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
-    let digest = v.get("layers")?.as_array()?.iter().find_map(|l| {
-        (l.get("mediaType")?.as_str()? == "application/vnd.ollama.image.model")
-            .then(|| l.get("digest")?.as_str().map(String::from))?
-    })?;
-    let blob = models_dir.join("blobs").join(digest.replace(':', "-"));
-    blob.exists().then_some(blob)
 }
 
 impl ManagedService for UsbLlamaCppService {
@@ -153,11 +120,21 @@ impl ManagedService for UsbLlamaCppService {
             "--port".to_string(),
             self.port.to_string(),
         ];
-        if let Some(model) = self.resolve_model() {
-            args.push("-m".into());
-            args.push(model.to_string_lossy().into_owned());
-        } else {
-            tracing::warn!("llamacpp: no GGUF model found (config llamacpp.model unset, ollama store empty)");
+        match self.pinned_model() {
+            // single pinned model
+            Some(model) => {
+                args.push("-m".into());
+                args.push(model.to_string_lossy().into_owned());
+            }
+            // router mode: serve every *.gguf in models_dir, selectable per-request
+            // by the `model` field (= filename stem); load/swap up to models_max.
+            None => {
+                let _ = std::fs::create_dir_all(&self.models_dir);
+                args.push("--models-dir".into());
+                args.push(self.models_dir.to_string_lossy().into_owned());
+                args.push("--models-max".into());
+                args.push(self.models_max.to_string());
+            }
         }
         args.extend(self.extra_args.iter().cloned());
 
@@ -201,41 +178,53 @@ impl ManagedService for UsbLlamaCppService {
 mod tests {
     use super::*;
 
-    #[test]
-    fn first_ollama_gguf_resolves_model_layer_blob() {
-        let base = std::env::temp_dir().join(format!("llamacpp-models-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let mdir = base.join("manifests/registry.ollama.ai/library/smollm2");
-        std::fs::create_dir_all(&mdir).unwrap();
-        std::fs::create_dir_all(base.join("blobs")).unwrap();
-        let manifest = serde_json::json!({
-            "layers": [
-                { "mediaType": "application/vnd.ollama.image.template", "digest": "sha256:aaa" },
-                { "mediaType": "application/vnd.ollama.image.model", "digest": "sha256:bbb" },
-            ]
-        });
-        std::fs::write(mdir.join("1.7b"), manifest.to_string()).unwrap();
-        std::fs::write(base.join("blobs/sha256-bbb"), b"gguf").unwrap();
-        assert_eq!(first_ollama_gguf(&base), Some(base.join("blobs/sha256-bbb")));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn spawn_spec_serves_resolved_model() {
-        let svc = UsbLlamaCppService {
+    fn svc(model: Option<String>, models_dir: PathBuf) -> UsbLlamaCppService {
+        UsbLlamaCppService {
             host: "127.0.0.1".into(),
             port: 8090,
             bin: PathBuf::from("/mnt/res/llamacpp/build/bin/llama-server"),
-            models_dir: PathBuf::from("/nonexistent"),
-            model: None,
+            models_dir,
+            model,
+            models_max: 1,
             extra_args: vec!["--ctx-size".into(), "8192".into()],
             child_ld: None,
-        };
-        let spec = svc.spawn_spec();
+        }
+    }
+
+    #[test]
+    fn router_mode_when_model_unset() {
+        let dir = std::env::temp_dir().join(format!("llamacpp-router-{}", std::process::id()));
+        let spec = svc(None, dir.clone()).spawn_spec();
         assert!(spec.program.ends_with("llama-server"));
-        assert!(spec.args.contains(&"--port".to_string()));
-        assert!(spec.args.contains(&"--ctx-size".to_string()));
-        // no model found → no -m flag (llama-server then errors visibly in logs)
+        assert!(spec.args.contains(&"--ctx-size".to_string())); // extra_args passed
+        // router: --models-dir <dir> --models-max 1, and NO single -m
+        let i = spec.args.iter().position(|a| a == "--models-dir").expect("--models-dir");
+        assert_eq!(spec.args[i + 1], dir.to_string_lossy());
+        let j = spec.args.iter().position(|a| a == "--models-max").expect("--models-max");
+        assert_eq!(spec.args[j + 1], "1");
         assert!(!spec.args.contains(&"-m".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn single_pin_when_model_set_and_exists() {
+        // a real existing path so pinned_model() returns Some
+        let f = std::env::temp_dir().join(format!("llamacpp-pin-{}.gguf", std::process::id()));
+        std::fs::write(&f, b"gguf").unwrap();
+        let spec = svc(Some(f.to_string_lossy().into_owned()), PathBuf::from("/unused")).spawn_spec();
+        let i = spec.args.iter().position(|a| a == "-m").expect("-m");
+        assert_eq!(spec.args[i + 1], f.to_string_lossy());
+        // pinned → not router
+        assert!(!spec.args.contains(&"--models-dir".to_string()));
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn missing_pin_falls_back_to_router() {
+        let dir = std::env::temp_dir().join(format!("llamacpp-fallback-{}", std::process::id()));
+        let spec = svc(Some("/nonexistent/model.gguf".into()), dir.clone()).spawn_spec();
+        assert!(!spec.args.contains(&"-m".to_string()));
+        assert!(spec.args.contains(&"--models-dir".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

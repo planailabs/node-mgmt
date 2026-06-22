@@ -125,6 +125,10 @@ fn default_usb_llamacpp_port() -> u16 {
     8090
 }
 
+fn default_usb_llamacpp_models_max() -> u16 {
+    1
+}
+
 /// REDUCED llama.cpp config for the USB stick (the optional "llamacpp"
 /// feature): `llama-server` run from the mounted component (GPU-detected
 /// flavour), runtime settings only.
@@ -144,10 +148,20 @@ pub struct UsbLlamaCppConfig {
     )]
     #[serde(default = "default_usb_llamacpp_port")]
     pub port: u16,
-    #[schemars(description = "GGUF model path; when unset the first local ollama model's \
-                              weights blob is used", extend("x-advanced" = true))]
+    #[schemars(description = "Pin a single GGUF model path. When unset, llama-server runs in \
+                              ROUTER mode over `models_dir`: every *.gguf is selectable per-request \
+                              by the OpenAI `model` field (= the filename stem).", extend("x-advanced" = true))]
     #[serde(default)]
     pub model: Option<String>,
+    #[schemars(description = "Router mode: directory of *.gguf models to serve (filename stem = \
+                              model id). When unset, defaults to <models>/gguf — kept separate from \
+                              the ollama store.", extend("x-advanced" = true))]
+    #[serde(default)]
+    pub models_dir: Option<String>,
+    #[schemars(description = "Router mode: max models kept resident at once (0 = unlimited). 1 \
+                              swaps on demand (lowest RAM); raise for faster switching at higher RAM.")]
+    #[serde(default = "default_usb_llamacpp_models_max")]
+    pub models_max: u16,
     #[schemars(description = "Extra llama-server arguments (advanced)", extend("x-advanced" = true))]
     #[serde(default)]
     pub extra_args: Vec<String>,
@@ -160,6 +174,8 @@ impl Default for UsbLlamaCppConfig {
             host: default_host(),
             port: default_usb_llamacpp_port(),
             model: None,
+            models_dir: None,
+            models_max: default_usb_llamacpp_models_max(),
             extra_args: Vec::new(),
         }
     }

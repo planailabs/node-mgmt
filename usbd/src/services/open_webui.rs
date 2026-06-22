@@ -27,6 +27,9 @@ pub struct UsbOpenWebuiService {
     secret_key: Option<String>,
     /// `OLLAMA_BASE_URL` for the chat backend (effective ollama port).
     ollama_base_url: String,
+    /// OpenAI-compatible base URL for the llama.cpp router (`.../v1`), when the
+    /// llamacpp feature is enabled — so Open-WebUI lists + uses its models too.
+    llamacpp_openai_url: Option<String>,
     child_ld: Option<String>,
 }
 
@@ -36,6 +39,7 @@ impl UsbOpenWebuiService {
         ollama_cfg: &OllamaConfig,
         res: &Resources,
         ollama_effective_port: Option<u16>,
+        llamacpp_openai_url: Option<String>,
     ) -> Self {
         let host = cfg.host.clone();
         let port = resolve_port(&host, cfg.port);
@@ -55,6 +59,7 @@ impl UsbOpenWebuiService {
             auth: cfg.auth,
             secret_key: cfg.secret_key.as_ref().map(|s| s.expose().to_string()),
             ollama_base_url: format!("http://{}:{}", ollama_cfg.host, ollama_port),
+            llamacpp_openai_url,
             child_ld: res.child_ld_library_path.clone(),
         }
     }
@@ -122,6 +127,21 @@ impl ManagedService for UsbOpenWebuiService {
         env.insert("HOST".into(), self.host.clone());
         env.insert("PORT".into(), self.port.to_string());
         env.insert("OLLAMA_BASE_URL".into(), self.ollama_base_url.clone());
+        // The llama.cpp router is an OpenAI-compatible provider. Enable it ONLY
+        // when llamacpp is up; otherwise force ENABLE_OPENAI_API off so the
+        // offline kiosk never tries to reach api.openai.com (the default).
+        match &self.llamacpp_openai_url {
+            Some(url) => {
+                env.insert("ENABLE_OPENAI_API".into(), "True".into());
+                env.insert("OPENAI_API_BASE_URL".into(), url.clone());
+                // llama-server ignores the key (no --api-key); Open-WebUI just
+                // needs a non-empty string to register the connection.
+                env.insert("OPENAI_API_KEY".into(), "sk-no-key-required".into());
+            }
+            None => {
+                env.insert("ENABLE_OPENAI_API".into(), "False".into());
+            }
+        }
         env.insert(
             "WEBUI_AUTH".into(),
             if self.auth { "True".into() } else { "False".into() },
