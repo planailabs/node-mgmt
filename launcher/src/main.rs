@@ -417,14 +417,14 @@ struct RunArgs {
     #[arg(long = "with", value_name = "SLOT=DIR")]
     with: Vec<String>,
     /// Dev: run a locally-built Electron app tree instead of the app component.
-    #[arg(long, value_name = "DIR")]
-    start_with_electron: Option<PathBuf>,
+    #[arg(long = "with-electron", value_name = "DIR")]
+    with_electron: Option<PathBuf>,
     /// Dev: serve a locally-built SPA instead of the embedded assets.
-    #[arg(long, value_name = "DIR")]
-    start_with_spa: Option<PathBuf>,
+    #[arg(long = "with-spa", value_name = "DIR")]
+    with_spa: Option<PathBuf>,
     /// Dev: run a locally-built usbd (component dir or the binary).
-    #[arg(long, value_name = "PATH")]
-    start_with_usbd: Option<PathBuf>,
+    #[arg(long = "with-usbd", value_name = "PATH")]
+    with_usbd: Option<PathBuf>,
     /// Extra args forwarded to Electron (use `--` first for leading flags).
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     electron_args: Vec<std::ffi::OsString>,
@@ -466,18 +466,18 @@ fn apply_dev_overrides(run: &RunArgs) {
     let canon = |d: &Path| d.canonicalize().unwrap_or_else(|_| d.to_path_buf());
     // The generic `--with <slot>=<dir>` component override lives in loader-core (it
     // pairs with the mount-time `provide_or_override`); only the plan.ai-specific
-    // `--start-with-*` env overrides below stay here.
+    // `--with-*` env overrides below stay here.
     if let Err(e) = loader_core::apply_slot_overrides(&run.with) {
         log(&e);
         std::process::exit(2);
     }
-    if let Some(d) = &run.start_with_electron {
+    if let Some(d) = &run.with_electron {
         std::env::set_var("PLANAI_APP_DIR", canon(d));
     }
-    if let Some(d) = &run.start_with_spa {
+    if let Some(d) = &run.with_spa {
         std::env::set_var("PLANAI_SPA_DIR", canon(d));
     }
-    if let Some(d) = &run.start_with_usbd {
+    if let Some(d) = &run.with_usbd {
         let mut p = canon(d);
         // accepts the unpacked component DIR or the binary directly.
         if p.is_dir() {
@@ -556,10 +556,10 @@ mod cli_tests {
         assert!(c.cmd.is_none() && c.run.electron_args.is_empty() && c.run.with.is_empty());
 
         // dev overrides (app mode)
-        let c = parse(&["--with", "app=./app", "--with", "runtime=./rt", "--start-with-spa", "./spa"]);
+        let c = parse(&["--with", "app=./app", "--with", "runtime=./rt", "--with-spa", "./spa"]);
         assert!(c.cmd.is_none());
         assert_eq!(c.run.with, vec!["app=./app", "runtime=./rt"]);
-        assert_eq!(c.run.start_with_spa.as_deref(), Some(Path::new("./spa")));
+        assert_eq!(c.run.with_spa.as_deref(), Some(Path::new("./spa")));
 
         // trailing electron args after `--`
         let c = parse(&["--", "--inspect", "--foo=bar"]);

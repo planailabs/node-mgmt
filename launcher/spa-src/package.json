@@ -1,0 +1,9 @@
+{
+  "name": "plan-ai-spa",
+  "private": true,
+  "description": "Tailwind CSS build for the plan.ai Dioxus SPA. tailwindcss comes from the nix devshell (pkgs.tailwindcss_3) — no node_modules needed.",
+  "scripts": {
+    "css": "tailwindcss -i ../../third_party/plan-ai-design/assets/input.css -o assets/tailwind.css --config tailwind.config.js --minify",
+    "css:watch": "tailwindcss -i ../../third_party/plan-ai-design/assets/input.css -o assets/tailwind.css --config tailwind.config.js --watch"
+  }
+}

@@ -139,7 +139,7 @@ impl Project for PlanAi {
         }
         // The Electron app itself ships as a component (app-<os>): mount/link it
         // and run Electron from the mounted tree. Dev override
-        // (`--start-with-electron DIR` → PLANAI_APP_DIR): use a local unpacked
+        // (`--with-electron DIR` → PLANAI_APP_DIR): use a local unpacked
         // app tree instead of mounting the component.
         if let Some(dir) = std::env::var_os("PLANAI_APP_DIR").map(PathBuf::from) {
             if dir.is_dir() {

@@ -399,19 +399,19 @@ recipe = ["./scripts/dev.sh"]
 [[make.target]]
 name = "dev-spa"
 help = "launch the bundle with a locally built SPA (scripts/build-spa.sh)"
-recipe = ["./scripts/build-spa.sh", "dist/bundle/plan-ai.linux-x64.exe --start-with-spa launcher/spa"]
+recipe = ["./scripts/build-spa.sh", "dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa"]
 [[make.target]]
 name = "dev-electron"
 help = "launch the bundle with the local app/ tree (needs: cd app && npm i)"
-recipe = ["dist/bundle/plan-ai.linux-x64.exe --start-with-electron app"]
+recipe = ["dist/bundle/plan-ai.linux-x64.exe --with-electron app"]
 [[make.target]]
 name = "dev-usbd"
 help = "launch the bundle with a locally built usbd (cargo build --release)"
-recipe = ["cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --start-with-usbd usbd/target/release/usbd"]
+recipe = ["cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --with-usbd usbd/target/release/usbd"]
 [[make.target]]
 name = "dev-usbd-spa"
 help = "launch the prod bundle with BOTH a locally built usbd and SPA"
-recipe = ["./scripts/build-spa.sh", "cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --start-with-spa launcher/spa --start-with-usbd usbd/target/release/usbd"]
+recipe = ["./scripts/build-spa.sh", "cd usbd && cargo build --release", "dist/bundle/plan-ai.linux-x64.exe --with-spa launcher/spa --with-usbd usbd/target/release/usbd"]
 [[make.target]]
 name = "vendor-lock"
 help = "regenerate vendor.lock.json (run when usb.lock bumps)"
@@ -455,11 +455,10 @@ recipe = [
 name = "ui"
 help = "preview the SPA against the mock backend (dx serve + mock API on :9999)"
 recipe = [
-  "@echo \"==> tailwind + mock API (:9999) + dx serve (hot reload)\"",
-  "( cd launcher/spa-src && tailwindcss -i ../../third_party/plan-ai-design/assets/input.css \\",
-  "    -o assets/tailwind.css --config tailwind.config.js ) ; \\",
+  "@echo \"==> tailwind (watch) + mock API (:9999) + dx serve (hot reload)\"",
+  "( cd launcher/spa-src && npm run css:watch ) & \\",
   "  cargo run --manifest-path mock-server/Cargo.toml & \\",
-  "  trap 'kill %1 2>/dev/null' EXIT INT TERM ; \\",
+  "  trap 'kill %1 %2 2>/dev/null' EXIT INT TERM ; \\",
   "  ( cd launcher/spa-src && dx serve | cat )",
 ]
 [[make.target]]

@@ -128,7 +128,7 @@ fn fmt_notif(n: &Notification) -> String {
 async fn static_handler(uri: Uri) -> impl IntoResponse {
     let p = uri.path().trim_start_matches('/');
     let p = if p.is_empty() { "index.html" } else { p };
-    // Dev override (`--start-with-spa DIR` → PLANAI_SPA_DIR): serve the SPA
+    // Dev override (`--with-spa DIR` → PLANAI_SPA_DIR): serve the SPA
     // from disk instead of the embedded assets, so a locally-built SPA can be
     // iterated without rebuilding the launcher. Paths are sanitized (no `..`).
     let spa_dir = std::env::var_os("PLANAI_SPA_DIR").map(std::path::PathBuf::from);

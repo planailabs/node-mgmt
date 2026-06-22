@@ -105,17 +105,17 @@ and data default to `app/.run/` in dev; override with `PLANAI_PORTABLE_ROOT`.
 ## Flow A2 — piece-wise dev against the real launcher
 
 Run the REAL bundled launcher (mounted components, control plane, update flow)
-with one locally-built piece swapped in via `--start-with-*` flags (each feeds
+with one locally-built piece swapped in via `--with-*` flags (each feeds
 an env override: `PLANAI_APP_DIR` / `PLANAI_SPA_DIR` / `PLANAI_USBD_BIN`).
 Needs a built bundle once (`make components bundle TARGET=linux-x64`).
 
 ```sh
-make dev-spa        # build the SPA (scripts/build-spa.sh) + launch with --start-with-spa
-make dev-electron   # launch with --start-with-electron app   (needs: cd app && npm i)
-make dev-usbd       # cargo build usbd + launch with --start-with-usbd
+make dev-spa        # build the SPA (scripts/build-spa.sh) + launch with --with-spa
+make dev-electron   # launch with --with-electron app   (needs: cd app && npm i)
+make dev-usbd       # cargo build usbd + launch with --with-usbd
 
 # or by hand, mixing overrides:
-dist/bundle/plan-ai.linux-x64.exe   --start-with-spa launcher/spa   --start-with-usbd usbd/target/release/usbd
+dist/bundle/plan-ai.linux-x64.exe   --with-spa launcher/spa   --with-usbd usbd/target/release/usbd
 ```
 
 Other inner loops:
