@@ -8,7 +8,7 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-OUT="${1:-$DIST_DIR/plan-ai-update.tar.gz}"
+OUT="${1:-$DIST_DIR/plan-ai-node-mgmt.tar.gz}"
 BUNDLE="$DIST_DIR/bundle"
 VERSION="$(jq -r '.version' "$REPO_ROOT/app/package.json")"
 UPDATE_URL="${PLANAI_UPDATE_URL:-https://usb-update.plan.ai}"
@@ -21,7 +21,7 @@ BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # (tar -h) so real content lands under files/<path>.
 MIRROR="$DIST_DIR/.update-mirror"; rm -rf "$MIRROR"; mkdir -p "$MIRROR"
 shopt -s nullglob
-for f in "$BUNDLE"/plan-ai.*.exe "$BUNDLE"/plan-ai.exe "$BUNDLE"/plan-ai.dmg; do
+for f in "$BUNDLE"/node-mgmt.*.exe "$BUNDLE"/node-mgmt.exe "$BUNDLE"/node-mgmt.dmg; do
   [ -e "$f" ] && ln -s "$f" "$MIRROR/$(basename "$f")"
 done
 shopt -u nullglob

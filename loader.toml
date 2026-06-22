@@ -8,8 +8,8 @@ schema = 1
 
 # ── on-drive update manifest identity + classification ──────────────────────
 [manifest]
-product    = "plan-ai-usb"
-update_url = "https://usb-update.plan.ai"
+product    = "plan-ai-node-mgmt"
+update_url = "https://node-mgmt.update.plan.ai"
 
 [manifest.classify]
 exact = [
@@ -38,23 +38,23 @@ seed_features_default       = true
 drop_default_off_from_image = true
 
 [manifest.upload]
-default_tarball = "dist/plan-ai-update.tar.gz"
+default_tarball = "dist/plan-ai-node-mgmt.tar.gz"
 
 # ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
 [layout]
-launcher_name  = "plan-ai"
-image_name     = "plan-ai-usb.img"
-volume_label   = "PLANAI"
+launcher_name  = "node-mgmt"
+image_name     = "plan-ai-node-mgmt.img"
+volume_label   = "PLAN_AI"
 launchers_dir  = "launchers"
 components_dir = "components/{os}"
 models_dir     = "models"
 manifest_file  = "update.json"
 selection_file = "platforms.json"
 [layout.launcher_artifact]
-"linux-x64"   = "plan-ai.linux-x64.exe"
-"linux-arm64" = "plan-ai.linux-arm64.exe"
-"win-x64"     = "plan-ai.exe"
-"mac-arm64"   = "plan-ai.dmg"
+"linux-x64"   = "node-mgmt.linux-x64.exe"
+"linux-arm64" = "node-mgmt.linux-arm64.exe"
+"win-x64"     = "node-mgmt.exe"
+"mac-arm64"   = "node-mgmt.dmg"
 
 # ── splash spinner colour scheme (rrggbb; baked into the spinner at build time) ──
 # from plan-ai-design's dark theme. A downstream sets its own brand here.
@@ -291,7 +291,7 @@ desc = "bundle {target}"
 
 [[artifact]]
 name = "image"
-out  = "dist/plan-ai-usb.img"
+out  = "dist/plan-ai-node-mgmt.img"
 cmd  = "@loader/make-usb-image.sh"
 deps_bundles = true
 deps_steps   = ["models"]
@@ -302,7 +302,7 @@ default = true
 
 [[artifact]]
 name = "update-tarball"
-out  = "dist/plan-ai-update.tar.gz"
+out  = "dist/plan-ai-node-mgmt.tar.gz"
 cmd  = "./scripts/make-update-tarball.sh"
 deps_bundles = true
 src  = ["./scripts/make-update-tarball.sh"]
