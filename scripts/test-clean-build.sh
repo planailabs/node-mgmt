@@ -26,7 +26,7 @@ trap cleanup EXIT
 
 log "create clean worktree at $WT"
 git -C "$REPO_ROOT" worktree add --detach "$WT" HEAD >/dev/null
-git -C "$WT" submodule update --init --recursive third_party/plan-ai-design >/dev/null 2>&1 || true
+git -C "$WT" submodule update --init --recursive third_party/plan-ai-design third_party/loader >/dev/null 2>&1 || true
 
 if [ "$FULL" = no ] && [ -d "$VENDOR_DIR" ]; then
   log "reuse vendor cache (symlink)"; ln -sfn "$VENDOR_DIR" "$WT/vendor"
@@ -44,7 +44,10 @@ run "./scripts/download-openwebui.sh"
 run "./scripts/build-openwebui.sh"
 run "./scripts/make-runtime.sh $TARGET"
 run "cd app && npm ci"
-run "./scripts/bundle.sh $TARGET"
+# the bundler is loader-owned (the real build calls @loader/bundle.sh); run the
+# submodule copy with PLANAI_REPO_ROOT pinned to the worktree (its lib.sh would
+# otherwise re-root to third_party/loader via $SCRIPT_DIR/..).
+run "PLANAI_REPO_ROOT=\$PWD ./third_party/loader/scripts/bundle.sh $TARGET"
 
 case "$TARGET" in
   linux-x64) ART=("$WT"/dist/bundle/plan-ai-*-linux-*.AppImage) ;;

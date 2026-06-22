@@ -17,7 +17,7 @@ VM="${PLANAI_VM_NAME:-planai-test-$$-${RANDOM}}"
 LAUNCHER="$DIST_DIR/bundle/plan-ai.linux-x64.exe"
 SHOT="${1:-/tmp/ubuntu-dash.png}"
 
-[ -f "$LAUNCHER" ] || die "no plan-ai.linux-x64.exe — run scripts/bundle.sh linux-x64 first"
+[ -f "$LAUNCHER" ] || die "no plan-ai.linux-x64.exe — run make bundle TARGET=linux-x64 first"
 command -v incus >/dev/null 2>&1 || die "incus not available"
 
 # --ephemeral so the instance self-destructs if the run is killed before cleanup;
@@ -98,7 +98,7 @@ incus exec "$VM" -- chmod +x /root/plan-ai.linux-x64.exe
 # components ship OUTSIDE the launcher; it finds them next to itself (here/parent).
 # Push the shared pool built by bundle.sh.
 POOL="$DIST_DIR/bundle/components"; TOOLS="$DIST_DIR/bundle/tools"
-[ -d "$POOL" ] || die "no shared components pool at $POOL — run scripts/bundle.sh linux-x64"
+[ -d "$POOL" ] || die "no shared components pool at $POOL — run make bundle TARGET=linux-x64"
 incus file push -r "$POOL" "$VM/root/" 2>/dev/null
 [ -d "$TOOLS" ] && incus file push -r "$TOOLS" "$VM/root/" 2>/dev/null || true
 incus exec "$VM" -- bash -c 'chmod +x /root/tools/bin/* 2>/dev/null; ls /root/components/linux-x64/*.squashfs >/dev/null 2>&1 && echo "components staged beside launcher" || echo "WARN no components"'

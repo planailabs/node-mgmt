@@ -1,7 +1,7 @@
 # Pure-nix build layer for store-imported (impure-fetched) inputs.
 #
 # The migration shape: a thin imperative layer fetches the genuinely-networked bits,
-# `scripts/store-import.sh` adds each to the store + pins a GC root and records its
+# `third_party/loader/scripts/store-import.sh` adds each to the store + pins a GC root and records its
 # path under dist/.stores/<name>; ./stores.nix reads those records into storePaths.
 # The derivations here then consume those store paths and build OFFLINE in the
 # sandbox, so nix owns the graph + caching + invalidation for everything past the fetch.
@@ -180,7 +180,7 @@ in
   "nixos-fhs-squashfs-arm64" = mkClosureSqfs nixosFhsArm64ClosureInfo;
 
   # --- the FAT32 USB image ----------------------------------------------------
-  # The image is packed OUTSIDE the nix store by scripts/make-usb-image.sh: it
+  # The image is packed OUTSIDE the nix store by third_party/loader/scripts/make-usb-image.sh: it
   # mkfs.vfat + mcopy's the on-disk drive-root (launchers + components/<os>/ +
   # models + update.json + platforms.json + README) with the pinned userspace
   # tooling from `.#usb-image-tools`. We intentionally do NOT have a `usb-image`

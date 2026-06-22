@@ -23,8 +23,8 @@ HOST="${WIN_TARGET:?set WIN_TARGET to the ssh host of a windows box (e.g. WIN_TA
 need ssh; need scp
 EXE="$DIST_DIR/bundle/plan-ai.exe"
 POOL="$DIST_DIR/bundle/components"
-[ -f "$EXE" ]  || die "no plan-ai.exe — run scripts/bundle.sh win-x64 first"
-[ -d "$POOL" ] || die "no components pool — run scripts/bundle.sh win-x64 first"
+[ -f "$EXE" ]  || die "no plan-ai.exe — run make bundle TARGET=win-x64 first"
+[ -d "$POOL" ] || die "no components pool — run make bundle TARGET=win-x64 first"
 
 # Keepalive so the long cold-start session isn't reset mid-poll.
 SSH_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=8)
@@ -44,7 +44,7 @@ log "remote workdir: $HOST:$REMOTE"
 # as .zip (the update-tarball format); the burned image carries them UNPACKED, so
 # mirror that here: unpack each component zip into its target folder + drop the zip
 # before pushing, so the remote sees exactly what a real drive holds (used in place).
-[ -d "$POOL/win-x64" ] || die "no components/win-x64 group in $POOL — run scripts/bundle.sh win-x64"
+[ -d "$POOL/win-x64" ] || die "no components/win-x64 group in $POOL — run make bundle TARGET=win-x64"
 # Stage a drive-root MIRROR locally (launcher + components/win-x64/) so we can seed
 # update.json/platforms.json from the exact contents we push — without those the
 # launcher bootstraps a full prod download instead of using the local pool.
