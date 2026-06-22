@@ -38,3 +38,13 @@ pub async fn put(base: &str, path: &str, body: &str) -> anyhow::Result<ProxyResp
     )
     .await
 }
+
+pub async fn delete(base: &str, path: &str, body: &str) -> anyhow::Result<ProxyResponse> {
+    send(
+        crate::net::client()
+            .delete(format!("{base}{path}"))
+            .header("content-type", "application/json")
+            .body(body.to_string()),
+    )
+    .await
+}

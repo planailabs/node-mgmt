@@ -181,33 +181,74 @@ pub fn Models() -> Element {
                 }
             }
 
-            // installed (ollama)
+            // installed (ollama) — each model deletable
             Card { class: "",
                 div { class: "card-pad pb-2 kicker", {t!("installed-ollama")} }
-                div { class: "card-pad pt-0 font-mono text-sm td-muted",
+                div { class: "card-pad pt-0",
                     match installed.as_ref() {
-                        Some(Ok(d)) => {
-                            let names = installed_names(d);
-                            if names.is_empty() { t!("none-yet") } else { names.join("   ·   ") }
-                        }
-                        Some(Err(e)) => e.clone(),
-                        None => "—".to_string(),
+                        Some(Ok(d)) => rsx! { InstalledList { names: installed_names(d), endpoint: "/api/ollama/delete", refresh: installed_refresh } },
+                        Some(Err(e)) => rsx! { span { class: "font-mono text-sm td-muted", "{e}" } },
+                        None => rsx! { span { class: "font-mono text-sm td-muted", "—" } },
                     }
                 }
             }
 
-            // installed (llama.cpp router) — only shown when llamacpp is up
-            // (a successful /v1/models response); the OpenAI ids are the gguf names.
+            // installed (llama.cpp router) — only shown when llamacpp is up (a
+            // successful /v1/models response); the OpenAI ids are the gguf names.
             if let Some(Ok(d)) = llamacpp.as_ref() {
                 Card { class: "",
                     div { class: "card-pad pb-2 kicker", {t!("installed-llamacpp")} }
-                    div { class: "card-pad pt-0 font-mono text-sm td-muted",
-                        {
-                            let names = installed_names(d);
-                            if names.is_empty() { t!("none-yet") } else { names.join("   ·   ") }
-                        }
+                    div { class: "card-pad pt-0",
+                        InstalledList { names: installed_names(d), endpoint: "/api/llamacpp/delete", refresh: installed_refresh }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A row of installed-model chips, each with a delete (✕) button that POSTs
+/// `{name}` to `endpoint` and bumps `refresh`.
+#[component]
+fn InstalledList(names: Vec<String>, endpoint: &'static str, refresh: Signal<u32>) -> Element {
+    if names.is_empty() {
+        return rsx! { span { class: "font-mono text-sm td-muted", {t!("none-yet")} } };
+    }
+    rsx! {
+        div { class: "flex flex-wrap gap-2",
+            for name in names {
+                InstalledChip { name, endpoint, refresh }
+            }
+        }
+    }
+}
+
+#[component]
+fn InstalledChip(name: String, endpoint: &'static str, refresh: Signal<u32>) -> Element {
+    let mut busy = use_signal(|| false);
+    let on_delete = {
+        let name = name.clone();
+        move |_| {
+            let name = name.clone();
+            let mut refresh = refresh;
+            let mut busy = busy;
+            spawn(async move {
+                busy.set(true);
+                let _ = api::post_json(endpoint, json!({ "name": name })).await;
+                refresh += 1; // re-fetch the installed list(s)
+                busy.set(false);
+            });
+        }
+    };
+    rsx! {
+        span { class: "inline-flex items-center gap-1.5 rounded-full border border-line pl-3 pr-1.5 py-1 font-mono text-sm text-fg-strong",
+            "{name}"
+            button {
+                class: "leading-none text-fg-muted hover:text-danger px-1 rounded-full disabled:opacity-50",
+                disabled: busy(),
+                title: t!("btn-delete"),
+                onclick: on_delete,
+                "✕"
             }
         }
     }

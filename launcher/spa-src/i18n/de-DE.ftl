@@ -111,4 +111,5 @@ no-compatible-models = keine kompatiblen Modelle für diesen Filter
 btn-download = Herunterladen
 installed-ollama = installiert (ollama)
 installed-llamacpp = installiert (llama.cpp)
+btn-delete = Modell löschen
 none-yet = noch keine

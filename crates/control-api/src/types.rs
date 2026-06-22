@@ -167,6 +167,13 @@ pub struct DownloadRequest {
     pub model: String,
 }
 
+/// Request body for `POST /api/ollama/delete` + `/api/llamacpp/delete`. The name
+/// is an ollama `name:tag` or a llama.cpp router model id (gguf filename stem).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeleteRequest {
+    pub name: String,
+}
+
 /// The uniform error body for any non-2xx response (`application/json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiError {

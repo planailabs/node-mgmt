@@ -21,7 +21,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 
-use crate::{ApiError, ConnectionStatus, DownloadRequest, Info, Platforms, ServiceStatus, SetPlatforms, UpdateStatus};
+use crate::{ApiError, ConnectionStatus, DeleteRequest, DownloadRequest, Info, Platforms, ServiceStatus, SetPlatforms, UpdateStatus};
 
 /// The valid `{action}` values for `/api/services/{id}/{action}`. Validated once
 /// here so no backend re-implements the check.
@@ -64,6 +64,10 @@ pub trait ControlApi: Send + Sync + 'static {
     /// Proxy a GET to the llama.cpp router (its OpenAI `/v1/*`), e.g. `/v1/models`
     /// to list the GGUFs it serves. Unavailable when llamacpp is disabled.
     fn llamacpp_get(&self, path: String) -> impl Future<Output = ProxyReply> + Send;
+    /// Delete an installed ollama model (proxies the local server's `DELETE /api/delete`).
+    fn ollama_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send;
+    /// Delete a llama.cpp router model (removes `<models>/gguf/<name>.gguf`).
+    fn llamacpp_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send;
 
     /// The stored daemon config as raw JSON (only the values the user set). Opaque
     /// JSON — the schema-driven editor in the SPA drives it, so it stays a
@@ -100,6 +104,8 @@ pub fn router<T: ControlApi>(state: Arc<T>) -> Router {
         .route("/api/llmfit/download", post(h_llm_download::<T>))
         .route("/api/llmfit/download/{id}/status", get(h_llm_dl_status::<T>))
         .route("/api/llamacpp/models", get(h_llamacpp_models::<T>))
+        .route("/api/ollama/delete", post(h_ollama_delete::<T>))
+        .route("/api/llamacpp/delete", post(h_llamacpp_delete::<T>))
         .with_state(state)
 }
 
@@ -192,6 +198,12 @@ async fn h_llm_installed<T: ControlApi>(State(s): State<Arc<T>>) -> Response {
 /// The GGUFs the llama.cpp router serves (OpenAI `/v1/models`). 503 when llamacpp off.
 async fn h_llamacpp_models<T: ControlApi>(State(s): State<Arc<T>>) -> Response {
     proxy_response(s.llamacpp_get("/v1/models".into()).await)
+}
+async fn h_ollama_delete<T: ControlApi>(State(s): State<Arc<T>>, Json(b): Json<DeleteRequest>) -> Response {
+    proxy_response(s.ollama_delete(b.name).await)
+}
+async fn h_llamacpp_delete<T: ControlApi>(State(s): State<Arc<T>>, Json(b): Json<DeleteRequest>) -> Response {
+    proxy_response(s.llamacpp_delete(b.name).await)
 }
 async fn h_llm_download<T: ControlApi>(State(s): State<Arc<T>>, Json(body): Json<DownloadRequest>) -> Response {
     let payload = json!({ "model": body.model, "runtime": "ollama" }).to_string();

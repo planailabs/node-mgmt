@@ -308,6 +308,14 @@ impl ControlApi for Mock {
         let body = json!({ "object": "list", "data": data });
         async move { ProxyReply { status: 200, body: body.to_string().into_bytes() } }
     }
+    fn ollama_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send {
+        eprintln!("[mock] ollama delete {name}");
+        async move { ProxyReply { status: 200, body: br#"{"ok":true}"#.to_vec() } }
+    }
+    fn llamacpp_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send {
+        eprintln!("[mock] llamacpp delete {name}");
+        async move { ProxyReply { status: 200, body: br#"{"ok":true}"#.to_vec() } }
+    }
     fn llmfit_post(&self, _path: String, body: String) -> impl Future<Output = ProxyReply> + Send {
         let model = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.get("model").and_then(|m| m.as_str()).map(String::from)).unwrap_or_default();
         let id = format!("job-{}", rand::thread_rng().gen::<u32>());
