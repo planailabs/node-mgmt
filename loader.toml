@@ -40,6 +40,11 @@ drop_default_off_from_image = true
 [manifest.upload]
 default_tarball = "dist/plan-ai-node-mgmt.tar.gz"
 
+# Where `xtask update-tarball` reads the manifest version (JSON file + JSON Pointer).
+[manifest.version]
+file    = "app/package.json"
+pointer = "/version"
+
 # ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
 [layout]
 launcher_name  = "node-mgmt"
@@ -52,7 +57,7 @@ manifest_file  = "update.json"
 selection_file = "platforms.json"
 # Extra bundle-relative paths the update tarball packs beside the launchers (in
 # addition to [layout.launcher_artifact]). Files/dirs missing from the bundle are
-# skipped. Consumed by make-update-tarball.sh.
+# skipped. Consumed by `xtask update-tarball`.
 extra_files    = ["components", "tools", "README.txt"]
 [layout.launcher_artifact]
 "linux-x64"   = "node-mgmt.linux-x64.exe"
@@ -307,9 +312,9 @@ default = true
 [[artifact]]
 name = "update-tarball"
 out  = "dist/plan-ai-node-mgmt.tar.gz"
-cmd  = "@loader/make-update-tarball.sh"
+cmd  = "nix run .#xtask -- update-tarball"
 deps_bundles = true
-src  = ["@loader/make-update-tarball.sh", "@loader/lib.sh"]
+src  = ["app/package.json"]      # [manifest.version] source — re-tar on a version bump
 src_tree = ["third_party/loader/crates", "crates"]
 desc = "update tarball"
 
