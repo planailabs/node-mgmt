@@ -230,6 +230,8 @@
               mkdir -p third_party/loader/crates
               cp -r ${./third_party/loader/crates/loader-manifest} third_party/loader/crates/loader-manifest
               cp -r ${./third_party/loader/crates/loader-core} third_party/loader/crates/loader-core
+              # loader-core re-exports the splash spinner UI from loader-splash (path dep).
+              cp -r ${./third_party/loader/crates/loader-splash} third_party/loader/crates/loader-splash
               chmod -R u+w third_party
               cp -r ${launcherSrc}/. src && chmod -R u+w src && cd src
               # crates.io deps from the vendored cargo lock
