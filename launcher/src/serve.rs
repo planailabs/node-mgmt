@@ -283,7 +283,12 @@ impl ControlApi for RealApi {
             // feature now; hermes appears once its supervisor entry exists.
             let sel = crate::update::read_selection();
             if sel.features.iter().any(|f| f == "openwebui") {
-                let webui = service_state(by("open-webui"), &config::webui_health_url()).await;
+                // Probe the daemon's EFFECTIVE port (after collision fallback), not
+                // the configured default — otherwise a webui bound off 8080 never
+                // reads as Ready. Mirrors the llamacpp/hermes rows below.
+                let url = di.as_ref().and_then(|d| d.webui_url.clone())
+                    .unwrap_or_else(config::webui_url);
+                let webui = service_state(by("open-webui"), &format!("{url}/health")).await;
                 out.push(ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui });
             }
             if sel.features.iter().any(|f| f == "llamacpp") {
