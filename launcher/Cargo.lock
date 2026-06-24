@@ -1154,6 +1154,7 @@ dependencies = [
  "fluent",
  "fs2",
  "futures-util",
+ "libc",
  "loader-manifest",
  "loader-splash",
  "reqwest",

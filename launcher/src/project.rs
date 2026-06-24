@@ -187,6 +187,10 @@ impl Project for PlanAi {
                 });
             if let Some(lf) = lf {
                 self.llmfit_child = start_llmfit(&lf);
+                // Register it in the process sidecar so teardown's reaper has it.
+                if let Some(c) = self.llmfit_child.as_ref() {
+                    loader_core::proc::track(c.id(), "llmfit");
+                }
             }
         }
 
@@ -293,6 +297,7 @@ impl Project for PlanAi {
         // runtime down). Poll so the server task can take the lock to kill it.
         match cmd.spawn() {
             Ok(child) => {
+                loader_core::proc::track(child.id(), "electron");
                 *ctx.app.lock().unwrap() = Some(child);
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -335,6 +340,7 @@ impl Project for PlanAi {
             }
         }
         if let Some(mut c) = self.llmfit_child.take() {
+            loader_core::proc::untrack(c.id());
             let _ = c.kill();
             let _ = c.wait();
         }

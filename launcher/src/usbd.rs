@@ -222,6 +222,9 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
         .env("MAC_MGMT_RUNTIME_DIR", &run_dir);
     match cmd.spawn() {
         Ok(child) => {
+            // Register the daemon in the process sidecar so teardown's reaper has
+            // it (and, through it, the subtree of services the daemon spawns).
+            loader_core::proc::track(child.id(), "usbd");
             log(&format!(
                 "usbd: spawned daemon (home={}, runtime={}, control=http://[::1]:{port})",
                 home.display(),
@@ -246,6 +249,9 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
 /// hitting "device busy" and falling back to a lazy unmount. Hard-kills as a last
 /// resort if it doesn't exit within the grace window.
 pub fn stop(mut child: Child) {
+    // We own its lifecycle now — drop it from the sidecar so teardown's reaper
+    // doesn't also chase it (we SIGTERM + wait it right here).
+    loader_core::proc::untrack(child.id());
     // Already gone?
     if matches!(child.try_wait(), Ok(Some(_))) {
         return;
