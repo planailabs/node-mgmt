@@ -64,6 +64,14 @@ no trusted-user requirement. `make dev` covers local NixOS iteration.
   standard, update the standard in the same change — don't let code and standard
   drift. New cross-cutting convention ⇒ add a `standards/<area>.md`, register it in
   `standards/README.md`, and (if it's a rule agents must follow) link it here.
+- **Every change works on all three OSes (Linux, Windows, macOS).** We build on NixOS
+  and ship for all three — gate platform code with `cfg`, never assume `/proc`, unix
+  signals, or a particular shell. Verify the `cfg` arms compile for the other targets.
+- **Prefer a Rust crate over a CLI tool.** Don't shell out where a maintained crate does
+  the job (e.g. `sysinfo` for process enumeration/kill, not `ps`/`taskkill`). The few
+  tools we still exec are ones with no crate equivalent that ARE the mechanism (the
+  embedded `squashfuse`/`unsquashfs`, `fusermount`/`hdiutil`, `bwrap`); name the reason
+  when you add a new external-tool call.
 
 ---
 
@@ -227,6 +235,12 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
   Flakes exclude submodules, so `self.submodules = true` brings it into the
   `.#spa` build; keep the submodule rev and the SPA's `cargo-git-hashes.nix`
   (dioxus fork) in sync. `nix develop` auto-inits the submodule.
+- Teardown is host-owned and process-tree-aware (loader-core `teardown`): every process
+  the launcher spawns (usbd daemon, electron, llmfit) is registered in the loader's `proc`
+  sidecar and reaped — with its whole subtree — before unmounting, so nothing keeps a
+  mount busy. On startup the host reclaims stale mounts a crashed run left and REFUSES to
+  start (error dialog) if any can't be cleared. So: register any new long-lived child via
+  `loader_core::proc::track`, and don't add a teardown path inside the FHS child.
 - The SPA pins `wasm-bindgen = "=0.2.121"` to match nixpkgs `wasm-bindgen-cli_0_2_121`;
   stock `dx` 0.7.9 prints a non-fatal "incompatible" notice for dioxus 0.8-alpha
   but builds fine. `wasm-opt` SIGABRTs in this toolchain (binaryen/LLVM feature
