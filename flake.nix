@@ -287,6 +287,7 @@
             pyVersion = vendorLock.pbs.python;
             pbsArchive = pbsFor target;
             wheelsLock = builtins.fromJSON (builtins.readFile lockFile);
+            msvcRuntimeWheel = loaderLib.msvcRuntime.wheel;
           };
 
         # the vendored hermes-agent source tree (FOD tarball → plain tree); the
@@ -305,6 +306,7 @@
             wheelsLock = builtins.fromJSON (builtins.readFile lockFile);
             hermesSrc = hermesSrcTree;
             hermesTag = vendorLock.hermes.tag;
+            msvcRuntimeWheel = loaderLib.msvcRuntime.wheel;
           };
         hermesComponents = {
           hermes-linux-x64 = hermesFor {
@@ -637,7 +639,6 @@
           # `nix develop`, so `make` runs unchanged inside the container:
           #   nix build .#devshell-image && docker load < result
           devshell-image = loaderDev.mkDevImage { name = "plan-ai-usb-devshell"; packages = devEnv.packages; env = devEnv.env; };
-          inherit (loaderLib) linuxMountTools;
           inherit nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           inherit usbd usbdComponent memvaultExtractGuestWasm memvaultWebClient;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;

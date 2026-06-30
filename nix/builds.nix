@@ -28,7 +28,7 @@ let
   # now live in the shared loader nix lib (third_party/loader/nix/loader), so any
   # consuming product reuses them. We keep the historical local names so the
   # derivation table below is unchanged. mkDmg is curried with our libdmg pin.
-  loader = import ../third_party/loader/nix/loader { inherit pkgs; nixpkgs = flake.inputs.nixpkgs; };
+  loader = flake.inputs.loader.loaderLib { inherit pkgs; nixpkgs = flake.inputs.nixpkgs; };
   libdmg = flake.packages.${builtins.currentSystem}.libdmg-hfsplus;
   mkSqfs = loader.mkSqfs;
   mkClosureSqfs = loader.mkClosureSqfs;
@@ -61,7 +61,7 @@ let
   # (nix/msvc-runtime.nix, same pin as the python runtime + llmfit.exe) at the
   # component root beside llama-server.exe. -n: never clobber a DLL upstream
   # starts shipping itself.
-  msvcDlls = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).dlls;
+  msvcDlls = loader.msvcDlls;
   mkLlamacppWinDir = key: pkgs.runCommand "llamacpp-${key}" { nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ]; } ''
     mkdir -p $out && tar -xf ${llamacppComponents}/llamacpp-${key}.tar.gz -C $out
     cp -n ${msvcDlls}/*.dll $out/

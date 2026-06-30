@@ -19,7 +19,7 @@
 #   - the web dashboard SPA (web/) is vite-built (buildNpmPackage, upstream's
 #     own npmDepsHash) into share/web_dist — served by `hermes dashboard`
 #     (HERMES_WEB_DIST), pure static files, no node at runtime.
-{ pkgs, lib, system, pyVersion, triple, pbsArchive, wheelsLock, hermesSrc, hermesTag }:
+{ pkgs, lib, system, pyVersion, triple, pbsArchive, wheelsLock, hermesSrc, hermesTag, msvcRuntimeWheel }:
 let
   wheelhouse = pkgs.linkFarm "hermes-wheelhouse" (map
     (w: { name = w.name; path = pkgs.fetchurl { inherit (w) url hash; }; })
@@ -81,7 +81,7 @@ let
     '';
   };
 
-  msvcRuntimeWheel = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).wheel;
+  # msvcRuntimeWheel (loaderLib.msvcRuntime.wheel) is passed in by the flake.
 in
 derivation {
   inherit system;

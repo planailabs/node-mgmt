@@ -7,20 +7,19 @@
 # with `uv pip install --target --python-platform --no-index`. No interpreter is
 # executed (works on NixOS) and the manylinux .so files are left untouched, so the
 # result runs OUTSIDE the nix store (copied out by scripts/make-runtime.sh).
-{ pkgs, lib, system, pyVersion, triple, pbsArchive, wheelsLock }:
+# msvcRuntimeWheel (loaderLib.msvcRuntime.wheel, passed in by the flake): the MSVC C++
+# redistributable runtime (MSVCP140*.dll, concrt140.dll, …) for the Windows runtime.
+# python-build-standalone bundles only the C runtime (vcruntime140*.dll), but torch's
+# torch_cpu/torch_python.dll (pulled in by sentence-transformers → open-webui
+# embeddings) link MSVCP140.dll + MSVCP140_ATOMIC_WAIT.dll, so without these open-webui
+# dies at `import torch` with WinError 126. A portable kiosk can't assume the VC++
+# redist is installed → bundle these redistributable DLLs into the python root. Pin is
+# shared with the llmfit windows build (which ships vcruntime140*.dll beside llmfit.exe).
+{ pkgs, lib, system, pyVersion, triple, pbsArchive, wheelsLock, msvcRuntimeWheel }:
 let
   wheelhouse = pkgs.linkFarm "wheelhouse" (map
     (w: { name = w.name; path = pkgs.fetchurl { inherit (w) url hash; }; })
     wheelsLock.wheels);
-  # MSVC C++ redistributable runtime (MSVCP140*.dll, concrt140.dll, …) for the
-  # Windows runtime. python-build-standalone bundles only the C runtime
-  # (vcruntime140*.dll), but torch's torch_cpu/torch_python.dll (pulled in by
-  # sentence-transformers → open-webui embeddings) link MSVCP140.dll +
-  # MSVCP140_ATOMIC_WAIT.dll, so without these open-webui dies at `import torch`
-  # with WinError 126. A portable kiosk can't assume the VC++ redist is installed
-  # → bundle these redistributable DLLs into the python root. Pin is shared with
-  # the llmfit windows build (which ships vcruntime140*.dll beside llmfit.exe).
-  msvcRuntimeWheel = (import ../third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).wheel;
 in
 derivation {
   inherit system;
