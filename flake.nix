@@ -50,23 +50,10 @@
 
         usbLock = builtins.fromJSON (builtins.readFile ./usb.lock);
 
-        # rust toolchain with the cross-target std libs the launcher needs
-        rustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
-          targets = [ "x86_64-pc-windows-gnu" "aarch64-apple-darwin"
-                      "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl"
-                      "aarch64-unknown-linux-gnu" "aarch64-unknown-linux-musl" ];
-        };
-        # Full stable toolchain + wasm32 for the Dioxus SPA (dx/cargo need a full
-        # rustc for wasm32-unknown-unknown).
-        wasmToolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "wasm32-unknown-unknown" ];
-        };
-        wasmRustPlatform = pkgs.makeRustPlatform { cargo = wasmToolchain; rustc = wasmToolchain; };
-        # Rust platform over the cross-target toolchain (rustToolchain carries the
-        # win/mac/linux std libs). Used to build the usb daemon for win/mac via
-        # cargo-zigbuild while letting buildRustPackage's cargoSetupHook vendor the
-        # registry + git deps (mac-mgmt pins a dioxus/swiftide fork) offline.
-        crossRustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
+        # The cross-build rust toolchains (cross-target std for the launcher/usbd/spinner,
+        # + a wasm32 toolchain for the Dioxus SPA) and their makeRustPlatform wrappers all
+        # come from the loader lib — it owns the loader's supported-platform set.
+        inherit (loaderLib) rustToolchain wasmToolchain crossRustPlatform wasmRustPlatform;
 
         # Scoped sources (lib.fileset): each derivation pulls only the files it
         # actually reads, so unrelated repo changes don't trigger rebuilds.
@@ -240,20 +227,16 @@
                 # repoint any duplicate to its alias and re-sign ad-hoc. No-op when the
                 # binary has no duplicate, so it's safe to run unconditionally on mac.
                 chmod +w "$out/plan-ai"
-                python3 ${./third_party/loader/scripts/macho-dedupe-dylibs.py} "$out/plan-ai"
+                python3 ${loaderLib.machoDedupe} "$out/plan-ai"
                 rcodesign sign "$out/plan-ai" "$out/plan-ai"
               ''}
             '';
 
         # The native splash spinner (softbuffer/winit), cross-built per arch — shown
-        # while the launcher mounts the runtime. The builder (crate, Cargo.lock, and
-        # the macho-dedupe fixup) lives in the loader submodule; we just feed it this
-        # product's loader.toml [spinner] colours, the cross toolchain, and the Apple
-        # SDK source for the darwin leg.
-        spinnerFor = loaderLib.mkSpinner {
-          inherit loaderToml rustToolchain macosx-sdk;
-          dedupeScript = ./third_party/loader/scripts/macho-dedupe-dylibs.py;
-        };
+        # while the launcher mounts the runtime. The builder (crate, Cargo.lock, cross
+        # toolchain, macOS SDK and the macho-dedupe fixup) all live in the loader; we
+        # only feed it this product's loader.toml [spinner] colours.
+        spinnerFor = loaderLib.mkSpinner { inherit loaderToml; };
 
         # llmfit — hardware-aware model selector. Bundled beside the launcher so it
         # can detect the GPU (`llmfit system --json`) and serve the model-browser API
@@ -381,18 +364,6 @@
             lockFile = ./runtime/wheels-mac-arm64.lock.json;
           };
         };
-        # Static squashfs tools (musl, no interpreter → run on ANY linux incl.
-        # NixOS and stock Ubuntu) bundled into the linux/nixos artifacts so the
-        # loader can mount components in place (squashfuse_ll) and extract as a
-        # fallback (unsquashfs). Copied out of the store into the bundle.
-        # AppImage type2 runtime (the small ELF prepended to the squashfs). We
-        # assemble the AppImage by hand — runtime + mksquashfs(AppDir) — so the
-        # AppRun can be our rust launcher (rust launches Electron). Pinned by hash.
-        appimageRuntime = pkgs.fetchurl {
-          url = "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64";
-          hash = "sha256-okGdzkdWg5WuecAf+ppaNB3TOVgTUv8QTQc1J1Qxd+U=";
-        };
-
         # NixOS FHS helper. NixOS's bare nix-ld stub can't run a generic glibc FHS
         # binary (the bundled Electron/ollama). buildFHSEnv gives a bubblewrap
         # sandbox that provides /lib64/ld-linux + the usual GUI/runtime libs under
@@ -414,13 +385,6 @@
         };
         nixosFhs = mkNixosFhs "x86_64-linux";
         nixosFhs-arm64 = mkNixosFhs "aarch64-linux";
-
-        linuxMountTools = pkgs.runCommand "plan-ai-linux-mount-tools" { } ''
-          mkdir -p "$out/bin"
-          cp ${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll "$out/bin/squashfuse_ll"
-          cp ${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs  "$out/bin/unsquashfs"
-          chmod +x "$out/bin/"*
-        '';
 
         # The plan.ai USB daemon (`usbd`): the reduced phone-home control
         # plane the launcher spawns (it owns the supervisor + spawn-from-mount
@@ -610,7 +574,7 @@
                 # duplicate to its alias and re-sign ad-hoc (the edit voids zig's linker
                 # signature). Same fix as the launcher/spinner; no-op without a duplicate.
                 chmod +w "$out/bin/${exe}"
-                python3 ${./third_party/loader/scripts/macho-dedupe-dylibs.py} "$out/bin/${exe}"
+                python3 ${loaderLib.machoDedupe} "$out/bin/${exe}"
                 rcodesign sign "$out/bin/${exe}" "$out/bin/${exe}"
               ''}
               runHook postInstall
@@ -673,7 +637,8 @@
           # `nix develop`, so `make` runs unchanged inside the container:
           #   nix build .#devshell-image && docker load < result
           devshell-image = loaderDev.mkDevImage { name = "plan-ai-usb-devshell"; packages = devEnv.packages; env = devEnv.env; };
-          inherit linuxMountTools appimageRuntime nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
+          inherit (loaderLib) linuxMountTools;
+          inherit nixosFhs nixosFhs-arm64 spa macosx-sdk libdmg-hfsplus xtask;
           inherit usbd usbdComponent memvaultExtractGuestWasm memvaultWebClient;
           inherit usbd-win-x64 usbd-mac-arm64 usbd-linux-arm64;
           inherit usbdComponent-win-x64 usbdComponent-mac-arm64 usbdComponent-linux-arm64;
