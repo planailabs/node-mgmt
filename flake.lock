@@ -18,6 +18,22 @@
         "type": "github"
       }
     },
+    "loader": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./third_party/loader",
+        "type": "path"
+      },
+      "original": {
+        "path": "./third_party/loader",
+        "type": "path"
+      },
+      "parent": []
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780243769,
@@ -37,6 +53,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "loader": "loader",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

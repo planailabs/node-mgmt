@@ -10,6 +10,15 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # The shared loader builder (git@git.plan.ai:plan-ai/loader-builder), also vendored
+    # as the third_party/loader submodule (for plain `cargo build` outside the flake).
+    # Consumed here over the regular flake path: its `loaderLib` output supplies xtask,
+    # the spinner cross-builder, libdmg-hfsplus, the FHS helper, the devshell base, the
+    # macOS SDK, the FAT32 image tools — each parameterised by this product's loader.toml.
+    loader = {
+      url = "path:./third_party/loader";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # Include git submodules in the flake source. The SPA build needs
     # third_party/plan-ai-design (the shared Dioxus component library), and the
     # launcher needs third_party/mac-mgmt (mac-mgmt-services — the cross-platform
@@ -25,11 +34,19 @@
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, loader }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         lib = pkgs.lib;
+
+        # The shared loader nix library, from the loader flake's `loaderLib` output,
+        # applied with this product's pinned pkgs + nixpkgs: xtask, the spinner
+        # cross-builder, libdmg-hfsplus, the FHS helper, the devshell base, the macOS
+        # SDK source, the FAT32 image tools, the component packers.
+        loaderLib = loader.loaderLib { inherit pkgs nixpkgs; };
+        # The single declarative manifest the loader build tool derives everything from.
+        loaderToml = builtins.fromTOML (builtins.readFile ./loader.toml);
 
         usbLock = builtins.fromJSON (builtins.readFile ./usb.lock);
 
@@ -65,16 +82,6 @@
             ./third_party/mac-mgmt       # config-ui + common path deps
           ];
         };
-        # xtask + its engine/manifest now live in the loader submodule; build it
-        # from there (self.submodules brings the tree into the flake source).
-        xtaskSrc = lib.fileset.toSource {
-          root = ./.;
-          fileset = lib.fileset.unions [
-            ./third_party/loader/crates/xtask
-            ./third_party/loader/crates/loader-engine
-            ./third_party/loader/crates/loader-manifest
-          ];
-        };
         # the launcher crate without spa-src (the SPA is its own derivation,
         # passed in via PLANAI_SPA_DIST — see launcherFor)
         launcherSrc = lib.fileset.toSource {
@@ -82,14 +89,9 @@
           fileset = lib.fileset.difference ./launcher ./launcher/spa-src;
         };
 
-        # macOS SDK source (Cocoa headers + framework stubs) for cross-compiling
-        # crates with native Apple deps — notify-rust's mac-notification-sys
-        # #imports <Cocoa/Cocoa.h>. Fed to the mac launcher build via SDKROOT so
-        # zig cc finds the frameworks. Source-only (a fetch), so it builds on
-        # linux despite being from the darwin package set.
-        macosx-sdk = let
-          darwinPkgs = import nixpkgs { system = "aarch64-darwin"; };
-        in darwinPkgs.apple-sdk_26.src;
+        # macOS SDK source (Cocoa frameworks) for cross-compiling Apple-dep crates via
+        # SDKROOT (the mac launcher/usbd/spinner). Now in the loader lib.
+        macosx-sdk = loaderLib.macosx-sdk;
 
         # Dioxus `feat/embed` fork git-dep hashes (same rev mac-mgmt pins). dx is
         # nixpkgs' stock 0.7.9 — it prints a non-fatal "incompatible" notice for
@@ -143,18 +145,9 @@
         };
         # The build orchestrator (host-native), built offline so the Makefile can
         # call it in CI (`nix run .#xtask`). Owns update-manifest generation +
-        # tarball + (next) the ninja graph. Shares the plan-ai-manifest path dep
-        # with the launcher updater, so src is the whole flake (xtask + crates/).
-        xtask = pkgs.rustPlatform.buildRustPackage {
-          pname = "xtask";
-          version = "0.1.0";
-          src = xtaskSrc;
-          cargoRoot = "third_party/loader/crates/xtask";
-          buildAndTestSubdir = "third_party/loader/crates/xtask";
-          cargoLock.lockFile = ./third_party/loader/crates/xtask/Cargo.lock;
-          doCheck = false;
-          meta.mainProgram = "xtask";
-        };
+        # tarball + the ninja graph. Lives entirely in the loader submodule now —
+        # the builder slices its own xtask + loader-engine/loader-manifest source.
+        xtask = loaderLib.xtask;
         # registry deps for the launcher's Cargo.lock (tokio, interprocess, …),
         # vendored offline. The mac-mgmt-services path dep is supplied separately
         # (the third_party/mac-mgmt submodule, copied beside src/ in the build).
@@ -247,57 +240,20 @@
                 # repoint any duplicate to its alias and re-sign ad-hoc. No-op when the
                 # binary has no duplicate, so it's safe to run unconditionally on mac.
                 chmod +w "$out/plan-ai"
-                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/plan-ai"
+                python3 ${./third_party/loader/scripts/macho-dedupe-dylibs.py} "$out/plan-ai"
                 rcodesign sign "$out/plan-ai" "$out/plan-ai"
               ''}
             '';
 
-        # registry deps for the spinner crate's Cargo.lock (eframe + its tree).
-        spinnerVendor = pkgs.rustPlatform.importCargoLock {
-          lockFile = ./third_party/loader/crates/spinner/Cargo.lock;
+        # The native splash spinner (softbuffer/winit), cross-built per arch — shown
+        # while the launcher mounts the runtime. The builder (crate, Cargo.lock, and
+        # the macho-dedupe fixup) lives in the loader submodule; we just feed it this
+        # product's loader.toml [spinner] colours, the cross toolchain, and the Apple
+        # SDK source for the darwin leg.
+        spinnerFor = loaderLib.mkSpinner {
+          inherit loaderToml rustToolchain macosx-sdk;
+          dedupeScript = ./third_party/loader/scripts/macho-dedupe-dylibs.py;
         };
-        # The native splash spinner (eframe/glow), cross-built like the launcher via
-        # cargo-zigbuild. Unlike the launcher it CANNOT be static-musl (a GUI needs a
-        # dynamic loader), so linux targets gnu. glow/winit dlopen the GL + windowing
-        # libs at runtime, so the binary carries no nix-store paths and resolves the
-        # TARGET machine's system libs (libGL/libX11/…). mac links AppKit/OpenGL etc.
-        # from the Apple SDK via SDKROOT (same mechanism the launcher uses for Cocoa).
-        # Splash colour scheme from loader.toml [spinner] — baked into the spinner at
-        # build time (the spinner's build.rs reads these). Empty → its plan.ai defaults.
-        spinnerColors = let s = (builtins.fromTOML (builtins.readFile ./loader.toml)).spinner or { }; in {
-          PLANAI_SPINNER_CANVAS = s.canvas or "";
-          PLANAI_SPINNER_BRAND = s.brand or "";
-          PLANAI_SPINNER_TEXT = s.text or "";
-          PLANAI_SPINNER_TRACK = s.track or "";
-        };
-        spinnerFor = { zigTarget, outDir }:
-          pkgs.runCommand "plan-ai-spinner-${outDir}"
-            ({
-              nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]
-                ++ lib.optionals (lib.hasInfix "apple-darwin" zigTarget) [ pkgs.python3 pkgs.rcodesign ];
-            } // spinnerColors // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
-              SDKROOT = macosx-sdk;
-            })
-            ''
-              export HOME="$TMPDIR" CARGO_HOME="$TMPDIR/cargo" XDG_CACHE_HOME="$TMPDIR/cache"
-              cp -r ${./third_party/loader/crates/spinner}/. src && chmod -R u+w src && cd src
-              mkdir -p .cargo
-              printf '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "%s"\n' "${spinnerVendor}" > .cargo/config.toml
-              cargo zigbuild --release --offline --target ${zigTarget}
-              mkdir -p "$out"
-              for b in plan-ai-spinner plan-ai-spinner.exe; do
-                if [ -f "target/${outDir}/release/$b" ]; then cp "target/${outDir}/release/$b" "$out/"; fi
-              done
-              ${lib.optionalString (lib.hasInfix "apple-darwin" zigTarget) ''
-                # zig links libobjc.A.dylib twice -> modern dyld SIGABRTs before main()
-                # ("duplicate linked dylib"), so the GUI spinner never starts on macOS.
-                # Repoint the duplicate to its symlink alias (ordinals preserved) and
-                # re-sign ad-hoc (the edit voids zig's linker signature).
-                chmod +w "$out/plan-ai-spinner"
-                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/plan-ai-spinner"
-                rcodesign sign "$out/plan-ai-spinner" "$out/plan-ai-spinner"
-              ''}
-            '';
 
         # llmfit — hardware-aware model selector. Bundled beside the launcher so it
         # can detect the GPU (`llmfit system --json`) and serve the model-browser API
@@ -311,7 +267,7 @@
         # MSVC C++ redistributable DLLs (vcruntime140*.dll, …), a standalone target
         # shared-pinned with the python runtime. Bundled beside the msvc-linked
         # llmfit.exe so it finds VCRUNTIME140.dll on a machine without the VC++ redist.
-        msvcDlls = (import ./third_party/loader/nix/loader/msvc-runtime.nix { inherit pkgs; }).dlls;
+        msvcDlls = loaderLib.msvcDlls;
         llmfitBin = { url, sha256, ext, target }:
           let src = pkgs.fetchurl { inherit url sha256; };
           in pkgs.runCommand "llmfit-${target}"
@@ -337,44 +293,9 @@
           let p = lib.findFirst (x: x.target == target) (throw "no pbs ${target}") vendorLock.pbs.files;
           in pkgs.fetchurl { inherit (p) url sha256; };
 
-        # libdmg-hfsplus (fanquake fork — the one Bitcoin Core uses for
-        # deterministic macOS dmgs). Its `dmg` tool wraps a raw HFS+ image into a
-        # COMPRESSED UDIF (UDZO) .dmg on Linux — a proper, Finder-mountable dmg
-        # without macOS/hdiutil (electron-builder's dmg is hdiutil-only). Pairs
-        # with hfsprogs' mkfs.hfsplus. (fanquake's pure-Rust `libdmg` port was
-        # tried but panics in libflate during compression — unusable.)
-        # BUILD_SHARED_LIBS=OFF so the dmg/hfsplus tools statically link the
-        # internal libs (no leftover /build rpath that nix rejects).
-        libdmg-hfsplus = pkgs.stdenv.mkDerivation {
-          pname = "libdmg-hfsplus";
-          version = "unstable-2018-02-05";
-          src = pkgs.fetchFromGitHub {
-            owner = "fanquake";
-            repo = "libdmg-hfsplus";
-            rev = "7ac55ec64c96f7800d9818ce64c79670e7f02b67";
-            hash = "sha256-5HHb08GEPzgLQC8y9YyhGoin1Oxy2UtOCx/4Xmb4ATQ=";
-          };
-          nativeBuildInputs = [ pkgs.cmake ];
-          buildInputs = [ pkgs.zlib pkgs.bzip2 ];
-          cmakeFlags = [
-            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"   # 2018 CMakeLists predates the cutoff
-            "-DBUILD_SHARED_LIBS=OFF"
-          ];
-          installPhase = ''
-            runHook preInstall
-            mkdir -p "$out/bin"
-            cp dmg/dmg "$out/bin/dmg"
-            cp hfs/hfsplus "$out/bin/hfsplus" 2>/dev/null || true
-            runHook postInstall
-          '';
-          # cmake bakes a build-tree rpath; replace it with the real lib paths
-          # BEFORE the fixup hooks audit for /build references (preFixup, not post).
-          preFixup = ''
-            for b in "$out/bin/dmg" "$out/bin/hfsplus"; do
-              [ -f "$b" ] && patchelf --force-rpath --set-rpath "${lib.makeLibraryPath [ pkgs.zlib pkgs.bzip2 ]}" "$b"
-            done
-          '';
-        };
+        # libdmg-hfsplus: builds deterministic, Finder-mountable macOS dmgs on Linux
+        # (the `dmg` tool, pairs with hfsprogs' mkfs.hfsplus). Now in the loader lib.
+        libdmg-hfsplus = loaderLib.libdmg-hfsplus;
 
         # portable runtime per target (wheels-FOD + vanilla install into pbs)
         runtimeFor = { target, triple, lockFile }:
@@ -485,9 +406,7 @@
         # We have native aarch64 builders, so each just builds on its own system.
         # The buildFHSEnv builder lives in the shared loader nix lib; the package
         # set is DATA from loader.toml [fhs] (so any product supplies its own libs).
-        loaderFhs = import ./third_party/loader/nix/loader/fhs.nix { inherit nixpkgs; };
-        loaderToml = builtins.fromTOML (builtins.readFile ./loader.toml);
-        mkNixosFhs = fhsSystem: loaderFhs {
+        mkNixosFhs = fhsSystem: loaderLib.mkNixosFhs {
           system = fhsSystem;
           name = loaderToml.fhs.name;
           runScript = loaderToml.fhs.run_script;
@@ -691,7 +610,7 @@
                 # duplicate to its alias and re-sign ad-hoc (the edit voids zig's linker
                 # signature). Same fix as the launcher/spinner; no-op without a duplicate.
                 chmod +w "$out/bin/${exe}"
-                python3 ${./scripts/macho-dedupe-dylibs.py} "$out/bin/${exe}"
+                python3 ${./third_party/loader/scripts/macho-dedupe-dylibs.py} "$out/bin/${exe}"
                 rcodesign sign "$out/bin/${exe}" "$out/bin/${exe}"
               ''}
               runHook postInstall
@@ -728,9 +647,9 @@
         # Shared dev-leg toolchain + env (nix/dev-env.nix), consumed by both the
         # interactive devshell and the bundled Docker image below.
         devEnv = import ./nix/dev-env.nix { inherit pkgs lib spaTools; };
-        # The reusable dev-environment base (shell + Docker image) from the loader
-        # submodule; this project supplies the package set, env, and project shellHook.
-        loaderDev = import ./third_party/loader/nix/loader/devshell.nix { inherit pkgs lib; };
+        # The reusable dev-environment base (shell + Docker image) from the loader lib;
+        # this project supplies the package set, env, and project shellHook.
+        loaderDev = loaderLib;
         # Project-specific shell setup: init the build's submodules + print pinned versions.
         projectShellHook = ''
           if [ -f .gitmodules ]; then
@@ -781,16 +700,8 @@
           spinner-linux-arm64 = spinnerFor { zigTarget = "aarch64-unknown-linux-gnu"; outDir = "aarch64-unknown-linux-gnu"; };
           spinner-win-x64   = spinnerFor { zigTarget = "x86_64-pc-windows-gnu";    outDir = "x86_64-pc-windows-gnu"; };
           spinner-mac-arm64 = spinnerFor { zigTarget = "aarch64-apple-darwin";     outDir = "aarch64-apple-darwin"; };
-          # Pinned userspace FAT32 tooling for make-usb-image.sh. The image is packed
-          # OUTSIDE the nix store (mkfs.vfat + mcopy run against the on-disk drive-root)
-          # so the multi-GB drive-root — launchers + components + seeded models — is
-          # never `nix store add-path`'d into /nix/store. Only these tools are pinned.
-          usb-image-tools = pkgs.buildEnv {
-            name = "usb-image-tools";
-            # unzip: the image carries Windows components UNPACKED, so make-usb-image.sh
-            # expands the per-component .zip into its target folder + removes the zip.
-            paths = [ pkgs.mtools pkgs.dosfstools pkgs.coreutils pkgs.findutils pkgs.unzip ];
-          };
+          # Pinned userspace FAT32 tooling for make-usb-image.sh (now in the loader lib).
+          usb-image-tools = loaderLib.usb-image-tools;
           hermes-webui = hermesWebuiComponent;
         } // runtimes // hermesComponents
           # llmfit ships an aarch64-linux-musl prebuilt only if upstream released one;
