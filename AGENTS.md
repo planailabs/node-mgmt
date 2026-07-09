@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI agents (and humans) working on **plan-ai-usb-minimal** — a
+Guidance for AI agents (and humans) working on **node-mgmt** — a
 portable, offline AI stack (Ollama + Open-WebUI behind a Dioxus dashboard) that is
 **built on NixOS** and shipped for Linux, Windows, and macOS (NixOS runs the
 regular linux build via the bundled FHS helper).
