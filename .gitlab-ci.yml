@@ -1,104 +1,48 @@
-# Build everything under NixOS. All jobs run in the nix devshell so the exact
-# same toolchain (node, python, uv, electron, rcodesign, wine, mtools, …) is used
-# in CI as locally.
-#
-# Cross builds (mac/win) are produced from the Linux runner via
-# python-build-standalone + uv --python-platform, electron-builder (+wine) for
-# windows, and @electron/packager + rcodesign for macOS.
+# Runs on the plan.ai `nix-image` runners (NixOS-in-Incus image built from
+# `.#image` in flake.nix, nix preconfigured against the xzar binary cache). Every
+# job runs inside `nix develop` so CI uses the exact devshell toolchain (node,
+# python, uv, electron, rust+wasm, dx, rcodesign, wine, mtools, …) as locally.
+# Cross builds (mac/win) are produced from the Linux runner. Modelled on
+# plan-ai/mac-mgmt's nix-image CI.
 
-stages: [lint, build, image, test]
+stages:
+  - build
+  - deploy
 
-default:
-  image: nixos/nix:latest
-  before_script:
-    # enable flakes + keep the binary cache warm
-    - export NIX_CONFIG="experimental-features = nix-command flakes"
-    - nix develop --command true   # realise the devshell once
-  cache:
-    key: vendor-$CI_COMMIT_REF_SLUG
-    paths: [vendor/, app/node_modules/]
+before_script:
+  # The nix-image executor mounts /cache for Cargo; initialise the target before
+  # symlinking so nested tools (dx, cargo-zigbuild) share one warm cache instead
+  # of racing on a half-created ~/.cargo. (Pattern from mac-mgmt.)
+  - mkdir -p /cache/cargo
+  - rm -rf ~/.cargo
+  - ln -s /cache/cargo ~/.cargo
+  - export CARGO_HOME="$HOME/.cargo"
 
 variables:
   GIT_SUBMODULE_STRATEGY: recursive   # plan-ai-design, mac-mgmt, loader (build framework)
 
-# ---------------------------------------------------------------------------
-lint:
-  stage: lint
-  script:
-    - nix develop --command bash -c 'for s in scripts/*.sh; do bash -n "$s"; done'
-    - nix develop --command bash -c 'cd app && npm ci && for f in main/*.js; do node -c "$f"; done'
-    - nix develop --command bash -c 'nix build .#spa'
-
-.fetch: &fetch
-  - nix develop --command ./scripts/download-openwebui.sh
-  - nix develop --command ./scripts/build-openwebui.sh
-
-build:linux:
+# Build the devshell + CI image and push them to the xzar cache so downstream
+# jobs and future pipelines resolve them from the cache. Doubles as the flake
+# sanity check on every pipeline (XZAR_TOKEN absent on unprotected → build-only).
+build:
   stage: build
+  tags: [nix-image]
   script:
-    - nix develop --command ./scripts/download-ollama.sh ollama-linux-amd64.tar.zst
-    - *fetch
-    - nix develop --command ./scripts/make-runtime.sh linux-x64
-    - nix develop --command bash -c 'cd app && npm ci'
-    - nix develop --command ./scripts/bundle.sh linux-x64
-  artifacts:
-    paths: [dist/bundle/plan-ai-*-linux-*.AppImage]
-    expire_in: 1 week
+    - bash prebuild.sh
+  timeout: 3h
+  resource_group: build-cache
 
-build:win:
-  stage: build
+# Build every platform's bundle (linux/win/mac), assemble the all-platform USB
+# update tarball (manifest.json + files/ mirror of each launcher + its
+# components/<os>/), and publish it to the update URL. Needs WEB_AGENCY_TOKEN +
+# WEB_AGENCY_URL (+ optional WEB_AGENCY_WEBSPACE_ID) as protected CI variables.
+update-tarball:
+  stage: deploy
+  tags: [nix-image]
+  only: [trunk]
   script:
-    - nix develop --command ./scripts/download-ollama.sh ollama-windows-amd64.zip
-    - *fetch
-    - nix develop --command ./scripts/make-runtime.sh win-x64
-    - nix develop --command bash -c 'cd app && npm ci'
-    - nix develop --command ./scripts/bundle.sh win-x64
-  artifacts:
-    paths: [dist/bundle/plan-ai-*-win-*.exe]
-    expire_in: 1 week
-  allow_failure: true   # some deps may lack windows wheels for cross-install
-
-build:mac:
-  stage: build
-  parallel:
-    matrix:
-      - TARGET: [mac-arm64]   # mac-x64 (Intel) omitted: deps ship macOS arm64-only
-  script:
-    - nix develop --command ./scripts/download-ollama.sh ollama-darwin.tgz
-    - *fetch
-    - nix develop --command ./scripts/make-runtime.sh "$TARGET"
-    - nix develop --command bash -c 'cd app && npm ci'
-    - nix develop --command ./scripts/bundle.sh "$TARGET"
-  artifacts:
-    paths: [dist/bundle/plan-ai-*-mac-*.zip]
-    expire_in: 1 week
-  allow_failure: true
-
-usb-image:
-  stage: image
-  needs: ["build:linux", "build:win", "build:mac"]
-  script:
-    - nix develop --command ./scripts/download-ollama.sh   # all flavours for completeness
-    - nix develop --command ./scripts/make-usb-image.sh dist/plan-ai-usb.img
-  artifacts:
-    paths: [dist/plan-ai-usb.img]
-    expire_in: 1 week
-  allow_failure: true
-
-# Loop-mount + VM tests need a privileged runner (KVM, mount). Tag accordingly.
-test:usb-fat32:
-  stage: test
-  needs: ["build:linux"]
-  tags: [privileged]
-  script:
-    - nix develop --command ./scripts/dev.sh --version || true   # stage dev runtime
-    - nix develop --command ./scripts/test-usb-image.sh
-  allow_failure: true
-
-test:ubuntu-vm:
-  stage: test
-  needs: ["build:linux"]
-  tags: [kvm]
-  script:
-    - nix develop --command ./scripts/test-ubuntu-vm.sh
-  allow_failure: true
+    - nix develop -c make bundles
+    - nix develop -c make tarball-upload
+  timeout: 3h
+  environment: production
+  resource_group: production

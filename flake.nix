@@ -10,6 +10,12 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # NixOS-in-Incus image builder for the GitLab `nix-image` CI runners, and the
+    # plan.ai xzar binary cache client + overlay (prebuild.sh warms the cache).
+    # Same pattern as plan-ai/mac-mgmt and plan-ai/hugger.
+    gitlab-incus-image.url = "git+https://git.mkg20001.io/mkg20001/gitlab-incus-image.git";
+    xzar.url = "github:mkg20001/xzar";
+    xzar.inputs.nixpkgs.follows = "nixpkgs";
     # The shared loader builder (git@git.plan.ai:plan-ai/loader-builder), also vendored
     # as the third_party/loader submodule (for plain `cargo build` outside the flake).
     # Consumed here over the regular flake path: its `loaderLib` output supplies xtask,
@@ -34,7 +40,7 @@
   #   nix/devshell.nix  the dev shell (toolchain + NixOS env)
   #   nix/vendor.nix    layer 1 download FODs + layer 2 no-fixup ollama repack
   #   nix/runtime.nix   layer 3 portable open-webui runtime (wheels-FOD + vanilla install)
-  outputs = { self, nixpkgs, flake-utils, rust-overlay, loader }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay, loader, gitlab-incus-image, xzar }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
@@ -675,6 +681,29 @@
           # binary doesn't poison flake eval (the bundle tolerates its absence).
           // lib.optionalAttrs (builtins.any (a: a.target == "aarch64-unknown-linux-musl") vendorLock.llmfit.assets) {
             llmfit-linux-arm64 = llmfitBin (llmfitAsset "aarch64-unknown-linux-musl");
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            # NixOS-in-Incus image for the GitLab `nix-image` CI runners: nix is
+            # preconfigured to pull from the plan.ai xzar binary cache and the
+            # xzar client ships in-image so `prebuild.sh` can warm it. Build with
+            # `nix build .#image`; deployed as the runner rootfs.
+            image = (nixpkgs.lib.nixosSystem {
+              system = "x86_64-linux";
+              modules = [
+                "${nixpkgs}/nixos/modules/virtualisation/lxc-container.nix"
+                gitlab-incus-image.nixosModules.gitlab-incus-image
+                ({ pkgs, ... }: {
+                  environment.systemPackages = with pkgs; [ openssh rsync git xzar-client pixz ];
+                  nixpkgs.overlays = [ xzar.overlays.default ];
+                  programs.git.config.advice.detachedHead = false;
+                  system.stateVersion = "26.11";
+                  nix.settings = {
+                    substituters = [ "https://xzar.plan.ai" ];
+                    trusted-public-keys = [ "xzar.plan.ai:KUE66pjr6UX5HHCn9kedN1DJ2J5nSlBrKmE7tUjXewE=" ];
+                  };
+                })
+              ];
+            }).config.system.build.gitlab-incus-image;
           };
         devShells.default = loaderDev.mkDevShell { packages = devEnv.packages; env = devEnv.env; shellHook = projectShellHook; };
         # Windows cross-build harness for the usb daemon (`mac-mgmt usbd`). Exposes
