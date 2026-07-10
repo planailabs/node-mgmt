@@ -19,16 +19,14 @@ files:
   - main/**/*
   - package.json
 
-# Single-file artifacts per OS.
 linux:
-  # `dir` only (linux-unpacked) — bundle.sh wraps it into an AppImage whose AppRun
-  # is the rust launcher (rust launches Electron), assembled from the pinned
-  # type2 runtime + mksquashfs. executableName fixed so the launcher finds it.
+  # `dir` only (linux-unpacked) — bundle.sh packs it as the app-linux-* squashfs
+  # COMPONENT the standalone rust launcher mounts and runs Electron from.
+  # executableName fixed so the launcher finds it.
   target:
     - dir
   executableName: plan-ai
   category: Utility
-  artifactName: plan-ai-${version}-linux-${arch}.${ext}
 
 win:
   # `dir` only (win-unpacked) — bundle.sh emits it as the app-win-x64 COMPONENT
@@ -37,14 +35,9 @@ win:
   # needed; nsis/portable can be produced on a Windows CI runner.
   target:
     - dir
-  artifactName: plan-ai-${version}-win-${arch}.${ext}
 
-mac:
-  target:
-    - dmg
-    - zip
-  category: public.app-category.developer-tools
-  artifactName: plan-ai-${version}-mac-${arch}.${ext}
+# no mac: section — mac never goes through electron-builder; bundle.sh uses
+# @electron/packager + rcodesign and ships the .app as the app-mac-* dmg component.
 
 # These are downloaded/built ahead of time; never fetch at pack time.
 npmRebuild: false

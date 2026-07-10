@@ -49,10 +49,12 @@ run "cd app && npm ci"
 # otherwise re-root to third_party/loader via $SCRIPT_DIR/..).
 run "PLANAI_REPO_ROOT=\$PWD ./third_party/loader/scripts/bundle.sh $TARGET"
 
+# The bundle artifact is the standalone launcher beside components/ (names per
+# loader.toml layout.launcher_name — see @loader/bundle.sh LAUNCHER_NAME).
 case "$TARGET" in
-  linux-x64) ART=("$WT"/dist/bundle/plan-ai-*-linux-*.AppImage) ;;
-  win-x64)   ART=("$WT"/dist/bundle/plan-ai-*-win-*.zip) ;;
-  mac-*)     ART=("$WT"/dist/bundle/plan-ai-*-mac-*.zip) ;;
+  linux-x64) ART=("$WT"/dist/bundle/node-mgmt.linux-x64.exe) ;;
+  win-x64)   ART=("$WT"/dist/bundle/node-mgmt.exe) ;;
+  mac-*)     ART=("$WT"/dist/bundle/node-mgmt.dmg) ;;
 esac
 if [ -e "${ART[0]}" ]; then
   log "CLEAN BUILD OK -> $(ls -lh "${ART[0]}" | awk '{print $5, $NF}')"

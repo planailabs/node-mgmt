@@ -6,7 +6,7 @@
 # This validates that Ollama (reading models) and Open-WebUI (writing DATA_DIR)
 # work off a FAT32 volume. The app + python runtime run from the host (the dev/
 # NixOS launcher) because a python venv can't live on FAT32 (no symlinks); the
-# shippable AppImage is the single-file artifact that runs from FAT32 directly.
+# shipped launcher bundle mounts its components and runs from FAT32 directly.
 #
 # Needs sudo for the loop mount. Run inside `nix develop`.
 set -euo pipefail

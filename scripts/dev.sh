@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Minimal NixOS development build + run ("dev mode").
 #
-# Produces a NixOS-runnable stack for testing the app, WITHOUT the generic
-# AppImage: a venv built from the nixpkgs Python (runs natively on NixOS) with
+# Produces a NixOS-runnable stack for testing the app, WITHOUT the shipped
+# bundle: a venv built from the nixpkgs Python (runs natively on NixOS) with
 # Open-WebUI installed from the locally built wheel, the real pinned ollama
 # binary (patchelf'd to the nix loader by run-nixos.sh), and the dashboard run
 # via the nixpkgs Electron. Idempotent — re-runs skip completed steps.

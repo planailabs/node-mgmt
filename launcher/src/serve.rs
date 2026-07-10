@@ -496,40 +496,34 @@ impl ControlApi for RealApi {
             proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await
         }
     }
-    fn ollama_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send {
-        async move {
-            // ollama's DELETE /api/delete: {"model"} (0.30.x) — send "name" too for
-            // back-compat with older servers. 200 on success (empty body).
-            let body = serde_json::json!({ "model": name, "name": name }).to_string();
-            match proxy::delete(&ollama_base(), "/api/delete", &body).await {
-                Ok(r) => ProxyReply {
-                    status: r.status,
-                    body: r.body,
-                },
-                Err(e) => err_reply(502, &format!("ollama delete failed: {e}")),
-            }
+    async fn ollama_delete(&self, name: String) -> ProxyReply {
+        // ollama's DELETE /api/delete: {"model"} (0.30.x) — send "name" too for
+        // back-compat with older servers. 200 on success (empty body).
+        let body = serde_json::json!({ "model": name, "name": name }).to_string();
+        match proxy::delete(&ollama_base(), "/api/delete", &body).await {
+            Ok(r) => ProxyReply {
+                status: r.status,
+                body: r.body,
+            },
+            Err(e) => err_reply(502, &format!("ollama delete failed: {e}")),
         }
     }
-    fn llamacpp_delete(&self, name: String) -> impl Future<Output = ProxyReply> + Send {
-        async move {
-            // The router's model id is a gguf filename stem. Only a bare name (no
-            // path separators / `..`) — then remove <models>/gguf/<name>.gguf.
-            if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-                return err_reply(400, "invalid model name");
-            }
-            let file = crate::paths::models_dir()
-                .join("gguf")
-                .join(format!("{name}.gguf"));
-            match std::fs::remove_file(&file) {
-                Ok(()) => ProxyReply {
-                    status: 200,
-                    body: br#"{"ok":true}"#.to_vec(),
-                },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    err_reply(404, "model not found")
-                }
-                Err(e) => err_reply(500, &format!("delete failed: {e}")),
-            }
+    async fn llamacpp_delete(&self, name: String) -> ProxyReply {
+        // The router's model id is a gguf filename stem. Only a bare name (no
+        // path separators / `..`) — then remove <models>/gguf/<name>.gguf.
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+            return err_reply(400, "invalid model name");
+        }
+        let file = crate::paths::models_dir()
+            .join("gguf")
+            .join(format!("{name}.gguf"));
+        match std::fs::remove_file(&file) {
+            Ok(()) => ProxyReply {
+                status: 200,
+                body: br#"{"ok":true}"#.to_vec(),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => err_reply(404, "model not found"),
+            Err(e) => err_reply(500, &format!("delete failed: {e}")),
         }
     }
     fn llmfit_post(&self, path: String, body: String) -> impl Future<Output = ProxyReply> + Send {

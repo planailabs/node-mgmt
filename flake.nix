@@ -173,8 +173,8 @@
             ({
               nativeBuildInputs = [ rustToolchain pkgs.cargo-zigbuild pkgs.zig ]
                 ++ lib.optionals (lib.hasInfix "apple-darwin" zigTarget) [ pkgs.python3 pkgs.rcodesign ];
-              # build.rs embeds these into the linux launcher (mounts squashfs itself,
-              # like the AppImage runtime); ignored for win/mac targets.
+              # build.rs embeds these into the linux launcher (it mounts its squashfs
+              # components itself); ignored for win/mac targets.
               PLANAI_SQUASHFUSE_LL = "${pkgs.pkgsStatic.squashfuse}/bin/squashfuse_ll";
               PLANAI_UNSQUASHFS = "${pkgs.pkgsStatic.squashfsTools}/bin/unsquashfs";
               # the splash spinner, embedded into the launcher for every target.

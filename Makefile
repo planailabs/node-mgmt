@@ -108,7 +108,7 @@ test-nixos: ## launch the built nixos bundle under xvfb + screenshot
 test-usb: ## FAT32 loop-image launch test (models/data on FAT32)
 	./scripts/test-usb-image.sh
 
-test-vm: ## run the AppImage in an Ubuntu 26.04 incus VM
+test-vm: ## run the bundled launcher in an Ubuntu 26.04 incus VM
 	./scripts/test-ubuntu-vm.sh
 
 test-all: ## every test (build/health, nixos, FAT32, ubuntu VM; +mac/win if MAC_TARGET/WIN_TARGET set)

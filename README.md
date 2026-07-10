@@ -15,7 +15,7 @@ The dashboard reuses [`plan-ai-design`](https://git.plan.ai/plan-ai/design)
 (a git submodule, consumed as real Dioxus components).
 
 ```
-┌───────────── single per-OS artifact (AppImage / win zip / mac .app) ─────────┐
+┌────────── per-OS artifact (standalone launcher: linux/win exe, mac dmg) ─────┐
 │  rust launcher  (control plane, static-musl on linux; cross for win/mac)     │
 │   ├─ mounts components/<os>/  (squashfs / dmg — mounted, not extracted)       │
 │   ├─ supervises:  ollama serve   +   uvicorn open_webui.main:app             │
@@ -159,10 +159,11 @@ make components                     # pack modular component archives (runtimes 
 make bundle   TARGET=linux-x64      # single-file artifact for the target
 ```
 
-Per-target artifacts (electron-builder for linux/win, `@electron/packager` +
-`rcodesign` for mac): a linux **AppImage** whose `AppRun` is the launcher, a
-**win zip**, a signed **mac `.app`** — each beside its `components/<os>/`. CPU-
-only torch keeps every artifact **under 4 GiB** (fits FAT32, no split needed).
+Per-target artifacts (electron-builder `dir` for linux/win, `@electron/packager`
++ `rcodesign` for mac): a standalone **rust launcher** per OS (`node-mgmt.linux-
+x64.exe` / `node-mgmt.exe` / `node-mgmt.dmg`) beside the shared `components/<os>/`
+pool that holds the Electron app as an `app-<target>` component. CPU-only torch
+keeps every artifact **under 4 GiB** (fits FAT32, no split needed).
 
 ## Flow C — Ready-to-burn USB image
 
@@ -180,7 +181,7 @@ sudo dd if=dist/plan-ai-node-mgmt.img of=/dev/sdX bs=4M status=progress conv=fsy
 ```
 
 `make image` auto-runs `make models`. There's a hard 4 GiB per-file guard, so
-no exFAT and no AppImage splitting are needed.
+no exFAT and no artifact splitting are needed.
 
 ---
 
@@ -229,7 +230,7 @@ prebuilt binaries are bundled (linux static-musl runs on NixOS too). Pins:
 make test          # lint + runtime import + live ollama/open-webui health (NixOS)
 make test-nixos    # launch the built nixos bundle under xvfb + screenshot
 make test-usb      # FAT32 loop-image launch test (models/data on FAT32; needs sudo)
-make test-vm       # run the AppImage in an Ubuntu 26.04 incus VM (needs KVM)
+make test-vm       # run the bundled launcher in an Ubuntu 26.04 incus VM
 make test-mac      # run the mac launcher on a remote mac (MAC_TARGET=<ssh host>)
 make test-win      # run the win launcher on a remote windows box (WIN_TARGET=<ssh host>)
 make test-all      # build/health + nixos + FAT32 + ubuntu VM (+mac/win if targets set)
@@ -240,10 +241,10 @@ make test-clean    # wipe outputs and rebuild from scratch (TARGET=linux-x64)
 
 | target | builds on NixOS | notes |
 |---|---|---|
-| linux-x64 (AppImage) | ✅ | the reference path; runs on generic Linux **and** NixOS |
-| linux-arm64 (AppImage) | ✅ | same path, aarch64 |
-| win-x64 (zip) | ✅ | extract + run the exe; `portable`/`nsis` need a real wine prefix or Windows runner |
-| mac-arm64 (.app) | ✅ | `rcodesign` ad-hoc; `.dmg` + notarization need macOS |
+| linux-x64 (launcher + components) | ✅ | the reference path; runs on generic Linux **and** NixOS |
+| linux-arm64 (launcher + components) | ✅ | same path, aarch64 |
+| win-x64 (launcher .exe + components) | ✅ | `nsis`/`portable` installers would need a Windows runner |
+| mac-arm64 (launcher .dmg + components) | ✅ | `rcodesign` ad-hoc in nix; notarization needs macOS |
 
 `nixos-x64` / `nixos-arm64` are **aliases** of the linux targets (same artifact,
 FHS helper). **mac-x64 (Intel) is dropped** — torch/brotlicffi ship arm64-only

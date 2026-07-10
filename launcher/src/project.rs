@@ -391,7 +391,7 @@ impl Project for PlanAi {
             cmd.arg(appdir);
         }
         #[cfg(target_os = "linux")]
-        cmd.arg("--no-sandbox"); // read-only AppImage mount can't setuid chrome-sandbox
+        cmd.arg("--no-sandbox"); // read-only squashfs mount can't hold a setuid chrome-sandbox
         cmd.args(ctx.args);
 
         // Safety net: the mount is done and the control plane is up, so

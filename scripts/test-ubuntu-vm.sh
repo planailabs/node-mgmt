@@ -29,14 +29,14 @@ log "test VM: $VM"
 # We use a privileged system CONTAINER (not a KVM VM): on this host VM creation
 # intermittently stalls for minutes, while containers launch in seconds. A
 # privileged container with /dev/fuse passed through still exercises the real
-# squashfuse MOUNT path (and the AppImage's own FUSE), so it's a faithful "runs
+# squashfuse MOUNT path, so it's a faithful "runs
 # on stock Ubuntu" check — just far more reliable.
 launch_ctr() {
   local img="$1"
   timeout -k 10 -s KILL "${PLANAI_VM_LAUNCH_TIMEOUT:-120}" incus launch "$img" "$VM" --ephemeral \
     -c security.privileged=true -c security.nesting=true \
     -c limits.cpu="${PLANAI_VM_CPU:-4}" -c limits.memory="${PLANAI_VM_MEM:-6GiB}" 2>/dev/null || return 1
-  # hot-plug /dev/fuse so squashfuse_ll + the AppImage can mount
+  # hot-plug /dev/fuse so the launcher's squashfuse_ll can mount
   incus config device add "$VM" fuse unix-char source=/dev/fuse path=/dev/fuse 2>/dev/null || true
 }
 # This host intermittently STALLS instance creation for minutes (heavy IO), but a

@@ -25,7 +25,7 @@ mock-server).
 
 ## The one rule that shapes everything
 
-**Artifacts must run OUTSIDE the Nix store.** The AppImage / win zip / mac app /
+**Artifacts must run OUTSIDE the Nix store.** The per-OS launcher bundles and the
 FAT32 USB image run on ordinary machines with no Nix. Therefore:
 
 - **Never ship a nixpkgs store closure.** `nixpkgs#open-webui` and `nixpkgs#ollama`
@@ -148,8 +148,8 @@ embeds it. `nix develop` provides the SPA toolchain (rust+wasm32, `dx`,
 - **Size: CPU-only torch.** On Linux, pypi torch pulls ~4 GB of NVIDIA CUDA
   wheels the kiosk never uses. `make-runtime` installs torch from the PyTorch CPU
   index (`--extra-index-url .../cpu --index-strategy unsafe-best-match`) → no
-  nvidia deps, no eager CUDA preload. Runtime 6.8 G → ~3 G, AppImage 5.3 G → ~3.3 G
-  (fits FAT32, so **no exFAT and no AppImage splitting needed**). Do NOT just
+  nvidia deps, no eager CUDA preload. Runtime 6.8 G → ~3 G, linux bundle 5.3 G → ~3.3 G
+  (fits FAT32, so **no exFAT and no artifact splitting needed**). Do NOT just
   strip `nvidia_*` from a CUDA torch — it then fails on `libcublasLt` preload.
 - **FAT32.** Every artifact stays < 4 GiB → plain FAT32 via mtools (no root).
   `make-usb-image` has a hard 4 GiB guard.

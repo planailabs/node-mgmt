@@ -443,7 +443,7 @@ help = "FAT32 loop-image launch test (models/data on FAT32)"
 recipe = ["./scripts/test-usb-image.sh"]
 [[make.target]]
 name = "test-vm"
-help = "run the AppImage in an Ubuntu 26.04 incus VM"
+help = "run the bundled launcher in an Ubuntu 26.04 incus VM"
 recipe = ["./scripts/test-ubuntu-vm.sh"]
 [[make.target]]
 name = "test-all"

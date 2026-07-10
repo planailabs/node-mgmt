@@ -1,7 +1,7 @@
 // plan.ai native launcher — prepares the runtime, then runs Electron.
 //
-// Like the AppImage runtime, this rust binary is responsible for making the
-// shipped components available to the app, then supervising it:
+// This rust binary is the shipped entry point: it makes the components
+// available to the app, then supervises it:
 //   linux : MOUNT each component .squashfs via an embedded static squashfuse_ll
 //           (extract via embedded unsquashfs if FUSE is unavailable)
 //   macOS : mount each .dmg via `hdiutil attach`
@@ -76,10 +76,8 @@ fn detect_ollama(comp: &Path) -> Option<(String, String)> {
         if has("darwin") {
             return pick("darwin", "macOS universal (Metal)");
         }
-    } else if cfg!(target_os = "windows") {
-        if has("windows-amd64") {
-            return pick("windows-amd64", "Windows x64");
-        }
+    } else if cfg!(target_os = "windows") && has("windows-amd64") {
+        return pick("windows-amd64", "Windows x64");
     }
     None
 }

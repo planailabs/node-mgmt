@@ -15,7 +15,7 @@ let
     uv
     # archive + fetch + json
     jq curl cacert zstd gnutar unzip gzip pigz git gnused coreutils which
-    # electron-builder linux packaging (AppImage)
+    # electron-builder linux packaging (dir target)
     fakeroot dpkg fuse
     p7zip     # system 7za so electron-builder skips its non-NixOS bundled one
     patchelf  # repoint electron-builder's prebuilt helpers at the nix loader
