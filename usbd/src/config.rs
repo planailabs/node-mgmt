@@ -71,7 +71,16 @@ fn resolve_token(
     env_vars: &std::collections::HashMap<String, String>,
 ) -> String {
     if let Some(var) = raw.strip_prefix("env:") {
-        env_vars.get(var).cloned().unwrap_or_else(|| raw.to_string())
+        env_vars.get(var).cloned().unwrap_or_else(|| {
+            // Unresolved: fall back to the literal so behavior is unchanged, but say
+            // so — otherwise the raw "env:VAR" string is used as the token and the
+            // failure surfaces later as a confusing auth error with no cause.
+            tracing::warn!(
+                "config token references env:{var} but it is unset — using the literal \
+                 string (auth will likely fail)"
+            );
+            raw.to_string()
+        })
     } else {
         raw.to_string()
     }

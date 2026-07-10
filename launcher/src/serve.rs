@@ -134,9 +134,18 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
     // from disk instead of the embedded assets, so a locally-built SPA can be
     // iterated without rebuilding the launcher. Paths are sanitized (no `..`).
     let spa_dir = std::env::var_os("PLANAI_SPA_DIR").map(std::path::PathBuf::from);
+    // Reject traversal in the dev override: `..` in any component, a backslash
+    // (a path separator on Windows, so `..\..` would escape there), or an absolute
+    // path (`join` on an absolute arg discards `dir` entirely). Belt-and-braces —
+    // this only runs under the dev `--with-spa` flag on a localhost server.
+    let safe_rel = |path: &str| {
+        !path.contains('\\')
+            && !std::path::Path::new(path).is_absolute()
+            && !path.split('/').any(|seg| seg == "..")
+    };
     let serve = |path: &str| {
         if let Some(dir) = &spa_dir {
-            if !path.split('/').any(|seg| seg == "..") {
+            if safe_rel(path) {
                 if let Ok(data) = std::fs::read(dir.join(path)) {
                     let mime = mime_guess::from_path(path).first_or_octet_stream();
                     return Some(

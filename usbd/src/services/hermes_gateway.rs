@@ -91,7 +91,8 @@ fn merge_env_file(path: &std::path::Path, updates: &[(&str, String)]) {
     }
     let mut body = lines.join("\n");
     body.push('\n');
-    std::fs::write(path, body).ok();
+    // The .env carries API_SERVER_KEY (gates the gateway HTTP API) — owner-only.
+    super::write_private(path, body.as_bytes());
 }
 
 /// Read a key's value from a dotenv-style file (first match wins).

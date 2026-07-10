@@ -116,8 +116,36 @@ fn persistent_secret(name: &str) -> String {
         }
     }
     let v = rand_hex(32);
-    let _ = std::fs::write(&f, &v);
+    write_private(&f, v.as_bytes());
     v
+}
+
+/// Write a secret file readable only by its owner. On FAT32 (the shipped USB) the
+/// mode is a no-op — no unix perms there — but when DATA_DIR lives on a real
+/// filesystem (dev machine, ext4) this keeps the key off other local users, who
+/// could otherwise decrypt Open-WebUI's stored fields with it.
+fn write_private(path: &std::path::Path, bytes: &[u8]) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(mut f) => {
+                let _ = f.write_all(bytes);
+            }
+            Err(e) => crate::log(&format!("secret write {}: {e}", path.display())),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(path, bytes);
+    }
 }
 
 fn s(p: std::path::PathBuf) -> String {

@@ -161,6 +161,36 @@ pub fn resolve_port(host: &str, preferred: u16) -> u16 {
         .unwrap_or(preferred)
 }
 
+/// Write a secret file (WEBUI_SECRET_KEY, oauth key, gateway API key, …) readable
+/// only by its owner. On FAT32 (the shipped USB) the mode is a harmless no-op — no
+/// unix perms there — but when the daemon's data dir lives on a real filesystem
+/// these keys would otherwise land world-readable (0644) for any other local user.
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(bytes) {
+                    tracing::warn!("secret write {}: {e}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("secret open {}: {e}", path.display()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
 /// The effective (bound) ports, reported in heartbeat + the control `/info`
 /// endpoint so the dashboard links to the right place even after a collision.
 #[derive(Clone, Copy, Debug, Default)]

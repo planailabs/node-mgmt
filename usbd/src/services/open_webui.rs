@@ -86,7 +86,7 @@ impl UsbOpenWebuiService {
         let bytes: [u8; 32] = rand::rng().random();
         let v = hex::encode(bytes);
         let _ = std::fs::create_dir_all(&self.data_dir);
-        let _ = std::fs::write(&f, &v);
+        super::write_private(&f, v.as_bytes());
         v
     }
 }
