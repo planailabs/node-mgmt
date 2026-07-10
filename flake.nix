@@ -198,6 +198,9 @@
               # then runs the buildFHSEnv wrapper inside it. Static so it runs with no
               # store deps before the store is provided.
               PLANAI_BWRAP_BIN = "${pkgs.pkgsStatic.bubblewrap}/bin/bwrap";
+              # Userspace overlay: unions the FHS closure with the host /nix/store when the
+              # kernel forbids overlayfs, so the host app's own store closure stays visible.
+              PLANAI_FUSE_OVERLAYFS = "${pkgs.pkgsStatic.fuse-overlayfs}/bin/fuse-overlayfs";
             } // lib.optionalAttrs (lib.hasInfix "apple-darwin" zigTarget) {
               # Cocoa headers/frameworks for notify-rust's mac-notification-sys.
               SDKROOT = macosx-sdk;
