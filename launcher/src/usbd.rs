@@ -104,7 +104,10 @@ fn export_paths() {
     let hermes = crate::paths::resources_root().join("hermes");
     if hermes.is_dir() {
         set_if_unset("PLANAI_HERMES_PYTHON", crate::paths::hermes_python());
-        set_if_unset("PLANAI_HERMES_WEB_DIST", hermes.join("share").join("web_dist"));
+        set_if_unset(
+            "PLANAI_HERMES_WEB_DIST",
+            hermes.join("share").join("web_dist"),
+        );
     }
     // hermes-webui (same feature): pure sources, run with the hermes python.
     let hermes_webui = crate::paths::resources_root().join("hermes-webui");
@@ -128,8 +131,11 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
     // the user's.
     let openwebui_on = feature_on("openwebui") && crate::paths::venv_python().exists();
     let hermes_on = feature_on("hermes") && crate::paths::hermes_python().exists();
-    let hermes_webui_on =
-        hermes_on && crate::paths::resources_root().join("hermes-webui").join("bootstrap.py").exists();
+    let hermes_webui_on = hermes_on
+        && crate::paths::resources_root()
+            .join("hermes-webui")
+            .join("bootstrap.py")
+            .exists();
     let llamacpp_on = feature_on("llamacpp") && crate::paths::llamacpp_server().exists();
 
     let json = home.join("config.json");
@@ -151,14 +157,16 @@ fn seed_config(home: &Path, ollama_port: u16, webui_port: u16) {
     if let Ok(txt) = std::fs::read_to_string(&json) {
         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
             if let Some(obj) = v.as_object_mut() {
-                obj.entry("openwebui").or_insert_with(|| serde_json::json!({}))["enabled"] =
+                obj.entry("openwebui")
+                    .or_insert_with(|| serde_json::json!({}))["enabled"] =
                     serde_json::json!(openwebui_on);
                 {
                     let h = obj.entry("hermes").or_insert_with(|| serde_json::json!({}));
                     h["enabled"] = serde_json::json!(hermes_on);
                     h["webui_enabled"] = serde_json::json!(hermes_webui_on);
                 }
-                obj.entry("llamacpp").or_insert_with(|| serde_json::json!({}))["enabled"] =
+                obj.entry("llamacpp")
+                    .or_insert_with(|| serde_json::json!({}))["enabled"] =
                     serde_json::json!(llamacpp_on);
                 if let Ok(s) = serde_json::to_string_pretty(&v) {
                     let _ = std::fs::write(&json, s);
@@ -194,7 +202,11 @@ pub fn spawn(bin: &Path) -> Option<(PathBuf, PathBuf, Child)> {
         return None;
     }
     export_paths();
-    seed_config(&home, crate::config::ollama_port(), crate::config::webui_port());
+    seed_config(
+        &home,
+        crate::config::ollama_port(),
+        crate::config::webui_port(),
+    );
 
     // The daemon's networked parts (heartbeat/relay/sync) are core/always-on now —
     // the daemon enables them unconditionally (no USBD_NETWORKED flag any more).

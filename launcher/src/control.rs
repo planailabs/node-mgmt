@@ -34,7 +34,15 @@ pub fn service_specs() -> Vec<(String, SpawnSpec)> {
         let port = config::webui_port().to_string();
         let webui = spec(
             paths::venv_python().to_string_lossy().into_owned(),
-            &["-m", "uvicorn", "open_webui.main:app", "--host", config::WEBUI_HOST, "--port", &port],
+            &[
+                "-m",
+                "uvicorn",
+                "open_webui.main:app",
+                "--host",
+                config::WEBUI_HOST,
+                "--port",
+                &port,
+            ],
             config::webui_env(),
         );
         specs.push(("open-webui".into(), webui));
@@ -45,12 +53,27 @@ pub fn service_specs() -> Vec<(String, SpawnSpec)> {
         env.insert("HERMES_HOME".into(), home.to_string_lossy().into_owned());
         env.insert(
             "HERMES_WEB_DIST".into(),
-            paths::resources_root().join("hermes").join("share").join("web_dist").to_string_lossy().into_owned(),
+            paths::resources_root()
+                .join("hermes")
+                .join("share")
+                .join("web_dist")
+                .to_string_lossy()
+                .into_owned(),
         );
         env.insert("HERMES_MANAGED".into(), "1".into());
         let hermes = spec(
             paths::hermes_python().to_string_lossy().into_owned(),
-            &["-m", "hermes_cli.main", "dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open", "--skip-build"],
+            &[
+                "-m",
+                "hermes_cli.main",
+                "dashboard",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "9119",
+                "--no-open",
+                "--skip-build",
+            ],
             env,
         );
         specs.push(("hermes".into(), hermes));
@@ -82,7 +105,12 @@ pub async fn start_stack(self_exe: &Path, socket: &Path) -> Result<Client> {
 
 /// Poll an HTTP health URL (GET): up if it answers with any 2xx/3xx/4xx.
 pub async fn http_ok(url: &str) -> bool {
-    match crate::net::client().get(url).timeout(Duration::from_secs(5)).send().await {
+    match crate::net::client()
+        .get(url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
         Ok(r) => (200..500).contains(&r.status().as_u16()),
         Err(_) => false,
     }
@@ -120,12 +148,18 @@ mod tests {
         assert_eq!(oname, "ollama");
         assert!(ollama.program.ends_with("ollama") || ollama.program.ends_with("ollama.exe"));
         assert_eq!(ollama.args, vec!["serve"]);
-        assert_eq!(ollama.env.get("OLLAMA_HOST").map(String::as_str), Some("127.0.0.1:11434"));
+        assert_eq!(
+            ollama.env.get("OLLAMA_HOST").map(String::as_str),
+            Some("127.0.0.1:11434")
+        );
         let (wname, webui) = &specs[1];
         assert_eq!(wname, "open-webui");
         assert_eq!(webui.args[0], "-m");
         assert_eq!(webui.args[1], "uvicorn");
-        assert_eq!(webui.env.get("WEBUI_AUTH").map(String::as_str), Some("False"));
+        assert_eq!(
+            webui.env.get("WEBUI_AUTH").map(String::as_str),
+            Some("False")
+        );
         assert!(webui.env.contains_key("WEBUI_SECRET_KEY"));
     }
 }

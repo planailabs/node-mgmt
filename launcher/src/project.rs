@@ -15,8 +15,7 @@ use loader_core::lifecycle::{PrepareCtx, Project, SessionCtx};
 
 use crate::{
     cache_root, control, detect_llamacpp, detect_ollama, electron_in, electron_target,
-    kill_spinner, log, pick_base, prepare_llmfit, serve, start_llmfit, supervisor_socket_path,
-    update, usbd, Mount,
+    kill_spinner, log, pick_base, serve, start_llmfit, supervisor_socket_path, update, usbd, Mount,
 };
 
 /// `provide()` a component, unless a dev override dir is set for this `slot`
@@ -37,7 +36,12 @@ pub struct PlanAi {
 
 impl PlanAi {
     pub fn new() -> Self {
-        PlanAi { socket: supervisor_socket_path(), usbd_started: None, llmfit_child: None, rt: None }
+        PlanAi {
+            socket: supervisor_socket_path(),
+            usbd_started: None,
+            llmfit_child: None,
+            rt: None,
+        }
     }
 }
 
@@ -78,8 +82,18 @@ impl Project for PlanAi {
         let features = update::read_selection().features;
         let openwebui_on = features.iter().any(|f| f == "openwebui");
         match pick_base(comp, "runtime-") {
-            Some(rt) if openwebui_on => match mount(comp, &rt, &dist.join("runtime"), "runtime", tools, force_extract) {
-                Ok(k) => ctx.mounts.push(Mount { dest: dist.join("runtime"), kind: k }),
+            Some(rt) if openwebui_on => match mount(
+                comp,
+                &rt,
+                &dist.join("runtime"),
+                "runtime",
+                tools,
+                force_extract,
+            ) {
+                Ok(k) => ctx.mounts.push(Mount {
+                    dest: dist.join("runtime"),
+                    kind: k,
+                }),
                 Err(e) => {
                     log(&format!("runtime: {e}"));
                     return false;
@@ -90,35 +104,81 @@ impl Project for PlanAi {
             None => {}
         }
         if openwebui_on
-            && (comp.join("ow-assets.squashfs").exists() || comp.join("ow-assets.dmg").exists() || comp.join("ow-assets").is_dir())
+            && (comp.join("ow-assets.squashfs").exists()
+                || comp.join("ow-assets.dmg").exists()
+                || comp.join("ow-assets").is_dir())
         {
-            if let Ok(k) = mount(comp, "ow-assets", &dist.join("ow-assets"), "ow-assets", tools, force_extract) {
-                ctx.mounts.push(Mount { dest: dist.join("ow-assets"), kind: k });
+            if let Ok(k) = mount(
+                comp,
+                "ow-assets",
+                &dist.join("ow-assets"),
+                "ow-assets",
+                tools,
+                force_extract,
+            ) {
+                ctx.mounts.push(Mount {
+                    dest: dist.join("ow-assets"),
+                    kind: k,
+                });
             }
         }
         // hermes: the optional agent component (feature "hermes", default-off).
         if features.iter().any(|f| f == "hermes")
-            && (comp.join("hermes.squashfs").exists() || comp.join("hermes.dmg").exists() || comp.join("hermes").is_dir())
+            && (comp.join("hermes.squashfs").exists()
+                || comp.join("hermes.dmg").exists()
+                || comp.join("hermes").is_dir())
         {
-            match mount(comp, "hermes", &dist.join("hermes"), "hermes", tools, force_extract) {
-                Ok(k) => ctx.mounts.push(Mount { dest: dist.join("hermes"), kind: k }),
+            match mount(
+                comp,
+                "hermes",
+                &dist.join("hermes"),
+                "hermes",
+                tools,
+                force_extract,
+            ) {
+                Ok(k) => ctx.mounts.push(Mount {
+                    dest: dist.join("hermes"),
+                    kind: k,
+                }),
                 Err(e) => log(&format!("hermes: {e}")),
             }
         }
         // hermes-webui: the lightweight hermes web UI (same feature) — pure
         // python/static sources run with the hermes component's python.
         if features.iter().any(|f| f == "hermes")
-            && (comp.join("hermes-webui.squashfs").exists() || comp.join("hermes-webui.dmg").exists() || comp.join("hermes-webui").is_dir())
+            && (comp.join("hermes-webui.squashfs").exists()
+                || comp.join("hermes-webui.dmg").exists()
+                || comp.join("hermes-webui").is_dir())
         {
-            match mount(comp, "hermes-webui", &dist.join("hermes-webui"), "hermes-webui", tools, force_extract) {
-                Ok(k) => ctx.mounts.push(Mount { dest: dist.join("hermes-webui"), kind: k }),
+            match mount(
+                comp,
+                "hermes-webui",
+                &dist.join("hermes-webui"),
+                "hermes-webui",
+                tools,
+                force_extract,
+            ) {
+                Ok(k) => ctx.mounts.push(Mount {
+                    dest: dist.join("hermes-webui"),
+                    kind: k,
+                }),
                 Err(e) => log(&format!("hermes-webui: {e}")),
             }
         }
         if let Some((ol, why)) = detect_ollama(comp) {
             log(&format!("ollama flavour: {ol} — {why}"));
-            match mount(comp, &ol, &dist.join("ollama"), "ollama", tools, force_extract) {
-                Ok(k) => ctx.mounts.push(Mount { dest: dist.join("ollama"), kind: k }),
+            match mount(
+                comp,
+                &ol,
+                &dist.join("ollama"),
+                "ollama",
+                tools,
+                force_extract,
+            ) {
+                Ok(k) => ctx.mounts.push(Mount {
+                    dest: dist.join("ollama"),
+                    kind: k,
+                }),
                 Err(e) => log(&format!("ollama: {e}")),
             }
             std::env::set_var("PLANAI_OLLAMA_FLAVOUR", ol);
@@ -129,8 +189,18 @@ impl Project for PlanAi {
         if features.iter().any(|f| f == "llamacpp") {
             if let Some((lc, why)) = detect_llamacpp(comp) {
                 log(&format!("llamacpp flavour: {lc} — {why}"));
-                match mount(comp, &lc, &dist.join("llamacpp"), "llamacpp", tools, force_extract) {
-                    Ok(k) => ctx.mounts.push(Mount { dest: dist.join("llamacpp"), kind: k }),
+                match mount(
+                    comp,
+                    &lc,
+                    &dist.join("llamacpp"),
+                    "llamacpp",
+                    tools,
+                    force_extract,
+                ) {
+                    Ok(k) => ctx.mounts.push(Mount {
+                        dest: dist.join("llamacpp"),
+                        kind: k,
+                    }),
                     Err(e) => log(&format!("llamacpp: {e}")),
                 }
                 std::env::set_var("PLANAI_LLAMACPP_FLAVOUR", lc);
@@ -146,12 +216,18 @@ impl Project for PlanAi {
                 log(&format!("app: dev override — {}", dir.display()));
                 *ctx.app_dir = Some(dir);
             } else {
-                log(&format!("app: PLANAI_APP_DIR {} is not a directory — ignoring", dir.display()));
+                log(&format!(
+                    "app: PLANAI_APP_DIR {} is not a directory — ignoring",
+                    dir.display()
+                ));
             }
         } else if let Some(app) = pick_base(comp, "app-") {
             match mount(comp, &app, &dist.join("app"), "app", tools, force_extract) {
                 Ok(k) => {
-                    ctx.mounts.push(Mount { dest: dist.join("app"), kind: k });
+                    ctx.mounts.push(Mount {
+                        dest: dist.join("app"),
+                        kind: k,
+                    });
                     *ctx.app_dir = Some(dist.join("app"));
                 }
                 Err(e) => log(&format!("app: {e}")),
@@ -160,9 +236,22 @@ impl Project for PlanAi {
         // The plan.ai USB daemon (usbd → dist/usbd/mac-mgmt[.exe]). Optional —
         // absent in dev / older bundles, where the launcher falls back to its
         // own supervisor.
-        if comp.join("usbd.squashfs").exists() || comp.join("usbd.dmg").exists() || comp.join("usbd").is_dir() {
-            match mount(comp, "usbd", &dist.join("usbd"), "usbd", tools, force_extract) {
-                Ok(k) => ctx.mounts.push(Mount { dest: dist.join("usbd"), kind: k }),
+        if comp.join("usbd.squashfs").exists()
+            || comp.join("usbd.dmg").exists()
+            || comp.join("usbd").is_dir()
+        {
+            match mount(
+                comp,
+                "usbd",
+                &dist.join("usbd"),
+                "usbd",
+                tools,
+                force_extract,
+            ) {
+                Ok(k) => ctx.mounts.push(Mount {
+                    dest: dist.join("usbd"),
+                    kind: k,
+                }),
                 Err(e) => log(&format!("usbd: {e}")),
             }
         }
@@ -183,7 +272,13 @@ impl Project for PlanAi {
                 .map(PathBuf::from)
                 .filter(|p| p.exists())
                 .or_else(|| {
-                    ctx.comp_dir.and_then(|c| prepare_llmfit(c, &cache_root().join("root").join("tools")))
+                    ctx.comp_dir.and_then(|c| {
+                        loader_core::prepare_pool_tool(
+                            c,
+                            &cache_root().join("root").join("tools"),
+                            "llmfit",
+                        )
+                    })
                 });
             if let Some(lf) = lf {
                 self.llmfit_child = start_llmfit(&lf);
@@ -235,7 +330,12 @@ impl Project for PlanAi {
             // Dev mode: start the launcher's own supervisor + register services.
             let client = match &usbd_sock {
                 Some(sock) => {
-                    match mac_mgmt_services::Client::connect(sock, std::time::Duration::from_secs(30)).await {
+                    match mac_mgmt_services::Client::connect(
+                        sock,
+                        std::time::Duration::from_secs(30),
+                    )
+                    .await
+                    {
                         Ok(c) => {
                             log("control: usb daemon owns the supervisor");
                             Ok(c)
@@ -243,13 +343,26 @@ impl Project for PlanAi {
                         Err(e) => Err(format!("usb daemon socket: {e}")),
                     }
                 }
-                None => control::start_stack(&self_exe, &socket).await.map_err(|e| e.to_string()),
+                None => control::start_stack(&self_exe, &socket)
+                    .await
+                    .map_err(|e| e.to_string()),
             };
             match client {
                 Ok(client) => {
-                    let port: u16 =
-                        std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
-                    match serve::run_server(client, port, spinner, updater, apply_requested, electron).await {
+                    let port: u16 = std::env::var("PLANAI_UI_PORT")
+                        .ok()
+                        .and_then(|p| p.parse().ok())
+                        .unwrap_or(8088);
+                    match serve::run_server(
+                        client,
+                        port,
+                        spinner,
+                        updater,
+                        apply_requested,
+                        electron,
+                    )
+                    .await
+                    {
                         Ok(url) => {
                             std::env::set_var("PLANAI_UI_URL", &url);
                             log(&format!("UI server on {url}"));
@@ -330,8 +443,11 @@ impl Project for PlanAi {
                 if let Some(rt) = self.rt.as_ref() {
                     let socket = self.socket.clone();
                     rt.block_on(async {
-                        if let Ok(mut c) =
-                            mac_mgmt_services::Client::connect(&socket, std::time::Duration::from_secs(5)).await
+                        if let Ok(mut c) = mac_mgmt_services::Client::connect(
+                            &socket,
+                            std::time::Duration::from_secs(5),
+                        )
+                        .await
                         {
                             let _ = c.shutdown().await;
                         }

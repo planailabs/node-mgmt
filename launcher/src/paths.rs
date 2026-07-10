@@ -23,8 +23,15 @@ pub fn ow_assets() -> PathBuf {
 /// feature). Upstream archives differ: linux/mac pack build/bin/, win is flat.
 pub fn llamacpp_server() -> PathBuf {
     let root = resources_root().join("llamacpp");
-    let name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
-    for c in [root.join("build").join("bin").join(name), root.join("bin").join(name)] {
+    let name = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
+    for c in [
+        root.join("build").join("bin").join(name),
+        root.join("bin").join(name),
+    ] {
         if c.exists() {
             return c;
         }
@@ -45,7 +52,11 @@ pub fn hermes_python() -> PathBuf {
 /// The ollama binary for this OS, from <resources>/ollama/ (tolerating a bin/ nest).
 pub fn ollama_binary() -> PathBuf {
     let dir = resources_root().join("ollama");
-    let name = if cfg!(windows) { "ollama.exe" } else { "ollama" };
+    let name = if cfg!(windows) {
+        "ollama.exe"
+    } else {
+        "ollama"
+    };
     for c in [dir.join(name), dir.join("bin").join(name)] {
         if c.exists() {
             return c;
@@ -75,7 +86,8 @@ pub fn venv_python() -> PathBuf {
                 for e in rd.flatten() {
                     let n = e.file_name().to_string_lossy().into_owned();
                     let is_py = n == "python3"
-                        || (n.starts_with("python3.") && n["python3.".len()..].chars().all(|c| c.is_ascii_digit()));
+                        || (n.starts_with("python3.")
+                            && n["python3.".len()..].chars().all(|c| c.is_ascii_digit()));
                     if is_py {
                         cands.push(e.path());
                     }
@@ -83,7 +95,10 @@ pub fn venv_python() -> PathBuf {
             }
         }
     }
-    cands.iter().find(|c| c.exists()).cloned()
+    cands
+        .iter()
+        .find(|c| c.exists())
+        .cloned()
         .or_else(|| cands.into_iter().next())
         .unwrap_or_else(|| rt.join("python").join("bin").join("python3"))
 }

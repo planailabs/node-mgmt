@@ -21,13 +21,22 @@ pub const LLMFIT_PORT_DEFAULT: u16 = 11436;
 /// `init_ports`. Read everywhere so the supervisor specs, health checks, and the
 /// SPA's /api/info all agree.
 pub fn ollama_port() -> u16 {
-    std::env::var("PLANAI_OLLAMA_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(OLLAMA_PORT_DEFAULT)
+    std::env::var("PLANAI_OLLAMA_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(OLLAMA_PORT_DEFAULT)
 }
 pub fn webui_port() -> u16 {
-    std::env::var("PLANAI_WEBUI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(WEBUI_PORT_DEFAULT)
+    std::env::var("PLANAI_WEBUI_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(WEBUI_PORT_DEFAULT)
 }
 pub fn llmfit_port() -> u16 {
-    std::env::var("PLANAI_LLMFIT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(LLMFIT_PORT_DEFAULT)
+    std::env::var("PLANAI_LLMFIT_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(LLMFIT_PORT_DEFAULT)
 }
 
 /// Pick free ports for ollama + open-webui (once, in the host) so the bundled
@@ -73,15 +82,20 @@ fn base_env() -> HashMap<String, String> {
 
 /// On NixOS dev runs, nix libs for the foreign child binaries come via
 /// PLANAI_CHILD_LD_LIBRARY_PATH — applied per child only, never to electron.
+/// Returns the composed LD_LIBRARY_PATH value (extra prepended to `base`).
+pub fn child_ld_path(base: Option<&str>) -> Option<String> {
+    let extra = std::env::var("PLANAI_CHILD_LD_LIBRARY_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    Some(match base {
+        Some(e) if !e.is_empty() => format!("{extra}:{e}"),
+        _ => extra,
+    })
+}
+
 fn child_ld(env: &mut HashMap<String, String>) {
-    if let Ok(extra) = std::env::var("PLANAI_CHILD_LD_LIBRARY_PATH") {
-        if !extra.is_empty() {
-            let v = match env.get("LD_LIBRARY_PATH") {
-                Some(e) if !e.is_empty() => format!("{extra}:{e}"),
-                _ => extra,
-            };
-            env.insert("LD_LIBRARY_PATH".into(), v);
-        }
+    if let Some(v) = child_ld_path(env.get("LD_LIBRARY_PATH").map(String::as_str)) {
+        env.insert("LD_LIBRARY_PATH".into(), v);
     }
 }
 
@@ -112,9 +126,13 @@ fn s(p: std::path::PathBuf) -> String {
 
 pub fn ollama_env() -> HashMap<String, String> {
     let mut e = base_env();
-    e.insert("OLLAMA_HOST".into(), format!("{OLLAMA_HOST}:{}", ollama_port()));
+    e.insert(
+        "OLLAMA_HOST".into(),
+        format!("{OLLAMA_HOST}:{}", ollama_port()),
+    );
     e.insert("OLLAMA_MODELS".into(), s(paths::models_dir()));
-    e.entry("OLLAMA_KEEP_ALIVE".into()).or_insert_with(|| "5m".into());
+    e.entry("OLLAMA_KEEP_ALIVE".into())
+        .or_insert_with(|| "5m".into());
     child_ld(&mut e);
     e
 }
@@ -128,9 +146,13 @@ pub fn webui_env() -> HashMap<String, String> {
     }
     e.insert("HOST".into(), WEBUI_HOST.into());
     e.insert("PORT".into(), webui_port().to_string());
-    e.insert("OLLAMA_BASE_URL".into(), format!("http://{OLLAMA_HOST}:{}", ollama_port()));
+    e.insert(
+        "OLLAMA_BASE_URL".into(),
+        format!("http://{OLLAMA_HOST}:{}", ollama_port()),
+    );
     e.insert("WEBUI_AUTH".into(), "False".into());
-    e.entry("WEBUI_SECRET_KEY".into()).or_insert_with(|| persistent_secret("secret-key"));
+    e.entry("WEBUI_SECRET_KEY".into())
+        .or_insert_with(|| persistent_secret("secret-key"));
     e.entry("OAUTH_SESSION_TOKEN_ENCRYPTION_KEY".into())
         .or_insert_with(|| persistent_secret("oauth-key"));
     e.insert("DATA_DIR".into(), s(paths::data_dir()));

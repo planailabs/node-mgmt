@@ -9,7 +9,6 @@
 // It assembles <cache>/dist/{runtime,ollama,ow-assets}, exports PLANAI_RESOURCES,
 // launches the bundled Electron app, waits, and tears the mounts down on exit.
 // (The Electron-side loader becomes a no-op when PLANAI_RESOURCES is already set.)
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,11 +26,10 @@ mod usbd;
 // shared HTTP client, and the crash-safe self-updater (update + apply) now live in the
 // loader-core runtime crate; re-export them so the lifecycle state machine + the project
 // glue below keep referring to `crate::*`.
-pub(crate) use loader_core::{net, update};
 pub(crate) use loader_core::{
     cache_root, external_roots, kill_spinner, log, pick_base, Mount, SpinnerHandle,
 };
-
+pub(crate) use loader_core::{net, update};
 
 /// Shared handle to the Electron child so the update-apply endpoint can terminate
 /// it (→ the session's wait returns → apply runs). Held by the session + the server.
@@ -46,7 +44,9 @@ fn lib_present(names: &[&str]) -> bool {
         "/usr/lib/x86_64-linux-gnu",
         "/lib/x86_64-linux-gnu",
     ];
-    names.iter().any(|n| dirs.iter().any(|d| Path::new(d).join(n).exists()))
+    names
+        .iter()
+        .any(|n| dirs.iter().any(|d| Path::new(d).join(n).exists()))
 }
 
 /// Pick the ollama flavour base name present in `comp` for this machine.
@@ -98,9 +98,16 @@ fn detect_llamacpp(comp: &Path) -> Option<(String, String)> {
     let pick = |key: &str, why: &str| Some((format!("llamacpp-{key}"), why.to_string()));
     let force_cpu = std::env::var("PLANAI_LLAMACPP").as_deref() == Ok("cpu");
     if cfg!(target_os = "linux") {
-        let arch = if std::env::consts::ARCH == "aarch64" { "linux-arm64" } else { "linux-amd64" };
+        let arch = if std::env::consts::ARCH == "aarch64" {
+            "linux-arm64"
+        } else {
+            "linux-amd64"
+        };
         let gpu = std::fs::read_dir("/dev/dri")
-            .map(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("renderD")))
+            .map(|d| {
+                d.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+            })
             .unwrap_or(false);
         let vulkan = format!("{arch}-vulkan");
         if !force_cpu && gpu && has(&vulkan) && lib_present(&["libvulkan.so.1", "libvulkan.so"]) {
@@ -169,57 +176,6 @@ fn electron_target(here: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The bundled llmfit binary for THIS OS, in the shared pool (OS-distinct names so
-/// one pool can hold every platform's copy).
-fn pool_llmfit(comp: &Path) -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(target_os = "windows") {
-        &["llmfit-windows.exe", "llmfit.exe"]
-    } else if cfg!(target_os = "macos") {
-        &["llmfit-darwin", "llmfit"]
-    } else {
-        &["llmfit-linux", "llmfit"]
-    };
-    names.iter().map(|n| comp.join(n)).find(|p| p.exists())
-}
-
-/// Copy the pool's llmfit into the (writable) tools dir + make it executable, so it
-/// runs even off a FAT32 USB (no exec bit). Falls back to the pool path on copy fail.
-fn prepare_llmfit(comp: &Path, tools: &Path) -> Option<PathBuf> {
-    let src = pool_llmfit(comp)?;
-    let name = if cfg!(target_os = "windows") { "llmfit.exe" } else { "llmfit" };
-    let dst = tools.join(name);
-    let _ = fs::create_dir_all(tools);
-    if fs::copy(&src, &dst).is_err() {
-        // On copy failure llmfit runs from the pool (comp) dir, where the bundled
-        // VCRUNTIME140.dll already sits beside it — so the windows loader still
-        // resolves the redist there; nothing extra to do for the fallback.
-        return Some(src);
-    }
-    // Windows: the msvc-linked llmfit.exe dynamically links VCRUNTIME140.dll. We run
-    // it from the writable `tools` dir (FAT32 has no exec bit), so the redist DLLs the
-    // pool ships beside it must be copied next to the destination .exe (the loader
-    // searches the exe's own dir first), or it dies with "VCRUNTIME140.dll not found".
-    #[cfg(target_os = "windows")]
-    if let Some(dir) = src.parent() {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")) {
-                    if let Some(fname) = p.file_name() {
-                        let _ = fs::copy(&p, tools.join(fname));
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&dst, fs::Permissions::from_mode(0o755));
-    }
-    Some(dst)
-}
-
 /// Run `llmfit system --json` (GPU/VRAM/backend) → pass the raw JSON to Electron via
 /// PLANAI_GPU_JSON (the JS side parses it), and start `llmfit serve` (model browser
 /// API the dashboard proxies). Returns the serve child so we can stop it on exit.
@@ -239,14 +195,26 @@ fn start_llmfit(lf: &Path) -> Option<std::process::Child> {
     // The download fallback (serve.rs run_download) shells back into llmfit.
     std::env::set_var("PLANAI_LLMFIT_BIN", lf);
     match Command::new(lf)
-        .args(["serve", "--host", config::LLMFIT_HOST, "--port", &port.to_string()])
+        .args([
+            "serve",
+            "--host",
+            config::LLMFIT_HOST,
+            "--port",
+            &port.to_string(),
+        ])
         // the CONFIGURED ollama port, not a hardcoded 11434 — the stick's
         // server may run elsewhere
-        .env("OLLAMA_HOST", format!("{}:{}", config::OLLAMA_HOST, config::ollama_port()))
+        .env(
+            "OLLAMA_HOST",
+            format!("{}:{}", config::OLLAMA_HOST, config::ollama_port()),
+        )
         .spawn()
     {
         Ok(child) => {
-            std::env::set_var("PLANAI_LLMFIT_URL", format!("http://{}:{port}", config::LLMFIT_HOST));
+            std::env::set_var(
+                "PLANAI_LLMFIT_URL",
+                format!("http://{}:{port}", config::LLMFIT_HOST),
+            );
             log(&format!("llmfit serve on {}:{port}", config::LLMFIT_HOST));
             Some(child)
         }
@@ -267,11 +235,17 @@ fn supervisor_socket_path() -> PathBuf {
 fn run_supervisor(socket: &Path) -> ! {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(e) => { log(&format!("supervisor runtime: {e}")); std::process::exit(1); }
+        Err(e) => {
+            log(&format!("supervisor runtime: {e}"));
+            std::process::exit(1);
+        }
     };
     match rt.block_on(mac_mgmt_services::server::run(socket)) {
         Ok(_) => std::process::exit(0),
-        Err(e) => { log(&format!("supervisor: {e}")); std::process::exit(1); }
+        Err(e) => {
+            log(&format!("supervisor: {e}"));
+            std::process::exit(1);
+        }
     }
 }
 
@@ -282,20 +256,30 @@ fn run_serve_stack() -> ! {
     config::init_ports();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(e) => { log(&format!("control runtime: {e}")); std::process::exit(1); }
+        Err(e) => {
+            log(&format!("control runtime: {e}"));
+            std::process::exit(1);
+        }
     };
     let code = rt.block_on(async {
         let self_exe = std::env::current_exe().expect("current_exe");
         let socket = supervisor_socket_path();
         let mut client = match control::start_stack(&self_exe, &socket).await {
             Ok(c) => c,
-            Err(e) => { log(&format!("control: {e}")); return 1; }
+            Err(e) => {
+                log(&format!("control: {e}"));
+                return 1;
+            }
         };
         log("control: services registered; waiting for health (≤120s)…");
         let (ollama, webui) = control::await_healthy(std::time::Duration::from_secs(120)).await;
         log(&format!("control: ollama={ollama} open-webui={webui}"));
         let _ = client.shutdown().await;
-        if ollama && webui { 0 } else { 1 }
+        if ollama && webui {
+            0
+        } else {
+            1
+        }
     });
     std::process::exit(code);
 }
@@ -307,16 +291,25 @@ fn run_serve() -> ! {
     config::init_ports();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(e) => { log(&format!("serve runtime: {e}")); std::process::exit(1); }
+        Err(e) => {
+            log(&format!("serve runtime: {e}"));
+            std::process::exit(1);
+        }
     };
     let code = rt.block_on(async {
         let self_exe = std::env::current_exe().expect("current_exe");
         let socket = supervisor_socket_path();
         let client = match control::start_stack(&self_exe, &socket).await {
             Ok(c) => c,
-            Err(e) => { log(&format!("control: {e}")); return 1; }
+            Err(e) => {
+                log(&format!("control: {e}"));
+                return 1;
+            }
         };
-        let port: u16 = std::env::var("PLANAI_UI_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8088);
+        let port: u16 = std::env::var("PLANAI_UI_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8088);
         // Standalone serve mode owns no spinner/electron (empty handles → no-ops).
         let no_spinner: SpinnerHandle = std::sync::Arc::new(std::sync::Mutex::new(None));
         let updater = update::Updater::new();
@@ -327,7 +320,10 @@ fn run_serve() -> ! {
                 std::env::set_var("PLANAI_UI_URL", &url);
                 log(&format!("UI server on {url}"));
             }
-            Err(e) => { log(&format!("serve: {e}")); return 1; }
+            Err(e) => {
+                log(&format!("serve: {e}"));
+                return 1;
+            }
         }
         let _ = tokio::signal::ctrl_c().await;
         0
@@ -339,13 +335,20 @@ fn run_serve() -> ! {
 /// server: PLANAI_OLLAMA_PORT if inherited, else the daemon's seeded config.json,
 /// else the well-known default.
 pub(crate) fn running_ollama_port() -> u16 {
-    if let Some(p) = std::env::var("PLANAI_OLLAMA_PORT").ok().and_then(|p| p.parse().ok()) {
+    if let Some(p) = std::env::var("PLANAI_OLLAMA_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+    {
         return p;
     }
     let cfg = usbd::home().join("config.json");
     if let Ok(s) = std::fs::read_to_string(&cfg) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-            if let Some(p) = v.get("ollama").and_then(|o| o.get("port")).and_then(|p| p.as_u64()) {
+            if let Some(p) = v
+                .get("ollama")
+                .and_then(|o| o.get("port"))
+                .and_then(|p| p.as_u64())
+            {
                 return p as u16;
             }
         }
@@ -376,22 +379,20 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
     if tool == "ollama" {
         // Point the CLI at the already-running server + the USB models dir, so
         // `ollama pull/list/rm` operate on the same store the app uses.
-        envs.push(("OLLAMA_HOST".into(), format!("{}:{}", config::OLLAMA_HOST, running_ollama_port()).into()));
+        envs.push((
+            "OLLAMA_HOST".into(),
+            format!("{}:{}", config::OLLAMA_HOST, running_ollama_port()).into(),
+        ));
         envs.push(("OLLAMA_MODELS".into(), paths::models_dir().into()));
         // NixOS dev: foreign-binary libs come via PLANAI_CHILD_LD_LIBRARY_PATH.
-        if let Ok(extra) = std::env::var("PLANAI_CHILD_LD_LIBRARY_PATH") {
-            if !extra.is_empty() {
-                let v = match std::env::var("LD_LIBRARY_PATH") {
-                    Ok(e) if !e.is_empty() => format!("{extra}:{e}"),
-                    _ => extra,
-                };
-                envs.push(("LD_LIBRARY_PATH".into(), v.into()));
-            }
+        if let Some(v) = config::child_ld_path(std::env::var("LD_LIBRARY_PATH").ok().as_deref()) {
+            envs.push(("LD_LIBRARY_PATH".into(), v.into()));
         }
     }
     // Locate the component pool so loader-core can enter the NixOS FHS sandbox — these are
     // generic ELF binaries that need it; off NixOS it execs the tool directly. Never returns.
-    let comp = std::env::current_exe().ok()
+    let comp = std::env::current_exe()
+        .ok()
         .and_then(|e| e.parent().map(|p| p.to_path_buf()))
         .and_then(|here| loader_core::components_dir(&here));
     loader_core::exec_bundled_tool(comp.as_deref(), &bin, &args, &envs);
@@ -402,7 +403,11 @@ fn run_tool_passthrough(tool: &str, args: Vec<std::ffi::OsString>) -> ! {
 /// subcommands are internal re-invocations of this same binary (supervisor/serve) or
 /// ops/passthrough helpers; each never returns.
 #[derive(clap::Parser)]
-#[command(name = "plan-ai", about = "plan.ai launcher", args_conflicts_with_subcommands = true)]
+#[command(
+    name = "plan-ai",
+    about = "plan.ai launcher",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -481,7 +486,11 @@ fn apply_dev_overrides(run: &RunArgs) {
         let mut p = canon(d);
         // accepts the unpacked component DIR or the binary directly.
         if p.is_dir() {
-            let names: &[&str] = if cfg!(windows) { &["usbd.exe", "mac-mgmt.exe"] } else { &["usbd", "mac-mgmt"] };
+            let names: &[&str] = if cfg!(windows) {
+                &["usbd.exe", "mac-mgmt.exe"]
+            } else {
+                &["usbd", "mac-mgmt"]
+            };
             if let Some(bin) = names.iter().map(|n| p.join(n)).find(|c| c.exists()) {
                 p = bin;
             }
@@ -499,7 +508,9 @@ fn main() {
     // Internal subcommands / passthroughs — each runs and exits (never returns).
     if let Some(cmd) = cli.cmd {
         match cmd {
-            Cmd::Supervisor { socket } => run_supervisor(&socket.unwrap_or_else(supervisor_socket_path)),
+            Cmd::Supervisor { socket } => {
+                run_supervisor(&socket.unwrap_or_else(supervisor_socket_path))
+            }
             Cmd::ServeStack => run_serve_stack(),
             Cmd::Serve => run_serve(),
             Cmd::SelfUpdate => std::process::exit(update::self_update("plan.ai")),
@@ -556,7 +567,14 @@ mod cli_tests {
         assert!(c.cmd.is_none() && c.run.electron_args.is_empty() && c.run.with.is_empty());
 
         // dev overrides (app mode)
-        let c = parse(&["--with", "app=./app", "--with", "runtime=./rt", "--with-spa", "./spa"]);
+        let c = parse(&[
+            "--with",
+            "app=./app",
+            "--with",
+            "runtime=./rt",
+            "--with-spa",
+            "./spa",
+        ]);
         assert!(c.cmd.is_none());
         assert_eq!(c.run.with, vec!["app=./app", "runtime=./rt"]);
         assert_eq!(c.run.with_spa.as_deref(), Some(Path::new("./spa")));
@@ -566,7 +584,10 @@ mod cli_tests {
         assert_eq!(c.run.electron_args, vec!["--inspect", "--foo=bar"]);
 
         // internal subcommands
-        assert!(matches!(parse(&["supervisor", "/tmp/s.sock"]).cmd, Some(Cmd::Supervisor { socket: Some(_) })));
+        assert!(matches!(
+            parse(&["supervisor", "/tmp/s.sock"]).cmd,
+            Some(Cmd::Supervisor { socket: Some(_) })
+        ));
         assert!(matches!(parse(&["serve-stack"]).cmd, Some(Cmd::ServeStack)));
         assert!(matches!(parse(&["self-update"]).cmd, Some(Cmd::SelfUpdate)));
 

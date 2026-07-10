@@ -121,7 +121,9 @@ pub async fn run_server(
 fn fmt_notif(n: &Notification) -> String {
     match n {
         Notification::Log { name, line, .. } => format!("[{name}] {line}"),
-        Notification::Crashed { name, exit_code } => format!("[{name}] crashed (exit {exit_code:?})"),
+        Notification::Crashed { name, exit_code } => {
+            format!("[{name}] crashed (exit {exit_code:?})")
+        }
     }
 }
 
@@ -146,7 +148,11 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         }
         Spa::get(path).map(|f| {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref().to_string())], f.data.into_owned()).into_response()
+            (
+                [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                f.data.into_owned(),
+            )
+                .into_response()
         })
     };
     serve(p)
@@ -155,7 +161,10 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 }
 
 /// Map a supervisor status + an OS-level health probe to a [`ServiceState`].
-async fn service_state(st: Option<&mac_mgmt_services::protocol::ServiceStatus>, health_url: &str) -> ServiceState {
+async fn service_state(
+    st: Option<&mac_mgmt_services::protocol::ServiceStatus>,
+    health_url: &str,
+) -> ServiceState {
     match st {
         None => ServiceState::Stopped,
         Some(s) if s.stopped => ServiceState::Stopped,
@@ -232,7 +241,9 @@ impl ControlApi for RealApi {
                     flavour: std::env::var("PLANAI_OLLAMA_FLAVOUR").ok(),
                     reason: std::env::var("PLANAI_OLLAMA_REASON").ok(),
                 },
-                gpu: gpu_json.as_deref().and_then(|j| serde_json::from_str::<Gpu>(j).ok()),
+                gpu: gpu_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str::<Gpu>(j).ok()),
             }
         }
     }
@@ -241,18 +252,24 @@ impl ControlApi for RealApi {
         let usbd_url = self.usbd_url.clone();
         async move {
             // No daemon (purely local launcher) → genuinely local-only.
-            let Some(base) = &usbd_url else { return ConnectionStatus::default() };
+            let Some(base) = &usbd_url else {
+                return ConnectionStatus::default();
+            };
             // Don't silently collapse failures to "local only": a 404 (a usbd
             // component built before /connection existed) or a transport error
             // (daemon not up) is a real cause the dashboard would otherwise hide.
             match proxy::get(base, "/connection").await {
-                Ok(r) if r.status == 200 => match serde_json::from_slice::<ConnectionStatus>(&r.body) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        crate::log(&format!("connection: daemon /connection body did not parse: {e}"));
-                        ConnectionStatus::default()
+                Ok(r) if r.status == 200 => {
+                    match serde_json::from_slice::<ConnectionStatus>(&r.body) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            crate::log(&format!(
+                                "connection: daemon /connection body did not parse: {e}"
+                            ));
+                            ConnectionStatus::default()
+                        }
                     }
-                },
+                }
                 Ok(r) => {
                     crate::log(&format!(
                         "connection: daemon /connection returned HTTP {} — rebuild/redeploy the usbd component (it predates the endpoint)",
@@ -261,7 +278,9 @@ impl ControlApi for RealApi {
                     ConnectionStatus::default()
                 }
                 Err(e) => {
-                    crate::log(&format!("connection: daemon /connection unreachable ({base}): {e}"));
+                    crate::log(&format!(
+                        "connection: daemon /connection unreachable ({base}): {e}"
+                    ));
                     ConnectionStatus::default()
                 }
             }
@@ -278,7 +297,11 @@ impl ControlApi for RealApi {
             // per-feature health probes below (instead of re-querying /info each).
             let di = daemon_info(&usbd_url).await;
             let ollama = service_state(by("ollama"), &config::ollama_health_url()).await;
-            let mut out = vec![ServiceStatus { id: "ollama".into(), name: "Ollama".into(), state: ollama }];
+            let mut out = vec![ServiceStatus {
+                id: "ollama".into(),
+                name: "Ollama".into(),
+                state: ollama,
+            }];
             // Feature-driven rows: only services this drive runs. open-webui is a
             // feature now; hermes appears once its supervisor entry exists.
             let sel = crate::update::read_selection();
@@ -286,30 +309,54 @@ impl ControlApi for RealApi {
                 // Probe the daemon's EFFECTIVE port (after collision fallback), not
                 // the configured default — otherwise a webui bound off 8080 never
                 // reads as Ready. Mirrors the llamacpp/hermes rows below.
-                let url = di.as_ref().and_then(|d| d.webui_url.clone())
+                let url = di
+                    .as_ref()
+                    .and_then(|d| d.webui_url.clone())
                     .unwrap_or_else(config::webui_url);
                 let webui = service_state(by("open-webui"), &format!("{url}/health")).await;
-                out.push(ServiceStatus { id: "webui".into(), name: "Open-WebUI".into(), state: webui });
+                out.push(ServiceStatus {
+                    id: "webui".into(),
+                    name: "Open-WebUI".into(),
+                    state: webui,
+                });
             }
             if sel.features.iter().any(|f| f == "llamacpp") {
-                let url = di.as_ref().and_then(|d| d.llamacpp_url.clone())
+                let url = di
+                    .as_ref()
+                    .and_then(|d| d.llamacpp_url.clone())
                     .unwrap_or_else(|| "http://127.0.0.1:8090".into());
                 let lc = service_state(by("llamacpp"), &format!("{url}/health")).await;
-                out.push(ServiceStatus { id: "llamacpp".into(), name: "llama.cpp".into(), state: lc });
+                out.push(ServiceStatus {
+                    id: "llamacpp".into(),
+                    name: "llama.cpp".into(),
+                    state: lc,
+                });
             }
             if sel.features.iter().any(|f| f == "hermes") {
                 // Health: the dashboard's /api/status on the effective port the
                 // daemon reports (fall back to the default 9119).
-                let url = di.as_ref().and_then(|d| d.hermes_url.clone())
+                let url = di
+                    .as_ref()
+                    .and_then(|d| d.hermes_url.clone())
                     .unwrap_or_else(|| "http://127.0.0.1:9119".into());
                 let hermes = service_state(by("hermes"), &format!("{url}/api/status")).await;
-                out.push(ServiceStatus { id: "hermes".into(), name: "Hermes".into(), state: hermes });
+                out.push(ServiceStatus {
+                    id: "hermes".into(),
+                    name: "Hermes".into(),
+                    state: hermes,
+                });
 
                 // The hermes web UI (same feature, own component + service).
-                let webui_url = di.as_ref().and_then(|d| d.hermes_webui_url.clone())
+                let webui_url = di
+                    .as_ref()
+                    .and_then(|d| d.hermes_webui_url.clone())
                     .unwrap_or_else(|| "http://127.0.0.1:9120".into());
                 let webui = service_state(by("hermes-webui"), &webui_url).await;
-                out.push(ServiceStatus { id: "hermes-webui".into(), name: "Hermes Web UI".into(), state: webui });
+                out.push(ServiceStatus {
+                    id: "hermes-webui".into(),
+                    name: "Hermes Web UI".into(),
+                    state: webui,
+                });
             }
             out
         }
@@ -324,13 +371,20 @@ impl ControlApi for RealApi {
         async {}
     }
 
-    fn service_action(&self, svc: String, action: String) -> impl Future<Output = Result<(), String>> + Send {
+    fn service_action(
+        &self,
+        svc: String,
+        action: String,
+    ) -> impl Future<Output = Result<(), String>> + Send {
         let client = self.client.clone();
         async move {
             let svc = supervisor_name(&svc).to_string();
             let mut c = client.lock().await;
             let names: Vec<String> = if svc == "all" {
-                c.list().await.map(|l| l.into_iter().map(|x| x.name).collect()).unwrap_or_default()
+                c.list()
+                    .await
+                    .map(|l| l.into_iter().map(|x| x.name).collect())
+                    .unwrap_or_default()
             } else {
                 vec![svc]
             };
@@ -372,13 +426,27 @@ impl ControlApi for RealApi {
     fn platforms(&self) -> impl Future<Output = Platforms> + Send {
         let sel = crate::update::read_selection();
         async move {
-            let available = loader_manifest::KNOWN_TARGET_KEYS.iter().map(|s| s.to_string()).collect();
-            let available_features =
-                loader_manifest::KNOWN_FEATURES.iter().map(|(n, _)| n.to_string()).collect();
-            Platforms { kept: sel.platforms, available, features: sel.features, available_features }
+            let available = loader_manifest::KNOWN_TARGET_KEYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let available_features = loader_manifest::KNOWN_FEATURES
+                .iter()
+                .map(|(n, _)| n.to_string())
+                .collect();
+            Platforms {
+                kept: sel.platforms,
+                available,
+                features: sel.features,
+                available_features,
+            }
         }
     }
-    fn set_platforms(&self, kept: Vec<String>, features: Option<Vec<String>>) -> impl Future<Output = ()> + Send {
+    fn set_platforms(
+        &self,
+        kept: Vec<String>,
+        features: Option<Vec<String>>,
+    ) -> impl Future<Output = ()> + Send {
         let features = features.unwrap_or_else(|| crate::update::read_selection().features);
         crate::update::write_selection(&loader_manifest::Selection::new(kept, features));
         // A changed selection usually means something to download (a re-added
@@ -397,8 +465,9 @@ impl ControlApi for RealApi {
             if path.starts_with("/api/v1/installed") {
                 return installed_reply().await;
             }
-            if let Some(id) =
-                path.strip_prefix("/api/v1/download/").and_then(|r| r.strip_suffix("/status"))
+            if let Some(id) = path
+                .strip_prefix("/api/v1/download/")
+                .and_then(|r| r.strip_suffix("/status"))
             {
                 let job = downloads.lock().unwrap().get(id).cloned();
                 return match job {
@@ -421,7 +490,9 @@ impl ControlApi for RealApi {
         // source the status probe uses); None → llamacpp off → "unavailable".
         let usbd_url = self.usbd_url.clone();
         async move {
-            let base = daemon_info(&usbd_url).await.and_then(|d| d.llamacpp_url.clone());
+            let base = daemon_info(&usbd_url)
+                .await
+                .and_then(|d| d.llamacpp_url.clone());
             proxy_or_unavailable(base, |b| async move { proxy::get(&b, &path).await }).await
         }
     }
@@ -431,7 +502,10 @@ impl ControlApi for RealApi {
             // back-compat with older servers. 200 on success (empty body).
             let body = serde_json::json!({ "model": name, "name": name }).to_string();
             match proxy::delete(&ollama_base(), "/api/delete", &body).await {
-                Ok(r) => ProxyReply { status: r.status, body: r.body },
+                Ok(r) => ProxyReply {
+                    status: r.status,
+                    body: r.body,
+                },
                 Err(e) => err_reply(502, &format!("ollama delete failed: {e}")),
             }
         }
@@ -443,10 +517,17 @@ impl ControlApi for RealApi {
             if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
                 return err_reply(400, "invalid model name");
             }
-            let file = crate::paths::models_dir().join("gguf").join(format!("{name}.gguf"));
+            let file = crate::paths::models_dir()
+                .join("gguf")
+                .join(format!("{name}.gguf"));
             match std::fs::remove_file(&file) {
-                Ok(()) => ProxyReply { status: 200, body: br#"{"ok":true}"#.to_vec() },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => err_reply(404, "model not found"),
+                Ok(()) => ProxyReply {
+                    status: 200,
+                    body: br#"{"ok":true}"#.to_vec(),
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    err_reply(404, "model not found")
+                }
                 Err(e) => err_reply(500, &format!("delete failed: {e}")),
             }
         }
@@ -461,11 +542,16 @@ impl ControlApi for RealApi {
                 Some(model) => {
                     let id = format!(
                         "dl-{}",
-                        self.dl_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        self.dl_seq
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     );
                     self.downloads.lock().unwrap().insert(
                         id.clone(),
-                        DlJob { status: "starting".into(), progress_pct: 0.0, message: String::new() },
+                        DlJob {
+                            status: "starting".into(),
+                            progress_pct: 0.0,
+                            message: String::new(),
+                        },
                     );
                     tokio::spawn(run_download(self.downloads.clone(), id.clone(), model));
                     ProxyReply {
@@ -481,7 +567,13 @@ impl ControlApi for RealApi {
         async move {
             match local {
                 Some(r) => r,
-                None => proxy_or_unavailable(base, |b| async move { proxy::post(&b, &path, &body).await }).await,
+                None => {
+                    proxy_or_unavailable(
+                        base,
+                        |b| async move { proxy::post(&b, &path, &body).await },
+                    )
+                    .await
+                }
             }
         }
     }
@@ -555,14 +647,21 @@ where
         return err_reply(503, "model browser unavailable (llmfit not running)");
     };
     match call(b).await {
-        Ok(r) => ProxyReply { status: r.status, body: r.body },
+        Ok(r) => ProxyReply {
+            status: r.status,
+            body: r.body,
+        },
         Err(e) => err_reply(502, &format!("llmfit proxy: {e}")),
     }
 }
 
 /// The local ollama server's base url (the RESOLVED running port).
 fn ollama_base() -> String {
-    format!("http://{}:{}", crate::config::OLLAMA_HOST, crate::running_ollama_port())
+    format!(
+        "http://{}:{}",
+        crate::config::OLLAMA_HOST,
+        crate::running_ollama_port()
+    )
 }
 
 /// `GET /api/llmfit/installed` — the models the local ollama server has
@@ -584,7 +683,9 @@ async fn installed_reply() -> ProxyReply {
     };
     ProxyReply {
         status: 200,
-        body: serde_json::json!({ "installed": names }).to_string().into_bytes(),
+        body: serde_json::json!({ "installed": names })
+            .to_string()
+            .into_bytes(),
     }
 }
 
@@ -614,7 +715,8 @@ async fn run_download(map: DlMap, id: String, model: String) {
         .send()
         .await;
 
-    let mut registry_miss = false;
+    // Every path below either returns (pulled OK / assumed done) or falls through
+    // because the model isn't pullable from the ollama registry → GGUF fallback.
     match resp {
         Ok(r) if r.status().is_success() => {
             // ndjson stream: {"status":..., "total":..., "completed":...}
@@ -626,7 +728,9 @@ async fn run_download(map: DlMap, id: String, model: String) {
                 buf.extend_from_slice(&chunk);
                 while let Some(nl) = buf.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buf.drain(..=nl).collect();
-                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else { continue };
+                    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                        continue;
+                    };
                     if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
                         failed = Some(err.to_string());
                         continue;
@@ -651,7 +755,6 @@ async fn run_download(map: DlMap, id: String, model: String) {
                 // model isn't in the ollama registry → try the GGUF fallback.
                 Some(e) => {
                     crate::log(&format!("ollama pull {model}: {e} — trying GGUF fallback"));
-                    registry_miss = true;
                 }
                 None => {
                     // stream ended without an explicit success — assume done.
@@ -661,25 +764,35 @@ async fn run_download(map: DlMap, id: String, model: String) {
             }
         }
         Ok(r) => {
-            crate::log(&format!("ollama pull {model}: HTTP {} — trying GGUF fallback", r.status()));
-            registry_miss = true;
+            crate::log(&format!(
+                "ollama pull {model}: HTTP {} — trying GGUF fallback",
+                r.status()
+            ));
         }
         Err(e) => {
             crate::log(&format!("ollama pull {model}: {e} — trying GGUF fallback"));
-            registry_miss = true;
         }
     }
 
-    if !registry_miss {
-        return;
-    }
     let Some(lf) = std::env::var_os("PLANAI_LLMFIT_BIN").map(std::path::PathBuf::from) else {
-        dl_set(&map, &id, "failed", 0.0, "not in the ollama registry and llmfit is unavailable");
+        dl_set(
+            &map,
+            &id,
+            "failed",
+            0.0,
+            "not in the ollama registry and llmfit is unavailable",
+        );
         return;
     };
     let gguf_dir = crate::paths::models_dir().join("gguf");
     let _ = std::fs::create_dir_all(&gguf_dir);
-    dl_set(&map, &id, "downloading", 0.0, "GGUF from HuggingFace (for llama.cpp)");
+    dl_set(
+        &map,
+        &id,
+        "downloading",
+        0.0,
+        "GGUF from HuggingFace (for llama.cpp)",
+    );
     let model2 = model.clone();
     let out = tokio::task::spawn_blocking(move || {
         std::process::Command::new(lf)
