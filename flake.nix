@@ -43,7 +43,23 @@
   outputs = { self, nixpkgs, flake-utils, rust-overlay, loader, gitlab-incus-image, xzar }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
+        # zig 0.16.0 (nixpkgs' default) ships LLVM 21, whose clang emits jump-table
+        # relocations in .rodata against SHN_UNDEF `STT_SECTION` symbols; lld rejects
+        # those with empty-name `ld.lld: error: undefined symbol` lines when
+        # cross-linking C archives. That breaks every cargo-zigbuild cross link that
+        # pulls a C archive (e.g. libzstd_sys in the aarch64-unknown-linux-gnu `usbd`
+        # component and the launcher/spinner), which the CI `update-tarball` bundle
+        # build hits. Pin the cross-linker's zig to the 0.15.2 (LLVM 20) toolchain.
+        # nixpkgs' cargo-zigbuild wrapper hard-prefixes its own zig onto PATH, so this
+        # must be a package override, not a PATH edit. Drop once nixpkgs carries a zig
+        # newer than 0.16 with the emitter fixed.
+        cargo-zigbuild-zig-0-15 = final: prev: {
+          cargo-zigbuild = prev.cargo-zigbuild.override { zig = prev.zig_0_15; };
+        };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ (import rust-overlay) cargo-zigbuild-zig-0-15 ];
+        };
         lib = pkgs.lib;
 
         # The shared loader nix library, from the loader flake's `loaderLib` output,
