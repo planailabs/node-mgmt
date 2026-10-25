@@ -29,7 +29,18 @@ build:
   tags: [nix-image]
   script:
     - bash prebuild.sh
-  timeout: 3h
+  # 6h, not 3h. The nightly flake-input refresh bumps nixpkgs, which changes the
+  # derivation of every package in the devshell — including the multilib
+  # `wine-wow-11.0` that the Windows electron-builder rcedit step needs and that
+  # no public cache serves. A cold wine-wow build alone does not fit in 3h:
+  # pipeline 2987 (job 7370) spent 2h52m inside `wine-wow>` (still compiling
+  # dlls when the 4 MB trace cap was hit) and was killed at 11104s as
+  # `job_token_expired` before `.#image` was even reached, so xzar never warmed
+  # and every later pipeline repeated the cold build. This is headroom, not a
+  # speed fix — warm runs of this job take 355-1200s (jobs 7232/7256/7297) and
+  # the fleet's equivalent warmer (plan-ai/mac-mgmt `build`) already runs at 6h
+  # for the same reason. Per-step trace output still bounds a genuine hang.
+  timeout: 6h
   resource_group: build-cache
 
 # Build every platform's bundle (linux/win/mac), assemble the all-platform USB

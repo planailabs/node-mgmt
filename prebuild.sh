@@ -9,6 +9,15 @@
 set -euo pipefail
 
 # ── Build devShell + CI image (always — validates the flake even without a token) ──
+# Say up front whether each closure is a cache hit: a cold devShell (in practice
+# `wine-wow-11.0` after a nixpkgs bump — nothing public serves it) is the reason
+# this job can burn its whole budget, so make it visible before the build starts
+# instead of only as a wall of `wine-wow>` compiler lines.
+for target in .#devShells.x86_64-linux.default .#image; do
+  echo "── cache status for $target ──"
+  nix build "$target" --dry-run 2>&1 | grep -E 'will be (built|fetched)' || true
+done
+
 nix build .#devShells.x86_64-linux.default -o result-devshell -L
 nix build .#image -o result-image -L
 
