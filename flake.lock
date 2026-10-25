@@ -38,11 +38,11 @@
     },
     "gitlab-incus-image": {
       "locked": {
-        "lastModified": 1753527178,
-        "narHash": "sha256-7nM0eVKsPx26ROyiPbMvv5JTGX9/Gt2KmsrQvYdQkc0=",
+        "lastModified": 1792882120,
+        "narHash": "sha256-wjoqwTly2kkLSmyai7Nibv093Ihw0T9xL4Ph39PVsuc=",
         "ref": "refs/heads/master",
-        "rev": "6e4ac068f63b1149c4c3ec8d5aee4436ccaaaae6",
-        "revCount": 28,
+        "rev": "7e0f6cde4d20ed42ab24a4bf3683f4cb2a3f77fa",
+        "revCount": 29,
         "type": "git",
         "url": "https://git.mkg20001.io/mkg20001/gitlab-incus-image.git"
       },
@@ -69,11 +69,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1792502884,
-        "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA=",
+        "lastModified": 1792773339,
+        "narHash": "sha256-rZLrzrC6i+jnTAlvPZHogKDulY7WWDEv9hJeHieO7Zw=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+        "rev": "3ec636362e1816bc2f0888fa0fa2c69f1bc9e504",
         "type": "github"
       },
       "original": {
@@ -100,11 +100,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1792653800,
-        "narHash": "sha256-E8zFJilWlORqzIUJizyhZ/0WKBOizuM6s1nRSgPRomo=",
+        "lastModified": 1792825530,
+        "narHash": "sha256-aphXA2IFNd3q48++TKmfuuvDDjkrgGdJDnDIhij9684=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "5f267b7f323a4d6df0b9c0e3eaa043cbe85386f2",
+        "rev": "5b9f1198b59bcb31c5c3250b332e7d77590e6306",
         "type": "github"
       },
       "original": {
