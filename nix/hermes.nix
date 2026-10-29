@@ -90,6 +90,12 @@ derivation {
   args = [ "-c" ''
     export PATH="${lib.makeBinPath (with pkgs; [ coreutils findutils gnutar gzip uv python3 ])}"
     export HOME="$TMPDIR" UV_NO_INDEX=1 UV_PYTHON_DOWNLOADS=never UV_PYTHON_PREFERENCE=only-system
+    # uv builds its HTTP client eagerly (even for `--offline`) and hard-fails with
+    # "No CA certificates were loaded from the system" when no root store is
+    # discoverable. The sandbox has no /etc/ssl/certs, so point it at nixpkgs'
+    # bundle — same value nix/dev-env.nix gives the devshell (which is why this
+    # only ever broke in the raw derivation).
+    export SSL_CERT_FILE="${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
     ${lib.optionalString (lib.hasSuffix "apple-darwin" triple) ''export MACOSX_DEPLOYMENT_TARGET=14.0''}
     mkdir -p "$out/python" "$out/share"
     tar -xzf "$pbsArchive" -C "$out/python" --strip-components=1
