@@ -54,6 +54,19 @@ update-tarball:
   script:
     - nix develop -c make bundles
     - nix develop -c make tarball-upload
-  timeout: 3h
+  # 6h, not 3h — same budget as `build`. `make bundles` subsumes the whole
+  # component graph (43 nodes producing ~11 GiB of squashfs/dmg/zip output), and
+  # several of those nodes are NOT substitutable: the open-webui wheel + offline
+  # HF assets in `ow-assets` are rebuilt every pipeline, and every dmg is packed
+  # in a KVM VM. Pipeline 3073 (job 7586) measured the stage at 2h22m (ow-assets squashfs
+  # 69m, ow-assets dmg 13m, ollama-windows zip 25m, usbd-mac-arm64 dmg 12m) and
+  # was then killed by the 3h cap 37m into the bundle step with no failing step
+  # (`job_token_expired` at 11117s, zero error lines) — the electron/zlib legs
+  # had no room left. This is headroom, not a speed fix: the per-pipeline cost
+  # comes from the impure open-webui build and VM-packed dmgs, which still need
+  # a cacheable/FOD treatment. Ninja buffers per-edge output, so the last
+  # printed line is the last completed node — headroom is also what makes a
+  # genuine hang distinguishable from a slow node.
+  timeout: 6h
   environment: production
   resource_group: production
