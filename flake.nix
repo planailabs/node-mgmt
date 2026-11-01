@@ -99,8 +99,19 @@
         };
 
         # macOS SDK source (Cocoa frameworks) for cross-compiling Apple-dep crates via
-        # SDKROOT (the mac launcher/usbd/spinner). Now in the loader lib.
-        macosx-sdk = loaderLib.macosx-sdk;
+        # SDKROOT (the mac launcher/usbd/spinner).
+        #
+        # PINNED to the 15.5 SDK instead of the loader lib's default (26.x): Apple's
+        # 26.4 SDK changed the SDK *build targets*, so the framework and libSystem
+        # `.tbd` stubs declare only the `arm64e-*` slice and no plain `arm64-macos`.
+        # zig's Mach-O linker matches stub slices exactly, so every
+        # `aarch64-apple-darwin` link then fails with undefined CoreFoundation /
+        # SystemConfiguration symbols (`_CFRelease`, `_SCNetworkReachability…`) — the
+        # `usbd-mac-arm64` leg of `make bundles` (and the mac launcher/spinner) died
+        # there. 15.5 still publishes `arm64-macos` stubs. Drop the pin (go back to
+        # `loaderLib.macosx-sdk`) once zig accepts arm64e stubs for arm64 links.
+        # Upstream: https://codeberg.org/ziglang/zig/issues/31658
+        macosx-sdk = (import nixpkgs { system = "aarch64-darwin"; }).apple-sdk_15.src;
 
         # Dioxus `feat/embed` fork git-dep hashes (same rev mac-mgmt pins). dx is
         # nixpkgs' stock 0.7.9 — it prints a non-fatal "incompatible" notice for
@@ -261,7 +272,9 @@
         # while the launcher mounts the runtime. The builder (crate, Cargo.lock, cross
         # toolchain, macOS SDK and the macho-dedupe fixup) all live in the loader; we
         # only feed it this product's loader.toml [spinner] colours.
-        spinnerFor = loaderLib.mkSpinner { inherit loaderToml; };
+        # Pass our pinned macosx-sdk through: the loader's default (26.x) has
+        # arm64e-only framework stubs, which break the mac spinner/ad-hoc link.
+        spinnerFor = loaderLib.mkSpinner { inherit loaderToml macosx-sdk; };
 
         # llmfit — hardware-aware model selector. Bundled beside the launcher so it
         # can detect the GPU (`llmfit system --json`) and serve the model-browser API
