@@ -43,6 +43,29 @@ build:
   timeout: 6h
   resource_group: build-cache
 
+# Warm the xzar cache with the closures `update-tarball` would otherwise rebuild
+# from scratch: the Dioxus SPA (~82 min cold), the four `hermes-*` components
+# (~60 min) and the four `runtime-*` wheel installs (~38 min). They depend on
+# nixpkgs + the vendored FODs only (never on the git tree), so pinning them is
+# stable across commits; see `scripts/warm-deploy-cache.sh`. Pipeline 3098 (job
+# 7664) is why: a garbage-collected runner store forced 1041 fresh derivations
+# inside the deploy job and the 6h cap killed it at node 29/43. Kept out of
+# `build` so a cold devshell (the `wine-wow-11.0` case, ~5h) can't push that job
+# over its own budget. Runs on trunk only — that is the only ref with a deploy
+# stage and with XZAR_TOKEN available for the upload.
+warm-deploy-cache:
+  stage: build
+  tags: [nix-image]
+  only: [trunk]
+  script:
+    - bash scripts/warm-deploy-cache.sh
+  # Cold warming of all nine closures measured ~3h (job 7664's per-node times);
+  # 4h covers a nixpkgs bump that invalidates every one of them at once.
+  timeout: 4h
+  # Its own group, so two pipelines never warm the same pins at once, without
+  # serializing behind `build`'s build-cache group.
+  resource_group: cache-warm
+
 # Build every platform's bundle (linux/win/mac), assemble the all-platform USB
 # update tarball (manifest.json + files/ mirror of each launcher + its
 # components/<os>/), and publish it to the update URL. Needs WEB_AGENCY_TOKEN +
@@ -54,19 +77,20 @@ update-tarball:
   script:
     - nix develop -c make bundles
     - nix develop -c make tarball-upload
-  # 6h, not 3h — same budget as `build`. `make bundles` subsumes the whole
-  # component graph (43 nodes producing ~11 GiB of squashfs/dmg/zip output), and
-  # several of those nodes are NOT substitutable: the open-webui wheel + offline
-  # HF assets in `ow-assets` are rebuilt every pipeline, and every dmg is packed
-  # in a KVM VM. Pipeline 3073 (job 7586) measured the stage at 2h22m (ow-assets squashfs
-  # 69m, ow-assets dmg 13m, ollama-windows zip 25m, usbd-mac-arm64 dmg 12m) and
-  # was then killed by the 3h cap 37m into the bundle step with no failing step
-  # (`job_token_expired` at 11117s, zero error lines) — the electron/zlib legs
-  # had no room left. This is headroom, not a speed fix: the per-pipeline cost
-  # comes from the impure open-webui build and VM-packed dmgs, which still need
-  # a cacheable/FOD treatment. Ninja buffers per-edge output, so the last
-  # printed line is the last completed node — headroom is also what makes a
+  # 8h, not 6h. Pipeline 3098 (job 7664) proved 6h is still short: the runner's
+  # store had been garbage-collected, so `make bundles` rebuilt 1041 derivations
+  # and reached only node [29/43] in 5h20m before `job_token_expired` at 21934s
+  # (zero error lines). The same graph took 2h25m warm (job 7586). Projected cold
+  # total from 7664's per-node timings: nodes 1-25 2h19m, spa 82m, squashfs legs
+  # 32m+62m, then the remaining ~14 nodes (ow-assets alone was 69m+32m+13m in
+  # 7586). 8h covers that tail; `warm-deploy-cache` (build stage) removes the
+  # SPA/hermes/runtime rebuilds that made up ~2h30m of the cold cost, so this is
+  # headroom for the pipeline that *changes* one of those sources, not a speed
+  # fix. The per-pipeline cost that remains is the impure open-webui build and
+  # the KVM-packed dmgs — making `ow-assets` cacheable (FOD) is the follow-up
+  # that would actually cut the runtime. Ninja buffers per-edge output, so the
+  # last printed line is the last completed node — headroom is also what makes a
   # genuine hang distinguishable from a slow node.
-  timeout: 6h
+  timeout: 8h
   environment: production
   resource_group: production
