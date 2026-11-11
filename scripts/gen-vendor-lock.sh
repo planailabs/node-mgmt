@@ -58,8 +58,16 @@ LLAMACPP_ASSETS="$(release_json "$LLAMACPP_REPO" "$LLAMACPP_TAG" | jq -c --arg w
       | select(.sha256 != "") ]')"
 
 # --- hermes-agent source archive ---------------------------------------------
+# Fetch straight from codeload, never via the `github.com/<repo>/archive/...`
+# redirect: GitHub rate-limits that redirect endpoint with HTTP 429, which Nix's
+# three quick fetchurl retries cannot ride out (`error: cannot download
+# v2026.5.16.tar.gz from any mirror`). That failed node-mgmt update-tarball job
+# 8427 (2026-11-11) on the `make download` edge while every other vendor FOD
+# downloaded fine. codeload served the identical archive at the same moment, and
+# `github.com/.../archive/refs/tags/X.tar.gz` is only an HTTP redirect to this
+# URL, so the sha256 (and therefore the FOD hash) is unchanged.
 HERMES_REPO="$(hermes_repo)"; HERMES_TAG="$(hermes_version)"
-HERMES_URL="https://github.com/$HERMES_REPO/archive/refs/tags/$HERMES_TAG.tar.gz"
+HERMES_URL="https://codeload.github.com/$HERMES_REPO/tar.gz/refs/tags/$HERMES_TAG"
 log "hermes-agent source $HERMES_TAG (hashing)"
 HERMES_SHA="$(curl -fsSL "$HERMES_URL" | sha256sum | awk '{print $1}')"
 

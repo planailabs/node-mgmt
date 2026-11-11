@@ -11,8 +11,19 @@ let
     (map (a: { name = "ollama/${vendorLock.ollama.tag}/${a.name}"; path = fetch a; }) vendorLock.ollama.assets)
     ++ (map (p: { name = "pbs/${p.target}.tar.gz"; path = fetch p; }) vendorLock.pbs.files)
     ++ [ { name = "open-webui/${vendorLock.openwebui.tag}/source.tar.gz"; path = fetch vendorLock.openwebui; } ]
+    # hermes-agent source: URL is the codeload form on purpose — GitHub answers
+    # the `github.com/<repo>/archive/...` redirect with HTTP 429 under load, and
+    # fetchurl's retries are too short to ride that out (node-mgmt job 8427).
+    # codeload URLs carry no `.tar.gz` suffix, so pin the output name explicitly:
+    # the FOD store path is `<sha256>-<name>`, and keeping it identical keeps
+    # every downstream hermes component derivation unchanged across the switch.
     ++ lib.optional (vendorLock ? hermes)
-      { name = "hermes/${vendorLock.hermes.tag}/source.tar.gz"; path = fetch vendorLock.hermes; }
+      { name = "hermes/${vendorLock.hermes.tag}/source.tar.gz";
+        path = pkgs.fetchurl {
+          inherit (vendorLock.hermes) url sha256;
+          name = "${vendorLock.hermes.tag}.tar.gz";
+        };
+      }
   );
 
   # Layer 2 — normalise each ollama FOD to a uniform .tar.gz. VANILLA derivation
