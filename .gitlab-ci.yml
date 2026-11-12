@@ -75,7 +75,18 @@ update-tarball:
   tags: [nix-image]
   only: [trunk]
   script:
+    # Runner-resource diagnostics. This all-platform job has now died twice on a
+    # runner ceiling with nothing in the trace that sizes it: job 8136 (2026-11-09)
+    # lost four packers to the OOM killer, and job 8503 (2026-11-12) hit ENOSPC as
+    # early as node [19/43] — after ~20.5 GiB of closure fetches (17.1 GiB + 3378
+    # MiB reported unpacked) — so `npm ci` and every later component failed with
+    # `No space left on device`, `tar`/`pigz` wrote partial archives, and the real
+    # error was 20+ lines deep. Print the headroom before and after the build so
+    # the next failure is attributable to a measured size instead of inferred.
+    - df -h / /builds /nix 2>/dev/null || df -h || true
     - nix develop -c make bundles
+    - df -h / /builds /nix 2>/dev/null || df -h || true
+    - du -sh dist dist/components 2>/dev/null || true
     - nix develop -c make tarball-upload
   # 8h, not 6h. Pipeline 3098 (job 7664) proved 6h is still short: the runner's
   # store had been garbage-collected, so `make bundles` rebuilt 1041 derivations
