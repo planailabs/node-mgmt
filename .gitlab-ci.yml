@@ -75,15 +75,24 @@ update-tarball:
   tags: [nix-image]
   only: [trunk]
   script:
-    # Runner-resource diagnostics. This all-platform job has now died twice on a
-    # runner ceiling with nothing in the trace that sizes it: job 8136 (2026-11-09)
-    # lost four packers to the OOM killer, and job 8503 (2026-11-12) hit ENOSPC as
-    # early as node [19/43] — after ~20.5 GiB of closure fetches (17.1 GiB + 3378
-    # MiB reported unpacked) — so `npm ci` and every later component failed with
+    # Runner-resource diagnostics. This all-platform job has now died three times on
+    # a runner ceiling with nothing in the trace that sizes it: job 8136 (2026-11-09)
+    # lost four packers to the OOM killer, job 8503 (2026-11-12) hit ENOSPC as early
+    # as node [19/43] — after ~20.5 GiB of closure fetches (17.1 GiB + 3378 MiB
+    # reported unpacked) — so `npm ci` and every later component failed with
     # `No space left on device`, `tar`/`pigz` wrote partial archives, and the real
-    # error was 20+ lines deep. Print the headroom before and after the build so
-    # the next failure is attributable to a measured size instead of inferred.
+    # error was 20+ lines deep, and job 8587 (2026-11-13) lost five `mksquashfs`
+    # packers, the mac dmg's qemu VM and open-webui's `npm run build` to the OOM
+    # killer (exit 137, bare `Killed`) while 134 GiB of disk was still free — so the
+    # binding resource there was RAM, not storage. Print both ceilings (disk before
+    # and after, memory before) so the next failure is attributable to a measured
+    # size instead of inferred.
     - df -h / /builds /nix 2>/dev/null || df -h || true
+    # Memory view for the OOM class: `free` measures the box, the cgroup files the
+    # container's own limit (v2 `memory.max`/`memory.peak`, v1 `limit_in_bytes`).
+    # ubi/busybox images may carry neither, hence the `|| true` chain.
+    - ( free -m || cat /proc/meminfo | head -3 ) 2>/dev/null || true
+    - cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || true
     - nix develop -c make bundles
     - df -h / /builds /nix 2>/dev/null || df -h || true
     - du -sh dist dist/components 2>/dev/null || true
