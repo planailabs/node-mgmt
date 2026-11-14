@@ -53,9 +53,72 @@
         # nixpkgs' cargo-zigbuild wrapper hard-prefixes its own zig onto PATH, so this
         # must be a package override, not a PATH edit. Drop once nixpkgs carries a zig
         # newer than 0.16 with the emitter fixed.
-        cargo-zigbuild-zig-0-15 = final: prev: {
-          cargo-zigbuild = prev.cargo-zigbuild.override { zig = prev.zig_0_15; };
-        };
+        # rust 1.100's `windows_link` crate — the `link!` macro std uses for the
+        # generated windows bindings — ends its non-raw-dylib import list with
+        #   #[link(name = "synchronization")] unsafe extern "C" {}
+        # (rust 1.99.1 did not have it). std's futex path on windows
+        # (`library/std/src/sys/sync/futex/windows.rs`) really does call
+        # WaitOnAddress/WakeByAddress* from it, so for `x86_64-pc-windows-gnu` rustc
+        # emits `-lsynchronization` and the symbols must resolve. Neither mingw-w64
+        # nor zig's bundled copy ships a Synchronization import library, so every
+        # windows cross link that touches std's sync primitives dies with
+        #   error: unable to find dynamic system library 'synchronization'
+        # and then, once the lookup is satisfied, `undefined symbol: WaitOnAddress`.
+        # First seen on `redb`'s cdylib (redb declares crate-type = ["cdylib","rlib"],
+        # so a dependency of an rlib-only build still gets a final link), which killed
+        # the `usbd-win-x64` node of `make bundles` (job 8587); the launcher/spinner
+        # windows legs hit it as soon as they link a Mutex. Generate the missing import
+        # library (see windowsSyncLib below) and let the cross-linker find it. Remove
+        # once zig's mingw-w64 carries the import lib, or rustc stops emitting the link
+        # for gnu targets.
+        cargo-zigbuild-zig-0-15 = final: prev:
+          let
+            windowsSyncLib = final.runCommand "windows-synchronization-importlib"
+              { nativeBuildInputs = [ final.llvmPackages.bintools ]; }
+              ''
+                mkdir -p "$out/lib"
+                # Synchronization.lib is the MSVC SDK's umbrella import library; the
+                # symbols std needs (WaitOnAddress/WakeByAddress*, the futex path in
+                # library/std/src/sys/sync/futex/windows.rs) are exported by
+                # KernelBase.dll on Win8+. mingw-w64 ships no Synchronization import
+                # library at all, so generate one that binds them to KernelBase - both
+                # linker flavours read it (lld-link via `synchronization.lib`, GNU ld
+                # via `libsynchronization.a`).
+                cat > synchronization.def <<'EOF'
+                LIBRARY KernelBase.dll
+                EXPORTS
+                WaitOnAddress
+                WakeByAddressAll
+                WakeByAddressSingle
+                EOF
+                llvm-dlltool -m i386:x86-64 -d synchronization.def -l libsynchronization.a
+                cp libsynchronization.a "$out/lib/libsynchronization.a"
+                cp libsynchronization.a "$out/lib/synchronization.lib"
+              '';
+            # Wrap (don't overrideAttrs) the pinned zig so `zig cc`/`c++` for a windows
+            # target gets the extra -L. Only cc-like invocations carrying a windows
+            # target are rewritten; every other zig subcommand (ar, fmt, …) and every
+            # non-windows target is passed through untouched.
+            zigSynclib = final.runCommand "zig-0.15.2-windows-syncimport" { } ''
+              mkdir -p "$out/bin"
+              cat > "$out/bin/zig" <<'ZIGEOF'
+              #!/bin/sh
+              real="${prev.zig_0_15}/bin/zig"
+              case "$1" in
+                cc|c++|c99)
+                  case " $* " in
+                    *windows*) exec "$real" "$@" "-L${windowsSyncLib}/lib" ;;
+                  esac
+                  ;;
+              esac
+              exec "$real" "$@"
+              ZIGEOF
+              chmod +x "$out/bin/zig"
+            '';
+          in
+          {
+            cargo-zigbuild = prev.cargo-zigbuild.override { zig = zigSynclib; };
+          };
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ (import rust-overlay) cargo-zigbuild-zig-0-15 ];
