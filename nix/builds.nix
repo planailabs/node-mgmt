@@ -30,7 +30,25 @@ let
   # derivation table below is unchanged. mkDmg is curried with our libdmg pin.
   loader = flake.inputs.loader.loaderLib { inherit pkgs; nixpkgs = flake.inputs.nixpkgs; };
   libdmg = flake.packages.${builtins.currentSystem}.libdmg-hfsplus;
-  mkSqfs = loader.mkSqfs;
+  # Bounded mksquashfs. The loader packer inherits mksquashfs' defaults: a block
+  # cache of 25% of physical RAM plus one compression buffer per `-processors`
+  # thread. The CI deploy job (`update-tarball`) runs in an 18 GiB cgroup
+  # (`memory.max`, pipeline 3472 / job 8660) and ninja packs several multi-GiB
+  # components concurrently, so default-sized packers exceeded the container and
+  # were SIGKILLed (`Killed`, exit 137): five in job 8587 (2026-11-13), four in
+  # job 8136 (2026-11-09), three in job 8660 (2026-11-14) — with 134 GiB of disk
+  # still free, i.e. RAM was the binding resource, not storage.
+  # `-mem` is only the on-disk-cache allowance: capping it at 1 GiB with 4 threads
+  # packs the 517 MiB ow-assets tree in 23 s at 169 MiB peak RSS (vs 15 s / 951 MiB
+  # unbounded) and produces an identical archive size and file listing, so the
+  # bound costs per-packer throughput, never artifact content. Threads are bounded
+  # too because each PACK_SIZE buffer is per-thread regardless of -mem.
+  # The generic form belongs in the loader's nix/loader/packers.nix — that shared
+  # lib is a submodule (third_party/loader) whose remote is not pushable from here,
+  # so the bound lives at this consumer's call site until it can be upstreamed.
+  mkSqfs = name: src: (loader.mkSqfs name src).overrideAttrs (_: {
+    buildCommand = "mksquashfs ${src} $out -comp zstd -processors 4 -mem 1G -all-root -no-xattrs -noappend -quiet";
+  });
   mkClosureSqfs = loader.mkClosureSqfs;
   mkDmg = loader.mkDmg { inherit libdmg; };
 
