@@ -45,6 +45,18 @@ default_tarball = "dist/plan-ai-node-mgmt.tar.gz"
 file    = "app/package.json"
 pointer = "/version"
 
+# ── ninja job pools (concurrency caps) ──────────────────────────────────────
+# Every mac component is packed as a `.dmg` by `mkDmg`, which runs a KVM VM: the
+# guest's whole RAM (2 GiB, 4 GiB for hermes, 6 GiB for the runtime) is host RSS
+# plus virtiofsd's page cache. Ninja runs `cores+2` edges at once, so a `make
+# bundles` on an 18 GiB CI container started up to nine packers together and the
+# kernel SIGKILLed the runtime VM and its neighbours (`builder failed with exit
+# code 137`, job 8708 — the same derivation also died in jobs 8136 and 8587 while
+# 134 GiB of disk was still free). Serialise the disk-image packers: one VM at a
+# time leaves memory for the mksquashfs packers, cargo builds and npm.
+[pools]
+dmg = 1
+
 # ── drive/bundle layout (consumed by the generalized bundle.sh + make-usb-image.sh) ──
 [layout]
 launcher_name  = "node-mgmt"
