@@ -93,7 +93,15 @@ update-tarball:
     # ubi/busybox images may carry neither, hence the `|| true` chain.
     - ( free -m || cat /proc/meminfo | head -3 ) 2>/dev/null || true
     - cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || true
-    - nix develop -c make bundles
+    # Under `ci-heartbeat.sh`: ninja buffers each edge's output until the edge
+    # finishes, and the serialised mac dmg packers (`[pools] dmg = 1`) each hold
+    # one edge for tens of minutes, so a healthy `make bundles` can be silent for
+    # longer than GitLab's 30-minute no-update window. Job 8750 (pipeline 3508)
+    # was dropped as `no_updates_running` at 04:15:08 with its last trace line at
+    # 01:28:02 (`runtime linux-x64`, node 18/43) and the whole 8h cap unused.
+    # The wrapper prints elapsed/node-count/newest-stamp/memory/disk every 60s,
+    # so the trace keeps moving and the next failure names a node and a duration.
+    - bash scripts/ci-heartbeat.sh --interval 60 --watch dist/.ninja -- nix develop -c make bundles
     - df -h / /builds /nix 2>/dev/null || df -h || true
     - du -sh dist dist/components 2>/dev/null || true
     - nix develop -c make tarball-upload

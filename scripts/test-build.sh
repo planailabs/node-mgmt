@@ -23,6 +23,13 @@ phase "lint"
 for s in "$REPO_ROOT"/scripts/*.sh; do
   bash -n "$s" && ok "syntax $(basename "$s")" || bad "syntax $(basename "$s")"
 done
+# The CI heartbeat wrapper is what keeps `update-tarball` from being dropped as
+# `no_updates_running`; exercise it (ticks, output/status passthrough, SIGTERM).
+if "$REPO_ROOT"/scripts/test-ci-heartbeat.sh > /tmp/ci-heartbeat-test.log 2>&1; then
+  ok "ci-heartbeat wrapper"
+else
+  bad "ci-heartbeat wrapper"; cat /tmp/ci-heartbeat-test.log
+fi
 for j in "$APP"/main/*.js; do
   node -c "$j" 2>/dev/null && ok "node -c $(basename "$j")" || bad "node -c $(basename "$j")"
 done
